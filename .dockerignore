@@ -1,0 +1,53 @@
+# ==========================
+# Docker 构建排除文件
+# ==========================
+
+# Git
+.git
+.gitignore
+.github
+
+# 依赖目录 (构建时重新安装)
+web/node_modules
+web/.cache
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+
+# Go 编译产物 (构建时重新编译)
+go-proxy/*.exe
+go-proxy/*.exe~
+go-proxy/go-proxy
+go-proxy/mediaflow-proxy
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# 本地配置 (不要打包进镜像)
+config/config.yaml
+config/logs/
+config/strm/
+config/*.db
+
+# 文档/临时文件
+docs/
+*.md
+!README.md
+*.json
+!web/package.json
+!web/package-lock.json
+_ref_server.txt
+
+# 前端构建产物 (构建时重新生成)
+web/dist
+
+# Docker
+docker-compose*.yml
+Dockerfile
+.dockerignore
+

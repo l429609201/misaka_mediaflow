@@ -1,0 +1,133 @@
+# ==============================================================
+# Misaka MediaFlow — GitHub Actions CI/CD
+# 自动构建 Docker 多架构镜像并推送到 GHCR / Docker Hub
+#
+# 触发条件:
+#   - 推送 tag (v*)        → 正式发布 (latest + 版本号)
+#   - 推送 main 分支       → 开发版 (dev)
+#   - 手动触发             → 自定义 tag
+# ==============================================================
+
+name: Build & Push Docker Image
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '自定义镜像 tag (例如: test, beta)'
+        required: false
+        default: 'dev'
+
+env:
+  # ---- 修改为你的信息 ----
+  IMAGE_NAME: misaka-mediaflow
+  # GHCR 镜像地址会自动拼接为: ghcr.io/<owner>/<IMAGE_NAME>
+  # Docker Hub 镜像地址: <DOCKERHUB_USERNAME>/<IMAGE_NAME>
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      # ==================== 1. 检出代码 ====================
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ==================== 2. 准备构建元信息 ====================
+      - name: Docker Meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}
+          tags: |
+            # tag 推送 → v1.0.0 + latest
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            # main 分支推送 → dev
+            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/main' }}
+            # 手动触发 → 自定义 tag
+            type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      # ==================== 3. 设置构建变量 ====================
+      - name: Set build variables
+        id: vars
+        run: |
+          # 版本号：从 tag 提取，或使用 dev
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+          else
+            VERSION="dev"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "git_commit=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "build_date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
+
+      # ==================== 4. 设置 QEMU (多架构) ====================
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      # ==================== 5. 设置 Buildx ====================
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ==================== 6. 登录 GHCR ====================
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ==================== 7. (可选) 登录 Docker Hub ====================
+      # 如需推送到 Docker Hub，取消下面的注释并在 Repo Settings > Secrets 添加:
+      #   DOCKERHUB_USERNAME, DOCKERHUB_TOKEN
+      #
+      # - name: Login to Docker Hub
+      #   uses: docker/login-action@v3
+      #   with:
+      #     username: ${{ secrets.DOCKERHUB_USERNAME }}
+      #     password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # ==================== 8. 构建并推送 ====================
+      - name: Build & Push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.vars.outputs.version }}
+            GIT_COMMIT=${{ steps.vars.outputs.git_commit }}
+            BUILD_DATE=${{ steps.vars.outputs.build_date }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ==================== 9. 输出结果 ====================
+      - name: Image digest
+        run: |
+          echo "### 🐳 Docker Image Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ steps.vars.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ steps.vars.outputs.git_commit }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Platforms:** linux/amd64, linux/arm64" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+

@@ -1,0 +1,86 @@
+// src/general/Router.jsx
+// Router config
+
+import { createBrowserRouter, redirect } from 'react-router-dom'
+import { RoutePaths } from './RoutePaths'
+import { NotFound } from './NotFound'
+import { Layout } from './Layout'
+import { LayoutLogin } from './LayoutLogin'
+
+import Home from '@/pages/home'
+import Login from '@/pages/login'
+import Storage from '@/pages/storage'
+import Strm from '@/pages/strm'
+import Drive115 from '@/pages/drive115'
+import P115 from '@/pages/p115'
+import Logs from '@/pages/logs'
+import Setting from '@/pages/setting'
+
+// Auth guard — 调 /auth/verify 验证凭证（JWT / IP白名单自动登录）
+const authLoader = async () => {
+  try {
+    const token = localStorage.getItem('token')
+    const headers = {}
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`
+    }
+    const resp = await fetch('/api/v1/auth/verify', { headers })
+    if (resp.ok) {
+      const data = await resp.json()
+      if (data.valid) {
+        // 白名单自动登录：后端签发了 JWT，前端存储
+        if (data.token) {
+          localStorage.setItem('token', data.token)
+        }
+        if (data.username) {
+          localStorage.setItem('username', data.username)
+        }
+        return null
+      }
+    }
+  } catch {
+    // 网络错误，fallback
+  }
+
+  // verify 失败，清除旧凭证，跳转登录
+  localStorage.removeItem('token')
+  localStorage.removeItem('username')
+  return redirect('/login')
+}
+
+export const router = createBrowserRouter(
+  [
+    {
+      // 登录页（无需认证，独立布局）
+      path: RoutePaths.LOGIN,
+      element: <LayoutLogin />,
+      children: [
+        { index: true, element: <Login /> },
+      ],
+    },
+    {
+      // 管理页面（需要认证，带侧边栏）
+      path: '/',
+      element: <Layout />,
+      loader: authLoader,
+      children: [
+        { index: true,                        element: <Home /> },
+        { path: RoutePaths.STORAGE.slice(1),   element: <Storage /> },
+        { path: RoutePaths.STRM.slice(1),      element: <Strm /> },
+        { path: RoutePaths.DRIVE115.slice(1),  element: <Drive115 /> },
+        { path: RoutePaths.P115.slice(1),      element: <P115 /> },
+        { path: RoutePaths.LOGS.slice(1),      element: <Logs /> },
+        { path: RoutePaths.SETTING.slice(1),   element: <Setting /> },
+      ],
+    },
+    {
+      // 404
+      path: '*',
+      element: <NotFound />,
+    },
+  ],
+  {
+    basename: '/web',
+  },
+)
+

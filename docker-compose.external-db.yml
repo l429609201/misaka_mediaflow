@@ -1,0 +1,42 @@
+# =============================================================
+# Misaka MediaFlow — 精简部署 (连接外部数据库)
+#
+# 适用场景:
+#   - 已有 PostgreSQL / MySQL 数据库
+#   - 已有 Redis (或不使用 Redis)
+#
+# 使用:
+#   docker compose -f docker-compose.external-db.yml up -d
+# =============================================================
+
+services:
+  misaka-mediaflow:
+    image: ghcr.io/your-username/misaka-mediaflow:latest
+    container_name: misaka-mediaflow
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-7789}:7789"       # 管理后台
+      - "${PROXY_PORT:-9906}:9906"     # Go 302 反代
+    volumes:
+      - ./config:/app/config
+    environment:
+      - MISAKAMF_CONFIG_DIR=/app/config
+      - MISAKAMF_TIMEZONE=${TIMEZONE:-Asia/Shanghai}
+      - MISAKAMF_SERVER__PORT=7789
+      - MISAKAMF_SERVER__GO_PORT=9906
+      # ---- 数据库 (修改为你的外部数据库) ----
+      - MISAKAMF_DATABASE__TYPE=${DB_TYPE:-postgresql}
+      - MISAKAMF_DATABASE__HOST=${DB_HOST:-127.0.0.1}
+      - MISAKAMF_DATABASE__PORT=${DB_PORT:-5432}
+      - MISAKAMF_DATABASE__NAME=${DB_NAME:-mediaflow}
+      - MISAKAMF_DATABASE__USER=${DB_USER:-mediaflow}
+      - MISAKAMF_DATABASE__PASSWORD=${DB_PASSWORD:-mediaflow}
+      # ---- Redis (可选，不用则设为 false) ----
+      - MISAKAMF_REDIS__ENABLED=${REDIS_ENABLED:-false}
+      - MISAKAMF_REDIS__HOST=${REDIS_HOST:-127.0.0.1}
+      - MISAKAMF_REDIS__PORT=${REDIS_PORT:-6379}
+      - MISAKAMF_REDIS__PASSWORD=${REDIS_PASSWORD:-}
+      # ---- 媒体服务器 ----
+      - MISAKAMF_MEDIA_SERVER__HOST=${EMBY_HOST:-}
+      - MISAKAMF_MEDIA_SERVER__API_KEY=${EMBY_API_KEY:-}
+
