@@ -102,6 +102,9 @@ func defaultConfig() *Config {
 func applyEnvOverrides(cfg *Config) {
 	// 环境变量使用 MISAKAMF_ 前缀 + 双下划线分隔层级
 	// 例如: MISAKAMF_SERVER__GO_PORT=9906
+	if v := os.Getenv("TZ"); v != "" {
+		cfg.Timezone = v
+	}
 	if v := os.Getenv("MISAKAMF_TZ"); v != "" {
 		cfg.Timezone = v
 	}

@@ -1,5 +1,5 @@
 # app/core/timezone.py
-# 时间管理器 — 全局单例，基于环境变量 MISAKAMF_TZ 计算时区偏移
+# 时间管理器 — 全局单例，优先基于环境变量 TZ 计算时区偏移
 # 所有时间字段存储为 TEXT 格式 YYYY-MM-DD HH:MM:SS
 
 import os
@@ -26,7 +26,12 @@ class TimeManager:
 
     def _init_timezone(self):
         """从环境变量读取时区配置并初始化"""
-        tz_str = os.getenv("MISAKAMF_TZ", "Asia/Shanghai")
+        tz_str = (
+            os.getenv("TZ")
+            or os.getenv("MISAKAMF_TZ")
+            or os.getenv("MISAKAMF_TIMEZONE")
+            or "Asia/Shanghai"
+        )
         try:
             # 尝试解析 IANA 时区名（如 Asia/Shanghai）
             tz = ZoneInfo(tz_str)

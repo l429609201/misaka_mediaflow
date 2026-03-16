@@ -1,105 +1,26 @@
-# =============================================================
-# Misaka MediaFlow docker-compose.yml
-#
-# All-in-One 单容器 (Python + Go + 前端) + 外部数据库/缓存
-#
-# 快速启动:
-#   docker compose up -d
-#
-# 自定义配置:
-#   1. 复制 .env.example → .env 并修改
-#   2. 或直接修改下方 environment 段
-# =============================================================
-
 services:
   # ===== 应用服务 (All-in-One) =====
   misaka-mediaflow:
-    image: ghcr.io/your-username/misaka-mediaflow:latest
-    # 本地构建使用:
-    # build:
-    #   context: .
-    #   args:
-    #     VERSION: "1.0.0"
+    image: l429609201/misaka-mediaflow:latest
     container_name: misaka-mediaflow
     restart: unless-stopped
     ports:
-      - "${APP_PORT:-7789}:7789"       # 管理后台
-      - "${PROXY_PORT:-9906}:9906"     # Go 302 反代 — Emby 客户端连此端口
+      - "7789:7789"       # 管理后台
+      - "9906:9906"       # Go 302 反代 — Emby 客户端连此端口
     volumes:
       - ./config:/app/config           # 配置 + 日志持久化
     environment:
       - MISAKAMF_CONFIG_DIR=/app/config
-      - MISAKAMF_TIMEZONE=${TIMEZONE:-Asia/Shanghai}
+      - TZ=Asia/Shanghai
       - MISAKAMF_SERVER__PORT=7789
-      - MISAKAMF_SERVER__GO_PORT=9906
       # ---- 数据库 ----
-      - MISAKAMF_DATABASE__TYPE=${DB_TYPE:-postgresql}
+      - MISAKAMF_DATABASE__TYPE=postgresql
       - MISAKAMF_DATABASE__HOST=postgres
       - MISAKAMF_DATABASE__PORT=5432
-      - MISAKAMF_DATABASE__NAME=${DB_NAME:-mediaflow}
-      - MISAKAMF_DATABASE__USER=${DB_USER:-mediaflow}
-      - MISAKAMF_DATABASE__PASSWORD=${DB_PASSWORD:-mediaflow}
-      # ---- Redis (可选) ----
-      - MISAKAMF_REDIS__ENABLED=${REDIS_ENABLED:-true}
+      - MISAKAMF_DATABASE__NAME=mediaflow
+      - MISAKAMF_DATABASE__USER=user
+      - MISAKAMF_DATABASE__PASSWORD=password
+      # ---- Redis (可选，默认关闭) ----
+      - MISAKAMF_REDIS__ENABLED=false
       - MISAKAMF_REDIS__HOST=redis
       - MISAKAMF_REDIS__PORT=6379
-      # ---- 媒体服务器 ----
-      - MISAKAMF_MEDIA_SERVER__HOST=${EMBY_HOST:-http://emby:8096}
-      - MISAKAMF_MEDIA_SERVER__API_KEY=${EMBY_API_KEY:-}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - mediaflow
-
-  # ===== PostgreSQL =====
-  postgres:
-    image: postgres:16-alpine
-    container_name: misaka-mediaflow-db
-    restart: unless-stopped
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    environment:
-      - POSTGRES_USER=${DB_USER:-mediaflow}
-      - POSTGRES_PASSWORD=${DB_PASSWORD:-mediaflow}
-      - POSTGRES_DB=${DB_NAME:-mediaflow}
-    # 如不需要外部访问数据库，可注释掉 ports
-    # ports:
-    #   - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-mediaflow} -d ${DB_NAME:-mediaflow}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - mediaflow
-
-  # ===== Redis =====
-  redis:
-    image: redis:7-alpine
-    container_name: misaka-mediaflow-redis
-    restart: unless-stopped
-    command: redis-server --appendonly yes
-    volumes:
-      - redis_data:/data
-    # 如不需要外部访问 Redis，可注释掉 ports
-    # ports:
-    #   - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - mediaflow
-
-volumes:
-  postgres_data:
-  redis_data:
-
-networks:
-  mediaflow:
-    driver: bridge
-

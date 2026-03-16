@@ -1,5 +1,5 @@
 // internal/config/timezone.go
-// Go 侧时间管理 — 对齐 Python TimeManager
+// Go 侧时间管理 — 对齐 Python TimeManager，优先读取 TZ
 
 package config
 
@@ -15,7 +15,13 @@ var tz *time.Location
 // InitTimezone 初始化时区
 func InitTimezone(tzStr string) {
 	if tzStr == "" {
-		tzStr = os.Getenv("MISAKAMF_TZ")
+		tzStr = os.Getenv("TZ")
+		if tzStr == "" {
+			tzStr = os.Getenv("MISAKAMF_TZ")
+		}
+		if tzStr == "" {
+			tzStr = os.Getenv("MISAKAMF_TIMEZONE")
+		}
 		if tzStr == "" {
 			tzStr = "Asia/Shanghai"
 		}
