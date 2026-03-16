@@ -92,8 +92,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tzdata \
     libpq5 \
     libmariadb3 \
-    && addgroup --gid 1000 appgroup \
-    && adduser --shell /bin/sh --disabled-password --uid 1000 --gid 1000 appuser \
+    && addgroup --gid 1000 mediaflow \
+    && adduser --shell /bin/sh --disabled-password --uid 1000 --gid 1000 mediaflow \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -121,7 +121,7 @@ RUN sed -i "s/^BUILD_DATE = .*/BUILD_DATE = \"${BUILD_DATE}\"/" src/version.py \
 # 入口脚本 + 数据目录
 COPY --chmod=755 docker-entrypoint.sh /exec.sh
 RUN mkdir -p /app/config/logs /app/config/strm \
-    && chown -R appuser:appgroup /app
+    && chown -R mediaflow:mediaflow /app
 
 # 端口
 EXPOSE 7789 9906
