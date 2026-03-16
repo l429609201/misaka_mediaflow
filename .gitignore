@@ -48,7 +48,7 @@ redis_data/
 
 # 日志
 *.log
-logs/
+/logs/
 config/logs/
 
 # 配置（保留模板）
