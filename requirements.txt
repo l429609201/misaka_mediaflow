@@ -8,6 +8,7 @@ uvicorn[standard]>=0.29.0
 sqlalchemy>=2.0.0
 alembic>=1.13.0
 asyncpg>=0.29.0                  # PostgreSQL 异步驱动
+psycopg2-binary>=2.9.9           # PostgreSQL 同步驱动（兼容层 / 同步引擎）
 pymysql>=1.1.0                   # MySQL 同步驱动 (建库用)
 aiomysql>=0.2.0                  # MySQL 异步驱动
 

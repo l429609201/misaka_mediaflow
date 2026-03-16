@@ -1,26 +1,26 @@
 services:
-  # ===== 应用服务 (All-in-One) =====
   misaka-mediaflow:
-    image: l429609201/misaka-mediaflow:latest
     container_name: misaka-mediaflow
-    restart: unless-stopped
-    ports:
-      - "7789:7789"       # 管理后台
-      - "9906:9906"       # Go 302 反代 — Emby 客户端连此端口
-    volumes:
-      - ./config:/app/config           # 配置 + 日志持久化
     environment:
       - MISAKAMF_CONFIG_DIR=/app/config
       - TZ=Asia/Shanghai
       - MISAKAMF_SERVER__PORT=7789
-      # ---- 数据库 ----
+      
       - MISAKAMF_DATABASE__TYPE=postgresql
-      - MISAKAMF_DATABASE__HOST=postgres
+      - MISAKAMF_DATABASE__HOST=192.168.10.7
       - MISAKAMF_DATABASE__PORT=5432
+
       - MISAKAMF_DATABASE__NAME=mediaflow
-      - MISAKAMF_DATABASE__USER=user
-      - MISAKAMF_DATABASE__PASSWORD=password
-      # ---- Redis (可选，默认关闭) ----
+      - MISAKAMF_DATABASE__USER=mediaflow
+      - MISAKAMF_DATABASE__PASSWORD=mediaflow
+
       - MISAKAMF_REDIS__ENABLED=false
       - MISAKAMF_REDIS__HOST=redis
       - MISAKAMF_REDIS__PORT=6379
+    image: l429609201/misaka-mediaflow:latest
+    ports:
+      - '7789:7789'
+      - '9906:9906'
+    restart: unless-stopped
+    volumes:
+      - ./config:/app/config
