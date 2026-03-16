@@ -8,7 +8,7 @@
 #   - 手动触发             → 自定义 tag
 # ==============================================================
 
-name: Build & Push Docker Image
+name: 构建并推送 Docker 镜像
 
 on:
   push:
@@ -39,11 +39,11 @@ jobs:
 
     steps:
       # ==================== 1. 检出代码 ====================
-      - name: Checkout
+      - name: 检出代码
         uses: actions/checkout@v4
 
       # ==================== 2. 确定构建平台 ====================
-      - name: Set build platforms
+      - name: 设置构建平台
         id: platforms
         run: |
           # test 分支 → 仅 amd64 (加速测试)
@@ -57,7 +57,7 @@ jobs:
           fi
 
       # ==================== 3. 准备构建元信息 ====================
-      - name: Docker Meta
+      - name: 生成 Docker 元数据
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -75,7 +75,7 @@ jobs:
             type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
 
       # ==================== 4. 设置构建变量 ====================
-      - name: Set build variables
+      - name: 设置构建变量
         id: vars
         run: |
           # 版本号：从 tag 提取，或使用分支名
@@ -92,16 +92,16 @@ jobs:
           echo "build_date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
 
       # ==================== 5. 设置 QEMU (多架构) ====================
-      - name: Set up QEMU
+      - name: 设置 QEMU
         if: steps.platforms.outputs.platforms != 'linux/amd64'
         uses: docker/setup-qemu-action@v3
 
       # ==================== 6. 设置 Buildx ====================
-      - name: Set up Docker Buildx
+      - name: 设置 Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       # ==================== 7. 登录 GHCR ====================
-      - name: Login to GHCR
+      - name: 登录 GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -109,14 +109,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # ==================== 8. 登录 Docker Hub ====================
-      - name: Login to Docker Hub
+      - name: 登录 Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # ==================== 9. 构建并推送 ====================
-      - name: Build & Push
+      - name: 构建并推送镜像
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -133,16 +133,16 @@ jobs:
           cache-to: type=gha,mode=max
 
       # ==================== 10. 输出结果 ====================
-      - name: Image digest
+      - name: 输出镜像结果
         run: |
-          echo "### 🐳 Docker Image Published" >> $GITHUB_STEP_SUMMARY
+          echo "### 🐳 Docker 镜像已发布" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Version:** ${{ steps.vars.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Commit:** ${{ steps.vars.outputs.git_commit }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Platforms:** ${{ steps.platforms.outputs.platform_display }}" >> $GITHUB_STEP_SUMMARY
+          echo "**版本:** ${{ steps.vars.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**提交:** ${{ steps.vars.outputs.git_commit }}" >> $GITHUB_STEP_SUMMARY
+          echo "**分支/标签:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**平台:** ${{ steps.platforms.outputs.platform_display }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Tags:**" >> $GITHUB_STEP_SUMMARY
+          echo "**镜像标签:**" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
