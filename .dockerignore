@@ -38,9 +38,6 @@ config/*.db
 docs/
 *.md
 !README.md
-*.json
-!web/package.json
-!web/package-lock.json
 _ref_server.txt
 
 # 前端构建产物 (构建时重新生成)

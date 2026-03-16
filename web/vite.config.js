@@ -7,6 +7,7 @@ export default defineConfig({
   plugins: [react()],
   base: '/web/',
   resolve: {
+    extensions: ['.js', '.jsx', '.ts', '.tsx', '.json'],
     alias: {
       '@': path.resolve(__dirname, 'src'),
       '@store': path.resolve(__dirname, 'store'),

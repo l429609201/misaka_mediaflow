@@ -7,14 +7,14 @@ import { NotFound } from './NotFound'
 import { Layout } from './Layout'
 import { LayoutLogin } from './LayoutLogin'
 
-import Home from '@/pages/home'
-import Login from '@/pages/login'
-import Storage from '@/pages/storage'
-import Strm from '@/pages/strm'
-import Drive115 from '@/pages/drive115'
-import P115 from '@/pages/p115'
-import Logs from '@/pages/logs'
-import Setting from '@/pages/setting'
+import Home from '@/pages/home/index.jsx'
+import Login from '@/pages/login/index.jsx'
+import Storage from '@/pages/storage/index.jsx'
+import Strm from '@/pages/strm/index.jsx'
+import Drive115 from '@/pages/drive115/index.jsx'
+import P115 from '@/pages/p115/index.jsx'
+import Logs from '@/pages/logs/index.jsx'
+import Setting from '@/pages/setting/index.jsx'
 
 // Auth guard — 调 /auth/verify 验证凭证（JWT / IP白名单自动登录）
 const authLoader = async () => {
