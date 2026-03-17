@@ -13,7 +13,9 @@ from src.adapters.storage.p115.p115_cache import P115IdPathCache
 logger = logging.getLogger(__name__)
 
 # 115 文件 API
-_115_DOWNLOAD_URL = "https://proapi.115.com/app/chrome/downurl"
+# ⚠️ proapi.115.com/app/chrome/downurl 是 Chrome 插件专用接口，需要额外签名，直接调会返回「提取码不能为空」
+# 正确做法：用 webapi.115.com/files/download?pickcode=xxx（Web 端接口，Cookie 鉴权，免签名）
+_115_DOWNLOAD_URL = "https://webapi.115.com/files/download"
 _115_FILES_URL = "https://webapi.115.com/files"
 _115_SEARCH_URL = "https://webapi.115.com/files/search"
 _115_SPACE_URL = "https://webapi.115.com/files/index_info"
@@ -69,9 +71,10 @@ class P115StorageAdapter(StorageAdapter):
             headers["User-Agent"] = user_agent
 
         try:
-            resp = await client.post(
+            # webapi.115.com/files/download 是 GET 请求，pickcode 放 query string
+            resp = await client.get(
                 _115_DOWNLOAD_URL,
-                data={"pickcode": pick_code},
+                params={"pickcode": pick_code},
                 headers=headers,
             )
             data = resp.json()
@@ -84,27 +87,26 @@ class P115StorageAdapter(StorageAdapter):
                 logger.error("115 直链获取失败: %s (pick_code=%s)", err_msg, pick_code)
                 return DirectLink()
 
-            # 解析直链 — data 格式: {"state": true, "data": {"<fid>": {"url": {"url": "..."}}}}
-            file_data = data.get("data", {})
-            for fid, info in file_data.items():
-                url_info = info.get("url", {})
-                if isinstance(url_info, dict):
-                    download_url = url_info.get("url", "")
-                elif isinstance(url_info, str):
-                    download_url = url_info
-                else:
-                    download_url = ""
+            # 解析直链 — webapi download 格式:
+            # {"state": true, "file_name": "xxx.mp4", "file_size": 123, "pick_code": "...", "url": {"url": "https://..."}}
+            url_info = data.get("url", {})
+            if isinstance(url_info, dict):
+                download_url = url_info.get("url", "")
+            elif isinstance(url_info, str):
+                download_url = url_info
+            else:
+                download_url = ""
 
-                if download_url:
-                    return DirectLink(
-                        url=download_url,
-                        file_name=info.get("file_name", ""),
-                        file_size=int(info.get("file_size", 0)),
-                        expires_in=7200,
-                        headers={"User-Agent": self._auth.get_cookie_headers()["User-Agent"]},
-                    )
+            if download_url:
+                return DirectLink(
+                    url=download_url,
+                    file_name=data.get("file_name", ""),
+                    file_size=int(data.get("file_size", 0)),
+                    expires_in=7200,
+                    headers={"User-Agent": headers["User-Agent"]},
+                )
 
-            logger.warning("115 直链响应中无有效 URL: pick_code=%s", pick_code)
+            logger.warning("115 直链响应中无有效 URL: pick_code=%s resp=%s", pick_code, data)
             return DirectLink()
 
         except Exception as e:
