@@ -210,8 +210,10 @@ class ProxyService:
         # ── 路径映射未命中：兜底直接用原始路径 ──────────────────────────
         if not cloud_path:
             logger.warning("无匹配路径映射: %s，尝试直接用文件名查 115", file_path)
-            # 把挂载路径当云端路径，让 _resolve_115_by_cloud_path 用文件名搜索
-            return await self._resolve_115_by_cloud_path(file_path, db, user_agent)
+            # 路径映射已查过且未命中，传 _path_mapping_checked=True 跳过重复查询
+            return await self._resolve_115_by_cloud_path(
+                file_path, db, user_agent, _path_mapping_checked=True
+            )
 
         # ── 查找匹配的存储源配置 ──────────────────────────────────────────
         result = await db.execute(
@@ -240,25 +242,36 @@ class ProxyService:
             return {"url": "", "expires_in": 0, "error": str(e)}
 
     async def _resolve_115_by_cloud_path(
-        self, cloud_path: str, db: AsyncSession | None = None, user_agent: str = ""
+        self, cloud_path: str, db: AsyncSession | None = None, user_agent: str = "",
+        *, _path_mapping_checked: bool = False
     ) -> dict:
         """
         通过挂载路径 → 网盘路径 → pick_code → 115直链，完整三步解析。
 
-        优化: 步骤1(路径映射) 和 步骤2(FsCache查询) 并行执行；
-              步骤3 复用已有 manager，不再重复初始化。
+        优化:
+          - 步骤1(路径映射) 和 步骤2(FsCache查询) 并行执行
+          - 步骤3 复用已有 manager，不再重复初始化
+          - _path_mapping_checked=True 时跳过路径映射（已在上层查过）
+          - 所有步骤合并为一条日志输出
         """
         try:
             manager = await self._ensure_115_manager()
             if not manager:
                 return {"url": "", "expires_in": 0, "error": "115 not available"}
 
-            # 步骤1 和步骤2 并行执行：路径映射 + FsCache 查 pick_code
-            pan_path_task = self._strip_mount_prefix(cloud_path, db)
-            fscache_task = self._lookup_pickcode_from_fscache(cloud_path, db)
-            pan_path, fscache_pick_code = await asyncio.gather(pan_path_task, fscache_task)
+            # 步骤1: 路径映射（如果上层已查过则跳过）
+            # 步骤2: FsCache 查 pick_code
+            # 两者并行执行
+            if _path_mapping_checked:
+                # 上层 _resolve_via_path_mapping 已经查过且未命中，直接用原路径
+                pan_path = cloud_path
+                fscache_pick_code = await self._lookup_pickcode_from_fscache(cloud_path, db)
+            else:
+                pan_path_task = self._strip_mount_prefix(cloud_path, db)
+                fscache_task = self._lookup_pickcode_from_fscache(cloud_path, db)
+                pan_path, fscache_pick_code = await asyncio.gather(pan_path_task, fscache_task)
 
-            # 步骤2: 优先用 FsCache 结果
+            # 优先用 FsCache 结果
             pick_code = ""
             step2_via = ""
             if fscache_pick_code:
@@ -276,10 +289,7 @@ class ProxyService:
                 file_name = PurePosixPath(pan_path).name
                 if not file_name:
                     logger.warning(
-                        "\n"
-                        "  步骤1  挂载路径 → 网盘路径: %s → %s\n"
-                        "  步骤2  查 pick_code: 无法提取文件名\n"
-                        "  步骤3  获取直链: 跳过",
+                        "115解析 %s → %s → pick_code: 无法提取文件名，跳过",
                         cloud_path, pan_path,
                     )
                     return {"url": "", "expires_in": 0, "error": "no filename"}
@@ -288,24 +298,27 @@ class ProxyService:
 
             if not pick_code:
                 logger.warning(
-                    "\n"
-                    "  步骤1  挂载路径 → 网盘路径: %s → %s\n"
-                    "  步骤2  查 pick_code: %s  file_name=%s\n"
-                    "  步骤3  获取直链: 跳过（pick_code 未找到）",
+                    "115解析 %s → %s → pick_code(%s): %s，跳过",
                     cloud_path, pan_path, step2_via,
                     PurePosixPath(pan_path).name,
                 )
                 return {"url": "", "expires_in": 0, "error": "115 path resolve failed"}
 
-            # 步骤3: 用 pick_code 获取直链（复用 manager，不再重复初始化）
-            logger.info(
-                "\n"
-                "  步骤1  挂载路径 → 网盘路径: %s → %s\n"
-                "  步骤2  查 pick_code: %s  pick_code=%s\n"
-                "  步骤3  获取直链...",
-                cloud_path, pan_path, step2_via, pick_code,
+            # 步骤3: 用 pick_code 获取直链（复用 manager）
+            link = await manager.adapter.get_direct_link("", pick_code=pick_code, user_agent=user_agent)
+            if link and link.url:
+                logger.info(
+                    "115解析完成: %s → pick_code=%s(%s) → %s (expires=%ds)",
+                    PurePosixPath(cloud_path).name, pick_code, step2_via,
+                    link.file_name or "OK", link.expires_in,
+                )
+                return {"url": link.url, "expires_in": link.expires_in}
+
+            logger.error(
+                "115解析 %s → pick_code=%s(%s) → 直链获取失败",
+                PurePosixPath(cloud_path).name, pick_code, step2_via,
             )
-            return await self._resolve_via_115(pick_code, user_agent, _manager=manager)
+            return {"url": "", "expires_in": 0, "error": "115 link failed"}
 
         except Exception as e:
             logger.error("115 路径解析异常: %s", e)

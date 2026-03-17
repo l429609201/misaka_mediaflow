@@ -163,10 +163,6 @@ class P115StorageAdapter(StorageAdapter):
             except Exception:
                 pass
 
-            logger.info(
-                "115 直链获取成功: pick_code=%s expires_in=%ds file=%s",
-                pick_code, expires_in, file_name,
-            )
             return DirectLink(
                 url=download_url,
                 file_name=file_name,
