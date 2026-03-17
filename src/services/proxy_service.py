@@ -81,19 +81,54 @@ class ProxyService:
     # ------------------------------------------------------------------
 
     async def _resolve_via_115(self, pick_code: str) -> dict:
-        """通过 115 pick_code 直接获取直链"""
+        """
+        通过 115 pick_code 直接获取直链。
+
+        与 redirect_service._resolve_by_pickcode 保持一致：
+          1. 确保 P115Manager 已初始化
+          2. 从数据库加载 Cookie（解决重启后 Cookie 丢失问题）
+          3. 调 downurl API 获取 CDN 直链
+        """
         try:
             from src.adapters.storage.p115 import P115Manager
             manager = P115Manager()
             if not manager.enabled:
                 return {"url": "", "expires_in": 0, "error": "115 not enabled"}
+
+            # ── 确保已初始化 ──────────────────────────────────────────────
+            if not manager.ready:
+                manager.initialize()
+
+            # ── 从数据库加载 Cookie（Cookie 未设置时从 DB 读取）──────────
+            if not manager.auth.has_cookie:
+                await self._load_115_cookie(manager)
+
+            if not manager.auth.has_cookie:
+                logger.error("115 Cookie 未配置，无法获取直链: pick_code=%s", pick_code)
+                return {"url": "", "expires_in": 0, "error": "115 cookie not set"}
+
             link = await manager.adapter.get_download_url(pick_code)
-            if link.url:
+            if link and link.url:
                 return {"url": link.url, "expires_in": link.expires_in}
             return {"url": "", "expires_in": 0, "error": "115 link failed"}
         except Exception as e:
             logger.error("115 直链解析异常: %s", e)
             return {"url": "", "expires_in": 0, "error": str(e)}
+
+    @staticmethod
+    async def _load_115_cookie(manager) -> None:
+        """从数据库加载持久化 Cookie，与 redirect_service 保持完全一致"""
+        try:
+            async with get_async_session_local() as db:
+                result = await db.execute(
+                    select(SystemConfig).where(SystemConfig.key == "p115_cookie")
+                )
+                cfg = result.scalars().first()
+                if cfg and cfg.value:
+                    manager.auth.set_cookie(cfg.value)
+                    logger.info("proxy_service: 从数据库加载 115 Cookie 成功 (len=%d)", len(cfg.value))
+        except Exception as e:
+            logger.warning("proxy_service: 从数据库加载 115 Cookie 失败: %s", e)
 
     async def _resolve_via_path_mapping(
         self, db: AsyncSession, file_path: str, storage_id: int
@@ -180,6 +215,14 @@ class ProxyService:
             manager = P115Manager()
             if not manager.enabled:
                 return {"url": "", "expires_in": 0, "error": "115 not enabled"}
+
+            # ── 确保已初始化 + Cookie 已加载 ─────────────────────────────
+            if not manager.ready:
+                manager.initialize()
+            if not manager.auth.has_cookie:
+                await self._load_115_cookie(manager)
+            if not manager.auth.has_cookie:
+                return {"url": "", "expires_in": 0, "error": "115 cookie not set"}
 
             # ── 步骤 1: P115FsCache 数据库查找 ────────────────────────────
             pick_code = await self._lookup_pickcode_from_fscache(cloud_path, db)
