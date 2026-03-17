@@ -107,7 +107,9 @@ class ProxyService:
                 logger.error("115 Cookie 未配置，无法获取直链: pick_code=%s", pick_code)
                 return {"url": "", "expires_in": 0, "error": "115 cookie not set"}
 
-            link = await manager.adapter.get_download_url(pick_code)
+            # ⭐ 注意：adapter 上是 get_direct_link，不是 get_download_url
+            # get_direct_link(cloud_path="", pick_code=xxx) → 直接用 pick_code 调 downurl API
+            link = await manager.adapter.get_direct_link("", pick_code=pick_code)
             if link and link.url:
                 return {"url": link.url, "expires_in": link.expires_in}
             return {"url": "", "expires_in": 0, "error": "115 link failed"}
@@ -129,6 +131,45 @@ class ProxyService:
                     logger.info("proxy_service: 从数据库加载 115 Cookie 成功 (len=%d)", len(cfg.value))
         except Exception as e:
             logger.warning("proxy_service: 从数据库加载 115 Cookie 失败: %s", e)
+
+    @staticmethod
+    async def _strip_mount_prefix(
+        local_path: str, db: AsyncSession | None = None
+    ) -> str:
+        """
+        从路径映射表查找挂载前缀并剥离，返回网盘相对路径。
+
+        示例：
+          PathMapping: local_prefix=/cd2/115open  cloud_prefix=/
+          输入: /cd2/115open/影音/R18/SNOS-144/xxx.mp4
+          输出: /影音/R18/SNOS-144/xxx.mp4
+
+        若找不到匹配规则，原样返回（文件名过滤仍然有效，只是父目录精准度低）。
+        """
+        async def _query(session: AsyncSession) -> str:
+            result = await session.execute(
+                select(PathMapping)
+                .where(PathMapping.is_active == 1)
+                .order_by(PathMapping.priority.desc())
+            )
+            for mapping in result.scalars().all():
+                if local_path.startswith(mapping.local_prefix):
+                    pan = local_path.replace(mapping.local_prefix, mapping.cloud_prefix, 1)
+                    # 规范化斜杠
+                    pan = "/" + pan.lstrip("/")
+                    logger.debug(
+                        "_strip_mount_prefix: %s → %s (rule: %s → %s)",
+                        local_path, pan, mapping.local_prefix, mapping.cloud_prefix,
+                    )
+                    return pan
+            # 没有匹配规则，原样返回
+            logger.debug("_strip_mount_prefix: 无匹配规则，保留原路径 %s", local_path)
+            return local_path
+
+        if db:
+            return await _query(db)
+        async with get_async_session_local() as session:
+            return await _query(session)
 
     async def _resolve_via_path_mapping(
         self, db: AsyncSession, file_path: str, storage_id: int
@@ -231,18 +272,22 @@ class ProxyService:
                 return await self._resolve_via_115(pick_code)
 
             # ── 步骤 2: 调用 115 搜索 API 实时查文件 ─────────────────────
-            # 用文件名搜索，再用父目录路径过滤，精准定位 pick_code
+            # 先从路径映射表剥离挂载前缀，得到网盘相对路径后再搜索
+            # 例：/cd2/115open/影音/R18/SNOS-144/xxx.mp4
+            #   → 去掉 /cd2/115open → /影音/R18/SNOS-144/xxx.mp4（网盘路径）
             file_name = PurePosixPath(cloud_path).name
             if file_name:
+                # 尝试从路径映射表剥离挂载前缀，得到真实网盘路径
+                pan_path = await self._strip_mount_prefix(cloud_path, db)
                 logger.info(
-                    "P115FsCache 未命中，调用 115 搜索 API: file_name=%s cloud_path=%s",
-                    file_name, cloud_path,
+                    "P115FsCache 未命中，调用 115 搜索 API: file_name=%s pan_path=%s",
+                    file_name, pan_path,
                 )
                 pick_code = await self._search_115_by_filename(
-                    manager, file_name, cloud_path
+                    manager, file_name, pan_path
                 )
                 if pick_code:
-                    logger.info("115 搜索 API 命中: %s → pick_code=%s", cloud_path, pick_code)
+                    logger.info("115 搜索 API 命中: %s → pick_code=%s", pan_path, pick_code)
                     return await self._resolve_via_115(pick_code)
 
             # ── 步骤 3: 内存 ID/Path 缓存（仅确认存在，当前无法取 pick_code）
