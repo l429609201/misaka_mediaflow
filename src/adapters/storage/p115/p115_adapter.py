@@ -43,6 +43,27 @@ class P115StorageAdapter(StorageAdapter):
         self._cache = id_path_cache
         self._client: httpx.AsyncClient | None = None
 
+    @staticmethod
+    def _extract_proapi_cookies(cookie_str: str) -> str:
+        """
+        从完整 cookie 字符串中提取 proapi 安卓接口所需的字段。
+
+        参照 p115strmhelper schemas/cookie.py U115Cookie.to_dict():
+          proapi 只认 UID、CID、SEID、KID 这几个字段。
+          传入 web 端的多余字段（115_lang、USERSESSIONID 等）会导致 "请重新登录"。
+        """
+        if not cookie_str:
+            return ""
+        proapi_keys = {"UID", "CID", "SEID", "KID"}
+        parts = []
+        for pair in cookie_str.split(";"):
+            pair = pair.strip()
+            if "=" in pair:
+                k = pair.split("=", 1)[0].strip()
+                if k in proapi_keys:
+                    parts.append(pair.strip())
+        return "; ".join(parts)
+
     async def _ensure_client(self) -> httpx.AsyncClient:
         """获取 HTTP 客户端（不带 cookie，cookie 通过 headers 每次请求时传）"""
         if self._client is None:
@@ -64,6 +85,9 @@ class P115StorageAdapter(StorageAdapter):
           请求体: data=encrypt('{"pick_code":"xxx"}')
           响应体: {"state":true, "data":"<加密字符串>"}  → decrypt 解密得到 URL
 
+        关键: proapi 是安卓接口，只认 UID/CID/SEID/KID 这几个 cookie 字段，
+              传入 web 端的多余字段会导致 "请重新登录"。
+
         kwargs:
           - pick_code: str  直接传入 pick_code
           - user_agent: str 播放器真实 UA（透传给 115 CDN 鉴权）
@@ -81,16 +105,20 @@ class P115StorageAdapter(StorageAdapter):
         await self._rate.acquire()
         client = await self._ensure_client()
 
+        # 提取 proapi 需要的 cookie 字段（参照 p115strmhelper U115Cookie.to_dict）
+        proapi_cookie = self._extract_proapi_cookies(self._auth.cookie)
+        if not proapi_cookie:
+            logger.error("115 Cookie 中缺少 UID/CID/SEID 字段，无法调用 proapi")
+            return DirectLink()
+
         try:
-            # ── 参照 p115strmhelper get_downurl_cookie ──────────────────
-            # Cookie 通过 headers 每次请求时传，避免 client 初始化时 cookie 还没加载的时序问题
             resp = await client.post(
                 _115_PROAPI_DOWNLOAD_URL,
                 data={
                     "data": encrypt(f'{{"pick_code":"{pick_code}"}}').decode("utf-8")
                 },
                 headers={
-                    "Cookie": self._auth.cookie,
+                    "Cookie": proapi_cookie,
                     "User-Agent": user_agent,
                 },
             )
