@@ -43,7 +43,10 @@
     "title": "選擇目錄",
     "root": "根目錄",
     "empty": "此目錄下沒有子目錄",
-    "select": "選擇此目錄"
+    "select": "選擇此目錄",
+    "storageTitle": "選擇儲存目錄",
+    "confirm": "確認選擇",
+    "localTitle": "選擇本地目錄"
   },
   "menu": {
     "dashboard": "儀表板",

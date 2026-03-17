@@ -17,6 +17,7 @@ import { useTranslation } from 'react-i18next'
 import { p115Api, storageApi } from '@/apis'
 import DirPickerModal from '@/components/DirPickerModal'
 import LocalDirPickerModal from '@/components/LocalDirPickerModal'
+import StorageDirPickerModal from '@/components/StorageDirPickerModal'
 
 const { TextArea } = Input
 const { Text } = Typography
@@ -64,6 +65,7 @@ export const Drive115 = () => {
   // ==================== 存储源列表（本地媒体路径下拉用） ====================
   const [storageSources, setStorageSources] = useState([])
   const [localMediaSource, setLocalMediaSource] = useState('local')
+  const [storageDirPickerOpen, setStorageDirPickerOpen] = useState(false)
 
   // ===================================================================
   //                          数据加载
@@ -191,6 +193,8 @@ export const Drive115 = () => {
       values.local_media_source = localMediaSource
       await p115Api.savePathMapping(values)
       message.success(t('common.success'))
+      // 保存后重新加载最新配置
+      fetchPathMapping()
     } catch { message.error(t('common.failed')) }
     finally { setMappingSaving(false) }
   }
@@ -484,7 +488,13 @@ export const Drive115 = () => {
                     addonAfter={
                       <Button
                         type="link" size="small" icon={<FolderOpenOutlined />}
-                        onClick={() => openLocalDirPicker('local_media_prefix')}
+                        onClick={() => {
+                          if (localMediaSource && localMediaSource !== 'local') {
+                            setStorageDirPickerOpen(true)
+                          } else {
+                            openLocalDirPicker('local_media_prefix')
+                          }
+                        }}
                         style={{ padding: 0, height: 'auto' }}
                       >
                         {t('p115.selectDir')}
@@ -510,6 +520,14 @@ export const Drive115 = () => {
         open={localDirPickerOpen}
         onClose={() => setLocalDirPickerOpen(false)}
         onSelect={handleLocalDirSelected}
+      />
+
+      {/* ========== 存储源目录选择弹窗 ========== */}
+      <StorageDirPickerModal
+        open={storageDirPickerOpen}
+        onClose={() => setStorageDirPickerOpen(false)}
+        storageId={localMediaSource !== 'local' ? Number(localMediaSource) : null}
+        onSelect={(path) => mappingForm.setFieldValue('local_media_prefix', path)}
       />
 
       {/* ========== Cookie 弹窗 ========== */}

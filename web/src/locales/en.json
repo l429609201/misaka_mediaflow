@@ -43,7 +43,10 @@
     "title": "Select Directory",
     "root": "Root",
     "empty": "No subdirectories",
-    "select": "Select this directory"
+    "select": "Select this directory",
+    "storageTitle": "Browse Storage Directory",
+    "confirm": "Confirm",
+    "localTitle": "Browse Local Directory"
   },
   "menu": {
     "dashboard": "Dashboard",

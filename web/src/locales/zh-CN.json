@@ -43,7 +43,10 @@
     "title": "选择目录",
     "root": "根目录",
     "empty": "此目录下没有子目录",
-    "select": "选择此目录"
+    "select": "选择此目录",
+    "storageTitle": "选择存储目录",
+    "confirm": "确认选择",
+    "localTitle": "选择本地目录"
   },
   "menu": {
     "dashboard": "仪表盘",
