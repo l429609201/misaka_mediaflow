@@ -20,9 +20,7 @@ import (
 	"github.com/mediaflow/go-proxy/internal/config"
 )
 
-// crossOriginPattern 匹配 plugin.js 中各种形式的 crossOrigin 赋值：
-//   - 非压缩: &&(elem.crossOrigin=initialSubtitleStream)
-//   - 压缩:   &&(e.crossOrigin=t)  /  &&(a.crossOrigin=n)  等
+// crossOriginPattern 匹配 plugin.js 中 &&(xxx.crossOrigin=yyy) 模式（旧版 Emby）
 var crossOriginPattern = regexp.MustCompile(`&&\([a-zA-Z_$][a-zA-Z0-9_$]*\.crossOrigin=[a-zA-Z_$][a-zA-Z0-9_$]*\)`)
 
 // ProxyHandler 透传处理器
@@ -103,15 +101,20 @@ func patchPluginJS(resp *http.Response) error {
 		return nil
 	}
 
-	// 用正则替换所有 crossOrigin 赋值模式
+	// 用正则替换旧版 &&(xxx.crossOrigin=yyy) 模式
 	original := string(body)
 	patched := crossOriginPattern.ReplaceAllString(original, "")
 
+	// ⭐ 核心修复：把所有 .crossOrigin 替换成 .crossOriginDisabled
+	// 新版 Emby 用 getCrossOriginValue() 方法返回 "anonymous" 再赋给 elem.crossOrigin
+	// 仅替换精确字符串即可让 crossOrigin 属性永远不会被设置到 <video> 上
+	patchCount := strings.Count(patched, ".crossOrigin")
+	patched = strings.ReplaceAll(patched, ".crossOrigin", ".crossOriginDisabled")
+
 	if original != patched {
-		matches := crossOriginPattern.FindAllString(original, -1)
-		log.Printf("✅ plugin.js 已 patch: 去除 %d 处 crossOrigin 赋值 %v", len(matches), matches)
+		log.Printf("✅ plugin.js 已 patch: 替换 %d 处 .crossOrigin → .crossOriginDisabled", patchCount)
 	} else {
-		log.Printf("⚠️ plugin.js 未找到 crossOrigin 赋值模式 (文件大小=%d bytes)", len(body))
+		log.Printf("⚠️ plugin.js 未找到 crossOrigin 相关代码 (文件大小=%d bytes)", len(body))
 	}
 
 	// 写回响应体
