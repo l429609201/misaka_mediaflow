@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -20,8 +19,74 @@ import (
 	"github.com/mediaflow/go-proxy/internal/config"
 )
 
-// crossOriginPattern 匹配 plugin.js 中 &&(xxx.crossOrigin=yyy) 模式（旧版 Emby）
-var crossOriginPattern = regexp.MustCompile(`&&\([a-zA-Z_$][a-zA-Z0-9_$]*\.crossOrigin=[a-zA-Z_$][a-zA-Z0-9_$]*\)`)
+// seekThrottleJS 注入到 plugin.js 末尾的 seek 防抖脚本。
+// 拦截 HTMLMediaElement.prototype.currentTime setter，快速拖拽时只在用户松手后
+// 执行一次真正的 seek，防止瞬间并发大量 Range 请求导致 115 CDN 返回 403。
+const seekThrottleJS = `
+;(function(){
+  /* ===== Misaka MediaFlow Seek Throttle ===== */
+  var DEBOUNCE_MS = 500;       /* 松手后等待 ms 再 seek */
+  var MIN_INTERVAL_MS = 2000;  /* 两次真实 seek 最小间隔 */
+  var proto = HTMLMediaElement.prototype;
+  var desc = Object.getOwnPropertyDescriptor(proto, 'currentTime');
+  if (!desc || !desc.set) return;
+  var origSet = desc.set;
+  var origGet = desc.get;
+  var _timer = null;
+  var _lastSeekTime = 0;
+  var _pendingTime = null;
+  var _isSeeking = false;
+
+  function doSeek(elem, t) {
+    var now = Date.now();
+    var elapsed = now - _lastSeekTime;
+    if (elapsed < MIN_INTERVAL_MS) {
+      /* 距上次 seek 太近，延迟执行 */
+      clearTimeout(_timer);
+      _timer = setTimeout(function(){ doSeek(elem, t); }, MIN_INTERVAL_MS - elapsed + 50);
+      return;
+    }
+    _lastSeekTime = now;
+    _pendingTime = null;
+    _isSeeking = false;
+    origSet.call(elem, t);
+  }
+
+  function isInBuffered(elem, t) {
+    var buf = elem.buffered;
+    for (var i = 0; i < buf.length; i++) {
+      if (t >= buf.start(i) && t <= buf.end(i)) return true;
+    }
+    return false;
+  }
+
+  Object.defineProperty(proto, 'currentTime', {
+    get: function() {
+      /* 拖拽中返回目标时间，让进度条 UI 跟手 */
+      if (_pendingTime !== null) return _pendingTime;
+      return origGet.call(this);
+    },
+    set: function(v) {
+      /* 在已缓冲范围内，直接 seek（不产生网络请求） */
+      if (isInBuffered(this, v)) {
+        clearTimeout(_timer);
+        _pendingTime = null;
+        _isSeeking = false;
+        origSet.call(this, v);
+        return;
+      }
+      /* 超出缓冲区：防抖 */
+      _pendingTime = v;
+      _isSeeking = true;
+      var self = this;
+      clearTimeout(_timer);
+      _timer = setTimeout(function(){ doSeek(self, v); }, DEBOUNCE_MS);
+    },
+    configurable: true
+  });
+  console.log('[Misaka] seek throttle active: debounce=' + DEBOUNCE_MS + 'ms, minInterval=' + MIN_INTERVAL_MS + 'ms');
+})();
+`
 
 // ProxyHandler 透传处理器
 type ProxyHandler struct {
@@ -117,24 +182,25 @@ func patchPluginJS(resp *http.Response) error {
 	log.Printf("plugin.js 原始内容: %d bytes, 包含 .crossOrigin=%v",
 		len(body), strings.Contains(string(body), ".crossOrigin"))
 
-	// 用正则替换旧版 &&(xxx.crossOrigin=yyy) 模式
-	original := string(body)
-	patched := crossOriginPattern.ReplaceAllString(original, "")
-
 	// ⭐ 核心：把所有 .crossOrigin 替换成 .crossOriginDisabled
-	patchCount := strings.Count(patched, ".crossOrigin")
-	patched = strings.ReplaceAll(patched, ".crossOrigin", ".crossOriginDisabled")
+	// 同时覆盖旧版 &&(elem.crossOrigin=xxx) 和新版 getCrossOriginValue() 模式
+	original := string(body)
+	patchCount := strings.Count(original, ".crossOrigin")
+	patched := strings.ReplaceAll(original, ".crossOrigin", ".crossOriginDisabled")
 
 	if original != patched {
 		log.Printf("✅ plugin.js 已 patch: 替换 %d 处 .crossOrigin → .crossOriginDisabled", patchCount)
 	} else {
-		// 打印前200字节帮助调试
 		snippet := string(body)
 		if len(snippet) > 200 {
 			snippet = snippet[:200]
 		}
 		log.Printf("⚠️ plugin.js 未找到 crossOrigin (大小=%d bytes, 前200字节=%q)", len(body), snippet)
 	}
+
+	// ⭐ 追加 seek 防抖脚本，防止拖拽进度条产生大量 Range 请求导致 115 CDN 403
+	patched += seekThrottleJS
+	log.Printf("✅ plugin.js 已注入 seek 防抖脚本")
 
 	// 写回响应体（不压缩，浏览器可以接受纯文本）
 	newBody := []byte(patched)
