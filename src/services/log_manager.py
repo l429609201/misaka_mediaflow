@@ -110,10 +110,15 @@ def setup_logging():
     src_logger.addHandler(file_handler)
 
     # 3. 内存队列（供 Web UI 实时查看）
+    # ⚠️ 始终设为 DEBUG，让全量日志进队列；前端按级别过滤显示
     deque_handler = DequeHandler(_logs_deque)
+    deque_handler.setLevel(logging.DEBUG)
     deque_handler.addFilter(NoHttpxLogFilter())
     deque_handler.setFormatter(ui_formatter)
     src_logger.addHandler(deque_handler)
+
+    # src_logger 本身也需要 DEBUG，才能让 DEBUG 日志流过来
+    src_logger.setLevel(logging.DEBUG)
 
     logging.getLogger("src").info(
         f"日志系统已初始化 (目录: {LOG_DIR})\n"

@@ -430,19 +430,24 @@ class RedirectService:
     async def _fetch_playback_path(host: str, api_key: str, item_id: str) -> str:
         """调用 Emby PlaybackInfo 获取 MediaSources.Path（比 Items/{id} 更可靠）"""
         import httpx
+        url = f"{host}/emby/Items/{item_id}/PlaybackInfo"
+        masked_key = api_key[:4] + "****" if len(api_key) > 4 else "****"
+        logger.debug("[redirect] _fetch_playback_path → POST %s?api_key=%s", url, masked_key)
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.post(
-                    f"{host}/emby/Items/{item_id}/PlaybackInfo",
+                    url,
                     params={"api_key": api_key},
                     json={"DeviceProfile": {}},
                 )
+                logger.debug("[redirect] _fetch_playback_path ← HTTP %d item_id=%s", resp.status_code, item_id)
                 if resp.status_code == 200:
                     data = resp.json()
                     sources = data.get("MediaSources", [])
                     for src in sources:
                         p = src.get("Path", "")
                         if p:
+                            logger.debug("[redirect] _fetch_playback_path 拿到路径: %s", p)
                             return p
         except Exception as e:
             logger.debug("[redirect] PlaybackInfo异常 item_id=%s: %s", item_id, e)
@@ -452,11 +457,21 @@ class RedirectService:
     async def _fetch_emby_item(host: str, api_key: str, item_id: str) -> dict | None:
         """调用 Emby Items/{id} 明细接口（兜底）"""
         import httpx
+        import urllib.parse
+        params = {"api_key": api_key, "Fields": "Path,MediaSources"}
+        masked_key = api_key[:4] + "****" if len(api_key) > 4 else "****"
+        debug_qs = urllib.parse.urlencode({**params, "api_key": masked_key})
+        logger.debug("[redirect] _fetch_emby_item → GET %s/emby/Items/%s?%s", host, item_id, debug_qs)
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(
                     f"{host}/emby/Items/{item_id}",
-                    params={"api_key": api_key, "Fields": "Path,MediaSources"},
+                    params=params,
+                )
+                logger.debug(
+                    "[redirect] _fetch_emby_item ← HTTP %d item_id=%s body_preview=%s",
+                    resp.status_code, item_id,
+                    resp.text[:200] if resp.status_code != 200 else "(ok)",
                 )
                 if resp.status_code == 200:
                     return resp.json()

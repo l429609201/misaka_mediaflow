@@ -233,38 +233,78 @@ class ProxyService:
         self, db: AsyncSession, item_id: str, api_key: str, user_id: str, storage_id: int
     ) -> dict:
         """
-        当 MediaItem 表中没有记录时，通过 Emby/Jellyfin API 获取文件路径，
-        然后根据路径类型（STRM / 普通视频）解析直链。
+        当 MediaItem 表中没有记录时，三段式降级链获取文件路径：
+
+        Step 1 (最优): POST PlaybackInfo → MediaSources.Path
+                       ✅ 不需要 UserId，直接拿到 STRM 内容（http 链接 / pick_code）
+        Step 2 (降级): GET Users/Me → 拿 UserId → GET Items/{id}
+                       适合非 STRM 的普通挂载场景
+        Step 3 (兜底): GET Items/{id} 不带 UserId（部分 Emby 配置不验证）
         """
-        # 1. 获取媒体服务器配置
+        # 0. 获取媒体服务器配置
         ms_host, ms_api_key = await self._get_media_server_config(db)
-        # 优先使用 Go 传来的 api_key
         effective_api_key = api_key or ms_api_key
         if not ms_host or not effective_api_key:
             logger.warning("媒体服务器未配置, 无法 fallback: item_id=%s", item_id)
             return {"url": "", "expires_in": 0, "error": "media server not configured"}
 
-        # 2. 调 Emby API 获取条目详情（带 user_id）
-        item_info = await self._fetch_emby_item(ms_host, effective_api_key, item_id, user_id)
-        if not item_info:
-            logger.warning("Emby API 未返回条目信息: item_id=%s", item_id)
+        # ── Step 1: PlaybackInfo（不需要 UserId，参考 embyreverseproxy 做法）──────
+        file_path, item_info = await self._fetch_path_via_playback_info(
+            ms_host, effective_api_key, item_id
+        )
+        logger.debug("Step1 PlaybackInfo: item_id=%s path=%s", item_id, file_path or "N/A")
+
+        # ── Step 2: UserId 降级链 ─────────────────────────────────────────────────
+        if not file_path:
+            # 2a. 用 api_key 查当前用户 UserId（GET /Users/Me）
+            resolved_user_id = user_id or await self._fetch_user_id(ms_host, effective_api_key)
+            logger.debug("Step2 UserId: item_id=%s user_id=%s", item_id, resolved_user_id or "N/A")
+
+            if resolved_user_id:
+                item_info = await self._fetch_emby_item(
+                    ms_host, effective_api_key, item_id, resolved_user_id
+                )
+                if item_info:
+                    file_path = self._extract_file_path(item_info)
+
+        # ── Step 3: 不带 UserId 也试一次（部分 Emby 不验证） ─────────────────────
+        if not file_path:
+            logger.debug("Step3 Items无UserId: item_id=%s", item_id)
+            item_info = await self._fetch_emby_item(ms_host, effective_api_key, item_id, "")
+            if item_info:
+                file_path = self._extract_file_path(item_info)
+
+        if not file_path:
+            logger.warning("三段降级均未拿到路径: item_id=%s", item_id)
             return {"url": "", "expires_in": 0, "error": "emby item not found"}
 
-        # 3. 提取文件路径
-        file_path = self._extract_file_path(item_info)
-        if not file_path:
-            logger.warning("Emby 条目无文件路径: item_id=%s", item_id)
-            return {"url": "", "expires_in": 0, "error": "no file path in emby item"}
+        logger.info("Emby fallback 获取到路径: item_id=%s path=%s", item_id, file_path)
 
-        logger.info("Emby fallback 获取到路径: item_id=%s, path=%s", item_id, file_path)
+        # ── 路径处理 ──────────────────────────────────────────────────────────────
+        # 情况A: 拿到的就是 http/https URL（PlaybackInfo 返回的 STRM 内容）
+        #         直接提取 pick_code → 获取直链
+        if file_path.startswith(("http://", "https://")):
+            pick_code = self._extract_pick_code(file_path)
+            if pick_code:
+                logger.info("从PlaybackInfo URL提取到pick_code=%s item_id=%s", pick_code, item_id)
+                result = await self._resolve_via_115(pick_code)
+                if result.get("url"):
+                    # 缓存命中结果，下次走快路径
+                    await self._cache_media_mapping(
+                        db, item_id, item_info or {}, pick_code, file_path
+                    )
+                return result
+            # URL 但没提取到 pick_code（可能是其他存储的直链？透传失败）
+            logger.warning("PlaybackInfo返回URL但无pick_code: %s", file_path[:100])
+            return {"url": "", "expires_in": 0, "error": "no pick_code in strm url"}
 
-        # 4. 判断是否是 STRM 文件
+        # 情况B: 本地 .strm 文件路径 → 读文件内容 → 提取 pick_code
         if file_path.lower().endswith(".strm"):
-            result = await self._resolve_strm_fallback(db, item_id, item_info, file_path)
+            result = await self._resolve_strm_fallback(db, item_id, item_info or {}, file_path)
             if result and result.get("url"):
                 return result
 
-        # 5. 非 STRM 或 STRM 解析失败 → 通过路径映射
+        # 情况C: 普通本地挂载路径 → PathMapping → FsCache
         return await self._resolve_via_path_mapping(db, file_path, storage_id)
 
     async def _resolve_strm_fallback(
@@ -321,8 +361,79 @@ class ProxyService:
 
         return host.rstrip("/") if host else "", api_key or ""
 
+    async def _fetch_path_via_playback_info(
+        self, host: str, api_key: str, item_id: str
+    ) -> tuple[str, dict | None]:
+        """
+        POST /Items/{item_id}/PlaybackInfo 获取 MediaSources.Path。
+        参考 embyreverseproxy 的做法：
+          - 不需要 UserId，只需要 Token
+          - 对于 STRM 文件，Path 直接就是 STRM 文件里的 http 链接（含 pick_code）
+          - 对于普通文件，Path 是本地文件系统路径
+
+        返回 (path, item_info_dict)，拿不到返回 ("", None)
+        """
+        import httpx
+        url = f"{host}/emby/Items/{item_id}/PlaybackInfo"
+        masked_key = api_key[:4] + "****" if len(api_key) > 4 else "****"
+        logger.debug("_fetch_path_via_playback_info → POST %s?X-Emby-Token=%s", url, masked_key)
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(
+                    url,
+                    params={"X-Emby-Token": api_key},
+                    json={"DeviceProfile": {}},
+                )
+                logger.debug(
+                    "_fetch_path_via_playback_info ← HTTP %d item_id=%s",
+                    resp.status_code, item_id,
+                )
+                if resp.status_code != 200:
+                    logger.debug(
+                        "_fetch_path_via_playback_info 失败 %d body=%s",
+                        resp.status_code, resp.text[:200],
+                    )
+                    return "", None
+                data = resp.json()
+                sources = data.get("MediaSources", [])
+                for src in sources:
+                    path = src.get("Path", "")
+                    if path:
+                        logger.debug(
+                            "_fetch_path_via_playback_info 拿到路径: item_id=%s path=%s",
+                            item_id, path,
+                        )
+                        return path, src
+        except Exception as e:
+            logger.debug("_fetch_path_via_playback_info 异常 item_id=%s: %s", item_id, e)
+        return "", None
+
+    async def _fetch_user_id(self, host: str, api_key: str) -> str:
+        """
+        GET /Users/Me?X-Emby-Token=xxx 查询当前 Token 对应的 UserId。
+        无需事先知道 UserId，用 api_key 即可反查。
+        """
+        import httpx
+        masked_key = api_key[:4] + "****" if len(api_key) > 4 else "****"
+        logger.debug("_fetch_user_id → GET %s/Users/Me?X-Emby-Token=%s", host, masked_key)
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    f"{host}/Users/Me",
+                    params={"X-Emby-Token": api_key},
+                )
+                logger.debug("_fetch_user_id ← HTTP %d", resp.status_code)
+                if resp.status_code == 200:
+                    user_id = resp.json().get("Id", "")
+                    logger.debug("_fetch_user_id 拿到 UserId=%s", user_id)
+                    return user_id
+                logger.debug("_fetch_user_id 失败 %d body=%s", resp.status_code, resp.text[:100])
+        except Exception as e:
+            logger.debug("_fetch_user_id 异常: %s", e)
+        return ""
+
     async def _fetch_emby_item(self, host: str, api_key: str, item_id: str, user_id: str = "") -> dict | None:
-        """调用 Emby/Jellyfin API 获取条目详情（必须带 UserId，否则 Emby 返回 404）"""
+        """调用 Emby/Jellyfin GET /Items/{id} 获取条目详情（需要 UserId，否则部分 Emby 返回 404）"""
         import httpx
         params = {
             "api_key": api_key,
@@ -331,11 +442,24 @@ class ProxyService:
         if user_id:
             params["UserId"] = user_id
 
+        # 构造实际请求 URL（DEBUG 打印，屏蔽 api_key 末尾字符）
+        masked_key = api_key[:4] + "****" if len(api_key) > 4 else "****"
+        debug_params = {**params, "api_key": masked_key}
+        import urllib.parse
+        query_str = urllib.parse.urlencode(debug_params)
+        full_url = f"{host}/emby/Items/{item_id}?{query_str}"
+        logger.debug("_fetch_emby_item → 请求 URL: %s", full_url)
+
         try:
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.get(
                     f"{host}/emby/Items/{item_id}",
                     params=params,
+                )
+                logger.debug(
+                    "_fetch_emby_item ← HTTP %d item_id=%s user_id=%s body_preview=%s",
+                    resp.status_code, item_id, user_id or "N/A",
+                    resp.text[:200] if resp.status_code != 200 else "(ok)",
                 )
                 if resp.status_code == 200:
                     return resp.json()
