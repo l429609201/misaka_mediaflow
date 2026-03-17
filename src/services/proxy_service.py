@@ -98,8 +98,17 @@ class ProxyService:
     async def _resolve_via_path_mapping(
         self, db: AsyncSession, file_path: str, storage_id: int
     ) -> dict:
-        """通过路径映射 + 存储适配器获取直链"""
-        # 查找匹配的路径映射
+        """
+        通过路径映射 + 存储适配器获取直链。
+
+        路径映射的作用：把挂载路径（如 /cd2/115open/影音/xxx.mp4）
+        转换为网盘云端路径（如 /影音/xxx.mp4），再用云端路径查直链。
+
+        降级策略（路径映射未配置时）：
+          若 115 已启用，则把原始挂载路径直接作为云端路径，
+          调 115 搜索 API 按文件名查 pick_code（参考 _ref_server.txt 思路）。
+        """
+        # ── 查找所有有效的路径映射规则 ──
         query = select(PathMapping).where(PathMapping.is_active == 1)
         if storage_id > 0:
             query = query.where(PathMapping.storage_id == storage_id)
@@ -112,26 +121,35 @@ class ProxyService:
         for mapping in mappings:
             if file_path.startswith(mapping.local_prefix):
                 cloud_path = file_path.replace(mapping.local_prefix, mapping.cloud_prefix, 1)
+                # 规范化：去掉重复斜杠
+                cloud_path = "/" + cloud_path.lstrip("/")
                 matched_storage_id = mapping.storage_id
+                logger.debug(
+                    "路径映射命中: %s → %s (storage_id=%s)",
+                    file_path, cloud_path, matched_storage_id,
+                )
                 break
 
+        # ── 路径映射未命中：兜底直接用原始路径 ──────────────────────────
         if not cloud_path:
-            logger.warning("无匹配路径映射: %s", file_path)
-            return {"url": "", "expires_in": 0, "error": "no path mapping"}
+            logger.warning("无匹配路径映射: %s，尝试直接用文件名查 115", file_path)
+            # 把挂载路径当云端路径，让 _resolve_115_by_cloud_path 用文件名搜索
+            return await self._resolve_115_by_cloud_path(file_path, db)
 
-        # 查找存储源配置
+        # ── 查找匹配的存储源配置 ──────────────────────────────────────────
         result = await db.execute(
             select(StorageConfig).where(StorageConfig.id == matched_storage_id)
         )
         storage = result.scalars().first()
         if not storage or storage.is_active != 1:
-            return {"url": "", "expires_in": 0, "error": "storage not found or disabled"}
+            logger.warning("存储源未找到或已禁用: storage_id=%s，降级到 115 搜索", matched_storage_id)
+            return await self._resolve_115_by_cloud_path(cloud_path, db)
 
-        # 如果是 115 存储 → 从 P115FsCache 查 pick_code 并获取直链
+        # ── 115 存储 → FsCache + 115 API 搜索 ──────────────────────────
         if storage.type == "p115":
             return await self._resolve_115_by_cloud_path(cloud_path, db)
 
-        # 其他存储类型 → 通用适配器
+        # ── 其他存储类型 → 通用适配器 ────────────────────────────────────
         try:
             config = json.loads(storage.config) if storage.config else {}
             from src.adapters.storage.factory import StorageFactory
@@ -148,10 +166,14 @@ class ProxyService:
         self, cloud_path: str, db: AsyncSession | None = None
     ) -> dict:
         """
-        通过云端路径查找 115 pick_code 并获取直链。
-        参考 p115strmhelper 的 get_pickcode_by_path:
-          1. 先查 P115FsCache 数据库（按文件名匹配）
-          2. 找到 pick_code → 获取直链
+        通过云端路径查找 115 pick_code 并获取直链。三步降级：
+
+          步骤 1: P115FsCache 数据库精确匹配 / 文件名匹配
+          步骤 2: 调用 115 搜索 API（files/search）按文件名实时搜索
+                  ← 这是关键兜底：FsCache 没数据时仍能解析
+          步骤 3: （内存 ID/Path 缓存，当前只能确认存在，无法取 pick_code）
+
+        参考：_ref_server.txt handle115PanDirectLink 的 pathCache 思路
         """
         try:
             from src.adapters.storage.p115 import P115Manager
@@ -159,22 +181,96 @@ class ProxyService:
             if not manager.enabled:
                 return {"url": "", "expires_in": 0, "error": "115 not enabled"}
 
-            # ---- 步骤 1: 从 P115FsCache 数据库查找 pick_code ----
+            # ── 步骤 1: P115FsCache 数据库查找 ────────────────────────────
             pick_code = await self._lookup_pickcode_from_fscache(cloud_path, db)
             if pick_code:
                 logger.info("P115FsCache 命中: cloud_path=%s → pick_code=%s", cloud_path, pick_code)
                 return await self._resolve_via_115(pick_code)
 
-            # ---- 步骤 2: 内存缓存兜底 ----
+            # ── 步骤 2: 调用 115 搜索 API 实时查文件 ─────────────────────
+            # 用文件名搜索，再用父目录路径过滤，精准定位 pick_code
+            file_name = PurePosixPath(cloud_path).name
+            if file_name:
+                logger.info(
+                    "P115FsCache 未命中，调用 115 搜索 API: file_name=%s cloud_path=%s",
+                    file_name, cloud_path,
+                )
+                pick_code = await self._search_115_by_filename(
+                    manager, file_name, cloud_path
+                )
+                if pick_code:
+                    logger.info("115 搜索 API 命中: %s → pick_code=%s", cloud_path, pick_code)
+                    return await self._resolve_via_115(pick_code)
+
+            # ── 步骤 3: 内存 ID/Path 缓存（仅确认存在，当前无法取 pick_code）
             file_id = manager.id_path_cache.get_id(cloud_path)
             if file_id:
-                logger.debug("内存缓存命中 file_id=%s, 但无法转换为 pick_code", file_id)
+                logger.debug("内存缓存命中 file_id=%s，但无 pick_code", file_id)
 
-            logger.warning("115 云端路径无法解析 pick_code: %s", cloud_path)
+            logger.warning("115 云端路径三步均未找到 pick_code: %s", cloud_path)
             return {"url": "", "expires_in": 0, "error": "115 path resolve failed"}
         except Exception as e:
             logger.error("115 路径解析异常: %s", e)
             return {"url": "", "expires_in": 0, "error": str(e)}
+
+    async def _search_115_by_filename(
+        self, manager, file_name: str, cloud_path: str
+    ) -> str:
+        """
+        调用 115 files/search API，按文件名搜索，返回 pick_code。
+
+        搜索到多个同名文件时，优先选择路径最匹配的那个：
+          - 把 cloud_path 的父目录名和文件名拆开比对
+          - 找不到最佳匹配则取第一个结果
+        """
+        from pathlib import PurePosixPath as _P
+
+        parent_name = _P(cloud_path).parent.name  # 父目录名，用于辅助过滤
+
+        try:
+            await manager.adapter._rate.acquire()
+            client = await manager.adapter._ensure_client()
+            resp = await client.get(
+                "https://webapi.115.com/files/search",
+                params={
+                    "search_value": file_name,
+                    "limit": 20,
+                    "offset": 0,
+                    "format": "json",
+                },
+                headers=manager.adapter._auth.get_cookie_headers(),
+            )
+            data = resp.json()
+            logger.debug("115 搜索 API 响应: state=%s count=%s", data.get("state"), data.get("count"))
+
+            if not data.get("state"):
+                logger.warning("115 搜索 API 失败: %s", data.get("error", data.get("msg", "")))
+                return ""
+
+            items = data.get("data", [])
+            if not items:
+                return ""
+
+            # 精准匹配：文件名 + 父目录名都对上
+            for item in items:
+                item_name = item.get("n", "")
+                item_pick = item.get("pc", "")
+                item_parent = item.get("pn", "")  # 父目录名（115 返回 pn 字段）
+                if item_name == file_name and item_pick:
+                    if parent_name and item_parent and item_parent == parent_name:
+                        logger.debug("115 搜索精准匹配（文件名+父目录）: %s pn=%s", file_name, item_parent)
+                        return item_pick
+
+            # 宽松匹配：只要文件名一致就取第一个
+            for item in items:
+                if item.get("n", "") == file_name and item.get("pc", ""):
+                    logger.debug("115 搜索宽松匹配（仅文件名）: %s", file_name)
+                    return item["pc"]
+
+            return ""
+        except Exception as e:
+            logger.warning("115 搜索 API 异常: file_name=%s err=%s", file_name, e)
+            return ""
 
     async def _lookup_pickcode_from_fscache(
         self, cloud_path: str, db: AsyncSession | None = None
