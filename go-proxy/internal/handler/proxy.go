@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -18,6 +19,11 @@ import (
 
 	"github.com/mediaflow/go-proxy/internal/config"
 )
+
+// crossOriginPattern 匹配 plugin.js 中各种形式的 crossOrigin 赋值：
+//   - 非压缩: &&(elem.crossOrigin=initialSubtitleStream)
+//   - 压缩:   &&(e.crossOrigin=t)  /  &&(a.crossOrigin=n)  等
+var crossOriginPattern = regexp.MustCompile(`&&\([a-zA-Z_$][a-zA-Z0-9_$]*\.crossOrigin=[a-zA-Z_$][a-zA-Z0-9_$]*\)`)
 
 // ProxyHandler 透传处理器
 type ProxyHandler struct {
@@ -62,7 +68,7 @@ func NewProxyHandler(cfg *config.Config) *ProxyHandler {
 }
 
 // patchPluginJS 拦截 Emby htmlvideoplayer/plugin.js 响应，
-// 去除 &&(elem.crossOrigin=initialSubtitleStream) 以解决 115 CDN CORS 问题。
+// 用正则去除 .crossOrigin 赋值（兼容压缩/非压缩变量名）。
 // 115 CDN 不返回 Access-Control-Allow-Origin 头，浏览器带 crossorigin="anonymous"
 // 的 <video> 元素在 302 重定向后会被 CORS 策略阻止。
 func patchPluginJS(resp *http.Response) error {
@@ -83,7 +89,8 @@ func patchPluginJS(resp *http.Response) error {
 	if isGzip {
 		gr, err := gzip.NewReader(resp.Body)
 		if err != nil {
-			return nil // 解压失败不影响正常流程
+			log.Printf("plugin.js gzip 解压失败: %v", err)
+			return nil
 		}
 		defer gr.Close()
 		bodyReader = gr
@@ -92,15 +99,19 @@ func patchPluginJS(resp *http.Response) error {
 	body, err := io.ReadAll(bodyReader)
 	resp.Body.Close()
 	if err != nil {
+		log.Printf("plugin.js 读取失败: %v", err)
 		return nil
 	}
 
-	// 替换 crossOrigin 设置代码
+	// 用正则替换所有 crossOrigin 赋值模式
 	original := string(body)
-	patched := strings.ReplaceAll(original, "&&(elem.crossOrigin=initialSubtitleStream)", "")
+	patched := crossOriginPattern.ReplaceAllString(original, "")
 
 	if original != patched {
-		log.Printf("plugin.js 已自动 patch: 去除 crossOrigin 设置 (解决 115 CDN CORS 问题)")
+		matches := crossOriginPattern.FindAllString(original, -1)
+		log.Printf("✅ plugin.js 已 patch: 去除 %d 处 crossOrigin 赋值 %v", len(matches), matches)
+	} else {
+		log.Printf("⚠️ plugin.js 未找到 crossOrigin 赋值模式 (文件大小=%d bytes)", len(body))
 	}
 
 	// 写回响应体
@@ -116,6 +127,13 @@ func patchPluginJS(resp *http.Response) error {
 	resp.Body = io.NopCloser(bytes.NewReader(newBody))
 	resp.ContentLength = int64(len(newBody))
 	resp.Header.Set("Content-Length", strconv.Itoa(len(newBody)))
+
+	// ⭐ 禁止浏览器缓存 patch 后的 plugin.js，确保每次都经过 Go 反代处理
+	resp.Header.Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	resp.Header.Set("Pragma", "no-cache")
+	resp.Header.Set("Expires", "0")
+	resp.Header.Del("ETag")
+	resp.Header.Del("Last-Modified")
 
 	return nil
 }
