@@ -44,6 +44,13 @@ func NewProxyHandler(cfg *config.Config) *ProxyHandler {
 	rp.Director = func(req *http.Request) {
 		originalDirector(req)
 		req.Host = target.Host
+
+		// ⭐ 对 htmlvideoplayer/plugin.js 请求，去掉 Accept-Encoding
+		// 让 Go Transport 自动用 gzip 并自动解压，确保 ModifyResponse 收到纯文本
+		// 否则浏览器发 Accept-Encoding: br,gzip → Emby 返回 Brotli → 我们无法解压替换
+		if strings.Contains(req.URL.Path, "htmlvideoplayer/plugin.js") {
+			req.Header.Del("Accept-Encoding")
+		}
 	}
 
 	// 错误处理
@@ -81,8 +88,14 @@ func patchPluginJS(resp *http.Response) error {
 		return nil
 	}
 
-	// 读取响应体（可能 gzip 压缩）
-	isGzip := strings.Contains(resp.Header.Get("Content-Encoding"), "gzip")
+	encoding := resp.Header.Get("Content-Encoding")
+	log.Printf("plugin.js 响应: status=%d, Content-Encoding=%q, Content-Length=%d",
+		resp.StatusCode, encoding, resp.ContentLength)
+
+	// 读取响应体
+	// Director 已去掉 Accept-Encoding，Transport 会自动解压 gzip
+	// 但以防万一也处理手动 gzip 的情况
+	isGzip := strings.Contains(encoding, "gzip")
 	var bodyReader io.Reader = resp.Body
 	if isGzip {
 		gr, err := gzip.NewReader(resp.Body)
@@ -101,37 +114,36 @@ func patchPluginJS(resp *http.Response) error {
 		return nil
 	}
 
+	log.Printf("plugin.js 原始内容: %d bytes, 包含 .crossOrigin=%v",
+		len(body), strings.Contains(string(body), ".crossOrigin"))
+
 	// 用正则替换旧版 &&(xxx.crossOrigin=yyy) 模式
 	original := string(body)
 	patched := crossOriginPattern.ReplaceAllString(original, "")
 
-	// ⭐ 核心修复：把所有 .crossOrigin 替换成 .crossOriginDisabled
-	// 新版 Emby 用 getCrossOriginValue() 方法返回 "anonymous" 再赋给 elem.crossOrigin
-	// 仅替换精确字符串即可让 crossOrigin 属性永远不会被设置到 <video> 上
+	// ⭐ 核心：把所有 .crossOrigin 替换成 .crossOriginDisabled
 	patchCount := strings.Count(patched, ".crossOrigin")
 	patched = strings.ReplaceAll(patched, ".crossOrigin", ".crossOriginDisabled")
 
 	if original != patched {
 		log.Printf("✅ plugin.js 已 patch: 替换 %d 处 .crossOrigin → .crossOriginDisabled", patchCount)
 	} else {
-		log.Printf("⚠️ plugin.js 未找到 crossOrigin 相关代码 (文件大小=%d bytes)", len(body))
+		// 打印前200字节帮助调试
+		snippet := string(body)
+		if len(snippet) > 200 {
+			snippet = snippet[:200]
+		}
+		log.Printf("⚠️ plugin.js 未找到 crossOrigin (大小=%d bytes, 前200字节=%q)", len(body), snippet)
 	}
 
-	// 写回响应体
+	// 写回响应体（不压缩，浏览器可以接受纯文本）
 	newBody := []byte(patched)
-	if isGzip {
-		var buf bytes.Buffer
-		gw := gzip.NewWriter(&buf)
-		gw.Write(newBody)
-		gw.Close()
-		newBody = buf.Bytes()
-	}
-
 	resp.Body = io.NopCloser(bytes.NewReader(newBody))
 	resp.ContentLength = int64(len(newBody))
 	resp.Header.Set("Content-Length", strconv.Itoa(len(newBody)))
+	resp.Header.Del("Content-Encoding") // 确保无压缩头
 
-	// ⭐ 禁止浏览器缓存 patch 后的 plugin.js，确保每次都经过 Go 反代处理
+	// 禁止浏览器缓存
 	resp.Header.Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	resp.Header.Set("Pragma", "no-cache")
 	resp.Header.Set("Expires", "0")
