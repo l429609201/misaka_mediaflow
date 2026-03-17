@@ -47,55 +47,66 @@ func Setup(cfg *config.Config, cm *cache.Manager) *gin.Engine {
 	embyGroup := r.Group("/emby")
 	embyGroup.Use(middleware.EmbyAuth())
 	{
-		// 视频流
-		embyGroup.GET("/videos/:itemId/stream", redirectHandler.HandleVideoStream)
-		embyGroup.GET("/videos/:itemId/stream.:format", redirectHandler.HandleVideoStream)
-		embyGroup.HEAD("/videos/:itemId/stream", redirectHandler.HandleVideoStream)
-		embyGroup.HEAD("/videos/:itemId/stream.:format", redirectHandler.HandleVideoStream)
+		// 视频流（同时注册大小写路径，Emby Web 前端用大写 /Videos/）
+		for _, prefix := range []string{"/videos", "/Videos"} {
+			embyGroup.GET(prefix+"/:itemId/stream", redirectHandler.HandleVideoStream)
+			embyGroup.GET(prefix+"/:itemId/stream.:format", redirectHandler.HandleVideoStream)
+			embyGroup.HEAD(prefix+"/:itemId/stream", redirectHandler.HandleVideoStream)
+			embyGroup.HEAD(prefix+"/:itemId/stream.:format", redirectHandler.HandleVideoStream)
 
-		// 原始文件
-		embyGroup.GET("/videos/:itemId/original", redirectHandler.HandleVideoStream)
-		embyGroup.GET("/videos/:itemId/original.:format", redirectHandler.HandleVideoStream)
-		embyGroup.HEAD("/videos/:itemId/original", redirectHandler.HandleVideoStream)
-		embyGroup.HEAD("/videos/:itemId/original.:format", redirectHandler.HandleVideoStream)
+			// 原始文件
+			embyGroup.GET(prefix+"/:itemId/original", redirectHandler.HandleVideoStream)
+			embyGroup.GET(prefix+"/:itemId/original.:format", redirectHandler.HandleVideoStream)
+			embyGroup.HEAD(prefix+"/:itemId/original", redirectHandler.HandleVideoStream)
+			embyGroup.HEAD(prefix+"/:itemId/original.:format", redirectHandler.HandleVideoStream)
+		}
 
 		// 音频流
-		embyGroup.GET("/Audio/:itemId/stream", redirectHandler.HandleVideoStream)
-		embyGroup.GET("/Audio/:itemId/stream.:format", redirectHandler.HandleVideoStream)
-		embyGroup.HEAD("/Audio/:itemId/stream", redirectHandler.HandleVideoStream)
-		embyGroup.HEAD("/Audio/:itemId/stream.:format", redirectHandler.HandleVideoStream)
+		for _, prefix := range []string{"/audio", "/Audio"} {
+			embyGroup.GET(prefix+"/:itemId/stream", redirectHandler.HandleVideoStream)
+			embyGroup.GET(prefix+"/:itemId/stream.:format", redirectHandler.HandleVideoStream)
+			embyGroup.HEAD(prefix+"/:itemId/stream", redirectHandler.HandleVideoStream)
+			embyGroup.HEAD(prefix+"/:itemId/stream.:format", redirectHandler.HandleVideoStream)
+		}
 
 		// 下载
-		embyGroup.GET("/Items/:itemId/Download", redirectHandler.HandleVideoStream)
-		embyGroup.HEAD("/Items/:itemId/Download", redirectHandler.HandleVideoStream)
+		for _, prefix := range []string{"/items", "/Items"} {
+			embyGroup.GET(prefix+"/:itemId/Download", redirectHandler.HandleVideoStream)
+			embyGroup.HEAD(prefix+"/:itemId/Download", redirectHandler.HandleVideoStream)
+		}
 	}
 
 	// ===== Jellyfin 兼容路由（去掉 /emby/ 前缀）=====
-	// Jellyfin 路径差异：/videos/ 而非 /emby/videos/
 	jellyGroup := r.Group("")
 	jellyGroup.Use(middleware.EmbyAuth())
 	{
 		// 视频流
-		jellyGroup.GET("/videos/:itemId/stream", redirectHandler.HandleVideoStream)
-		jellyGroup.GET("/videos/:itemId/stream.:format", redirectHandler.HandleVideoStream)
-		jellyGroup.HEAD("/videos/:itemId/stream", redirectHandler.HandleVideoStream)
-		jellyGroup.HEAD("/videos/:itemId/stream.:format", redirectHandler.HandleVideoStream)
+		for _, prefix := range []string{"/videos", "/Videos"} {
+			jellyGroup.GET(prefix+"/:itemId/stream", redirectHandler.HandleVideoStream)
+			jellyGroup.GET(prefix+"/:itemId/stream.:format", redirectHandler.HandleVideoStream)
+			jellyGroup.HEAD(prefix+"/:itemId/stream", redirectHandler.HandleVideoStream)
+			jellyGroup.HEAD(prefix+"/:itemId/stream.:format", redirectHandler.HandleVideoStream)
 
-		// 原始文件
-		jellyGroup.GET("/videos/:itemId/original", redirectHandler.HandleVideoStream)
-		jellyGroup.GET("/videos/:itemId/original.:format", redirectHandler.HandleVideoStream)
-		jellyGroup.HEAD("/videos/:itemId/original", redirectHandler.HandleVideoStream)
-		jellyGroup.HEAD("/videos/:itemId/original.:format", redirectHandler.HandleVideoStream)
+			// 原始文件
+			jellyGroup.GET(prefix+"/:itemId/original", redirectHandler.HandleVideoStream)
+			jellyGroup.GET(prefix+"/:itemId/original.:format", redirectHandler.HandleVideoStream)
+			jellyGroup.HEAD(prefix+"/:itemId/original", redirectHandler.HandleVideoStream)
+			jellyGroup.HEAD(prefix+"/:itemId/original.:format", redirectHandler.HandleVideoStream)
+		}
 
 		// 音频流
-		jellyGroup.GET("/Audio/:itemId/stream", redirectHandler.HandleVideoStream)
-		jellyGroup.GET("/Audio/:itemId/stream.:format", redirectHandler.HandleVideoStream)
-		jellyGroup.HEAD("/Audio/:itemId/stream", redirectHandler.HandleVideoStream)
-		jellyGroup.HEAD("/Audio/:itemId/stream.:format", redirectHandler.HandleVideoStream)
+		for _, prefix := range []string{"/audio", "/Audio"} {
+			jellyGroup.GET(prefix+"/:itemId/stream", redirectHandler.HandleVideoStream)
+			jellyGroup.GET(prefix+"/:itemId/stream.:format", redirectHandler.HandleVideoStream)
+			jellyGroup.HEAD(prefix+"/:itemId/stream", redirectHandler.HandleVideoStream)
+			jellyGroup.HEAD(prefix+"/:itemId/stream.:format", redirectHandler.HandleVideoStream)
+		}
 
 		// 下载
-		jellyGroup.GET("/Items/:itemId/Download", redirectHandler.HandleVideoStream)
-		jellyGroup.HEAD("/Items/:itemId/Download", redirectHandler.HandleVideoStream)
+		for _, prefix := range []string{"/items", "/Items"} {
+			jellyGroup.GET(prefix+"/:itemId/Download", redirectHandler.HandleVideoStream)
+			jellyGroup.HEAD(prefix+"/:itemId/Download", redirectHandler.HandleVideoStream)
+		}
 	}
 
 	// ===== WebSocket 透传 =====
