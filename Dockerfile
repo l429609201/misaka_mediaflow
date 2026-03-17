@@ -6,7 +6,7 @@
 #   3. Python  → 编译 C 扩展 (build-essential + dev headers)
 #   4. Runtime → 纯运行时 (无编译器, su-exec 降权)
 #
-# 基底: l429609201/su-exec:su-exec (Debian slim + Python 3.11 + su-exec)
+# 基底: l429609201/su-exec:3.12 (Debian slim + Python 3.12 + su-exec)
 # 安全: su-exec 降权至 UID=1000 非 root 用户
 # 体积: ~120MB (无 gcc/dev headers/curl, 依赖深度清理)
 # =============================================================
@@ -46,7 +46,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
 
 
 # ==================== 阶段 3: Python 依赖编译 ====================
-FROM l429609201/su-exec:su-exec AS py-builder
+FROM l429609201/su-exec:3.12 AS py-builder
 
 # 编译时依赖 (不会进入最终镜像)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -75,7 +75,7 @@ RUN pip install --no-cache-dir --no-compile -r requirements.txt --target . \
 
 
 # ==================== 阶段 4: 最终运行时镜像 ====================
-FROM l429609201/su-exec:su-exec
+FROM l429609201/su-exec:3.12
 
 # 环境变量
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -98,7 +98,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Python 依赖 (从编译阶段复制, 无 gcc/dev 残留)
-COPY --from=py-builder /install /usr/local/lib/python3.11/site-packages
+COPY --from=py-builder /install /usr/local/lib/python3.12/site-packages
 
 # 应用代码
 COPY src/ ./src/

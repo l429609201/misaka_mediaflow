@@ -1,12 +1,16 @@
 # app/adapters/storage/p115/p115_adapter.py
 # 115 存储适配器 — 实现 StorageAdapter 接口
+#
+# 直链获取完全参照: p115strmhelper r302/__init__.py get_downurl_cookie
+# 使用 proapi.115.com/android/2.0/ufile/download 加密接口，无文件大小限制
 
-import json as _json
 import logging
 import time
-from urllib.parse import parse_qsl, urlsplit
+from typing import cast
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 import httpx
+from p115rsacipher import encrypt, decrypt
 
 from src.adapters.storage.base import StorageAdapter, DirectLink, FileEntry
 from src.adapters.storage.p115.p115_rate import P115RateLimiter
@@ -16,25 +20,16 @@ from src.adapters.storage.p115.p115_cache import P115IdPathCache
 logger = logging.getLogger(__name__)
 
 # ── 115 接口地址 ─────────────────────────────────────────────────────────────
-# ✅ 主接口: proapi Android 2.0（无文件大小限制，请求/响应均 RSA 加密）
-#    参考: p115strmhelper r302/__init__.py get_downurl_cookie
 _115_PROAPI_DOWNLOAD_URL = "http://proapi.115.com/android/2.0/ufile/download"
-# ⚠️ 备用接口: webapi（有文件大小限制，超大文件报"文件大小超出限制"）
-_115_DOWNLOAD_URL = "https://webapi.115.com/files/download"
 _115_FILES_URL = "https://webapi.115.com/files"
 _115_SEARCH_URL = "https://webapi.115.com/files/search"
 _115_SPACE_URL = "https://webapi.115.com/files/index_info"
 _115_USER_URL = "https://my.115.com/?ct=ajax&ac=nav"
 
-# ── RSA 加解密 — 内嵌实现，无外部依赖，兼容 Python 3.11+ ────────────────────
-# p115rsacipher 包要求 Python>=3.12，故将算法内嵌至 p115_rsa.py
-from src.adapters.storage.p115.p115_rsa import encrypt as _rsa_encrypt, decrypt as _rsa_decrypt
-
 
 class P115StorageAdapter(StorageAdapter):
     """115 网盘存储适配器"""
 
-    # 115 认证通过系统设置页（Cookie 扫码）完成，无需在存储管理页配置
     CONFIG_FIELDS = []
 
     def __init__(
@@ -48,30 +43,58 @@ class P115StorageAdapter(StorageAdapter):
         self._cache = id_path_cache
         self._client: httpx.AsyncClient | None = None
 
+    def _parse_cookies(self) -> dict:
+        """将 cookie 字符串解析为 dict，供 httpx cookies= 参数使用"""
+        cookie_str = self._auth.cookie
+        if not cookie_str:
+            return {}
+        cookies = {}
+        for pair in cookie_str.split(";"):
+            pair = pair.strip()
+            if "=" in pair:
+                k, v = pair.split("=", 1)
+                cookies[k.strip()] = v.strip()
+        return cookies
+
     async def _ensure_client(self) -> httpx.AsyncClient:
+        """
+        获取 HTTP 客户端。
+        严格参照 p115strmhelper: cookies 在初始化时传入 AsyncClient。
+        """
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=30)
+            self._client = httpx.AsyncClient(
+                follow_redirects=True,
+                timeout=httpx.Timeout(10.0, connect=5.0),
+                limits=httpx.Limits(
+                    max_connections=200,
+                    max_keepalive_connections=100,
+                ),
+                cookies=self._parse_cookies(),
+            )
         return self._client
+
+    async def refresh_client(self):
+        """Cookie 更新后需要重建 client（cookie jar 需要刷新）"""
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
 
     async def get_direct_link(self, cloud_path: str, **kwargs) -> DirectLink:
         """
-        获取 115 CDN 直链
+        获取 115 CDN 直链。
 
-        ✅ 主路径：POST proapi.115.com/android/2.0/ufile/download（无大文件限制）
-           请求/响应均经 p115rsacipher RSA 加解密。
-           参考: p115strmhelper r302/__init__.py get_downurl_cookie
-
-        ⚠️ 降级路径：若 p115rsacipher 未安装，回退到
-           GET webapi.115.com/files/download（有大文件限制）
+        完全参照 p115strmhelper r302/__init__.py get_downurl_cookie：
+          POST proapi.115.com/android/2.0/ufile/download
+          请求体: data=encrypt('{"pick_code":"xxx"}')
+          响应体: {"state":true, "data":"<加密字符串>"}  → decrypt 解密得到 URL
 
         kwargs:
-          - pick_code: str  直接传入 pick_code 跳过路径查找
-          - user_agent: str 播放器真实 UA（透传给 115，影响 CDN 鉴权节点选择）
+          - pick_code: str  直接传入 pick_code
+          - user_agent: str 播放器真实 UA（透传给 115 CDN 鉴权）
         """
-        pick_code = kwargs.get("pick_code", "").lower()  # 115 接口要求小写
+        pick_code = kwargs.get("pick_code", "")
         user_agent = kwargs.get("user_agent", "")
         if not pick_code:
-            # 通过路径从 ID/Path 缓存反查 pick_code
             file_id = self._cache.get_id(cloud_path)
             if not file_id:
                 logger.warning("115 路径无法解析 pick_code: %s", cloud_path)
@@ -80,76 +103,43 @@ class P115StorageAdapter(StorageAdapter):
             return DirectLink()
 
         await self._rate.acquire()
-
-        # ── proapi 加密接口（无文件大小限制，内嵌 RSA 实现）─────────────────
-        return await self._get_direct_link_proapi(pick_code, user_agent, _rsa_encrypt, _rsa_decrypt)
-
-    async def _get_direct_link_proapi(
-        self, pick_code: str, user_agent: str, encrypt_fn, decrypt_fn
-    ) -> DirectLink:
-        """
-        使用 proapi Android 2.0 加密接口获取直链（无文件大小限制）。
-        参考: p115strmhelper r302/__init__.py get_downurl_cookie
-
-        Cookie 直接放 headers["Cookie"]，不走 httpx cookie jar
-        （cookie jar 有域名匹配逻辑，proapi.115.com 可能匹配不上）
-        """
-        from urllib.parse import unquote
-        import json as _json_mod
-
         client = await self._ensure_client()
-        cookie_str = self._auth.cookie
-
-        req_headers = {
-            "Cookie": cookie_str,
-            "User-Agent": user_agent or (
-                "Mozilla/5.0 (Linux; Android 11; SM-G998B) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/96.0.4664.45 Mobile Safari/537.36"
-            ),
-        }
 
         try:
-            payload_json = '{"pick_code":"' + pick_code + '"}'
-            encrypted_data = encrypt_fn(payload_json).decode("utf-8")
-
+            # ── 严格参照 p115strmhelper get_downurl_cookie ──────────────────
             resp = await client.post(
                 _115_PROAPI_DOWNLOAD_URL,
-                data={"data": encrypted_data},
-                headers=req_headers,
-            )
-
-            logger.debug(
-                "115 proapi 响应状态: %s body_preview: %s",
-                resp.status_code, resp.text[:200]
+                data={
+                    "data": encrypt(f'{{"pick_code":"{pick_code}"}}').decode("utf-8")
+                },
+                headers={
+                    "User-Agent": user_agent,
+                },
             )
 
             resp_json = resp.json()
 
             if not resp_json.get("state"):
                 err_msg = resp_json.get("msg", resp_json.get("error", str(resp_json)))
-                logger.error("115 proapi 直链获取失败: %s (pick_code=%s)", err_msg, pick_code)
+                logger.error("115 直链获取失败: %s (pick_code=%s)", err_msg, pick_code)
                 return DirectLink()
 
-            # 解密响应 data 字段
-            raw_data = resp_json.get("data", "")
-            if not raw_data:
-                logger.error("115 proapi 响应无 data 字段: pick_code=%s", pick_code)
-                return DirectLink()
+            # 解密响应 data（参照: data = loads(decrypt(json["data"]))）
+            import json as _json
+            data = _json.loads(decrypt(resp_json["data"]))
 
-            data = _json_mod.loads(decrypt_fn(raw_data))
-
+            # 提取 URL（参照: url 可能是 dict 或 str）
             download_url = data.get("url", "")
             if isinstance(download_url, dict):
                 download_url = download_url.get("url", "")
             if not download_url:
-                logger.warning("115 proapi 解密后无 URL: pick_code=%s data=%s", pick_code, data)
+                logger.warning("115 解密后无 URL: pick_code=%s data_keys=%s", pick_code, list(data.keys()))
                 return DirectLink()
 
-            # file_name 从 URL path unquote 解析
+            # file_name 从 URL path 解析（参照 p115strmhelper）
             file_name = unquote(urlsplit(download_url).path.rpartition("/")[-1])
 
-            # 从 URL 的 t 参数解析精确过期时间，提前 5 分钟失效
+            # 过期时间从 URL 的 t 参数解析，提前 5 分钟
             expires_in = 7200
             try:
                 t_val = next(
@@ -162,7 +152,7 @@ class P115StorageAdapter(StorageAdapter):
                 pass
 
             logger.info(
-                "115 proapi 直链获取成功: pick_code=%s expires_in=%ds file_name=%s",
+                "115 直链获取成功: pick_code=%s expires_in=%ds file=%s",
                 pick_code, expires_in, file_name,
             )
             return DirectLink(
@@ -170,59 +160,11 @@ class P115StorageAdapter(StorageAdapter):
                 file_name=file_name,
                 file_size=int(data.get("file_size", 0)),
                 expires_in=expires_in,
-                headers={"User-Agent": req_headers["User-Agent"]},
+                headers={"User-Agent": user_agent},
             )
 
         except Exception as e:
-            logger.error("115 proapi 直链请求异常: %s (pick_code=%s)", e, pick_code)
-            return DirectLink()
-
-    async def _get_direct_link_webapi(self, pick_code: str, user_agent: str) -> DirectLink:
-        """
-        降级：使用 webapi 接口获取直链（有文件大小限制，超大文件会报错）。
-        """
-        client = await self._ensure_client()
-        headers = self._auth.get_cookie_headers()
-        if user_agent:
-            headers["User-Agent"] = user_agent
-
-        try:
-            resp = await client.get(
-                _115_DOWNLOAD_URL,
-                params={"pickcode": pick_code},
-                headers=headers,
-            )
-            data = resp.json()
-
-            if not data.get("state"):
-                err_msg = data.get("msg", data.get("error", "unknown"))
-                if resp.status_code == 403 or "频" in str(err_msg):
-                    self._rate.trigger_waf_cooldown()
-                logger.error("115 webapi 直链获取失败: %s (pick_code=%s)", err_msg, pick_code)
-                return DirectLink()
-
-            url_info = data.get("url", {})
-            if isinstance(url_info, dict):
-                download_url = url_info.get("url", "")
-            elif isinstance(url_info, str):
-                download_url = url_info
-            else:
-                download_url = ""
-
-            if download_url:
-                return DirectLink(
-                    url=download_url,
-                    file_name=data.get("file_name", ""),
-                    file_size=int(data.get("file_size", 0)),
-                    expires_in=7200,
-                    headers={"User-Agent": headers["User-Agent"]},
-                )
-
-            logger.warning("115 webapi 直链响应中无有效 URL: pick_code=%s resp=%s", pick_code, data)
-            return DirectLink()
-
-        except Exception as e:
-            logger.error("115 webapi 直链请求异常: %s", e)
+            logger.error("115 直链请求异常: %s (pick_code=%s)", e, pick_code)
             return DirectLink()
 
     async def list_files(self, cloud_path: str, cid: str = "0") -> list[FileEntry]:
