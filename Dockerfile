@@ -61,17 +61,20 @@ COPY requirements.txt .
 
 # --target: 平铺安装到 /install
 # --no-compile: 不生成 .pyc (运行时 PYTHONDONTWRITEBYTECODE=1)
-# find 清理: 删除测试/文档/类型桩/缓存, 大幅压缩体积
-RUN pip install --no-cache-dir --no-compile -r requirements.txt --target . \
-    && find . -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true \
-    && find . -type f -name '*.pyc' -delete \
-    && find . -type f -name '*.pyo' -delete \
-    && find . -type d -name '*.dist-info' -exec rm -rf {} + 2>/dev/null || true \
-    && find . -type d -name 'tests' -exec rm -rf {} + 2>/dev/null || true \
-    && find . -type d -name 'test' -exec rm -rf {} + 2>/dev/null || true \
-    && find . -type d -name 'docs' -exec rm -rf {} + 2>/dev/null || true \
-    && find . -type d -name 'doc' -exec rm -rf {} + 2>/dev/null || true \
-    && find . -type f -name '*.pyi' -delete
+# 注意: pip install 必须单独一条 RUN，失败时立刻报错停止构建
+RUN pip install --no-cache-dir --no-compile -r requirements.txt --target .
+
+# 清理：删除测试/文档/类型桩/缓存，压缩体积
+RUN find . -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null; \
+    find . -type f -name '*.pyc' -delete 2>/dev/null; \
+    find . -type f -name '*.pyo' -delete 2>/dev/null; \
+    find . -type d -name '*.dist-info' -exec rm -rf {} + 2>/dev/null; \
+    find . -type d -name 'tests' -exec rm -rf {} + 2>/dev/null; \
+    find . -type d -name 'test' -exec rm -rf {} + 2>/dev/null; \
+    find . -type d -name 'docs' -exec rm -rf {} + 2>/dev/null; \
+    find . -type d -name 'doc' -exec rm -rf {} + 2>/dev/null; \
+    find . -type f -name '*.pyi' -delete 2>/dev/null; \
+    true
 
 
 # ==================== 阶段 4: 最终运行时镜像 ====================
