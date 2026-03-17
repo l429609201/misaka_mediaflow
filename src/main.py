@@ -7,6 +7,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.version import APP_NAME, VERSION
@@ -145,9 +146,14 @@ if _web_dist.exists():
     app.mount("/web", StaticFiles(directory=str(_web_dist), html=True), name="web")
 
 
-@app.get("/")
+@app.get("/", include_in_schema=False)
 async def root():
-    return {"app": APP_NAME, "version": VERSION}
+    return RedirectResponse(url="/web/login", status_code=302)
+
+
+@app.get("/web", include_in_schema=False)
+async def web_root():
+    return RedirectResponse(url="/web/login", status_code=302)
 
 
 # ==================== 直接运行入口（对齐弹幕库 python -m src.main） ====================

@@ -49,7 +49,7 @@
     "storage": "Storage",
     "strm": "STRM Manager",
     "drive115": "115 Drive",
-    "p115": "Media & 302 Proxy",
+    "mediaProxy": "Media & 302 Proxy",
     "logs": "Logs",
     "settings": "Settings"
   },

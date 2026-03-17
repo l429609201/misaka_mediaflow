@@ -40,7 +40,7 @@ jobs:
     steps:
       # ==================== 1. 检出代码 ====================
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # ==================== 2. 确定构建平台 ====================
       - name: 设置构建平台
@@ -117,7 +117,7 @@ jobs:
 
       # ==================== 9. 构建并推送 ====================
       - name: 构建并推送镜像
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile

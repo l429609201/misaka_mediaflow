@@ -51,7 +51,7 @@ export const Layout = () => {
     { key: RoutePaths.STORAGE,   icon: <DatabaseOutlined />,      label: t('menu.storage') },
     { key: RoutePaths.STRM,      icon: <FileTextOutlined />,      label: t('menu.strm') },
     { key: RoutePaths.DRIVE115,  icon: <CloudOutlined />,         label: t('menu.drive115') },
-    { key: RoutePaths.P115,      icon: <CloudServerOutlined />,   label: t('menu.p115') },
+    { key: RoutePaths.MEDIA_PROXY, icon: <CloudServerOutlined />, label: t('menu.mediaProxy') },
     { key: RoutePaths.LOGS,      icon: <UnorderedListOutlined />, label: t('menu.logs') },
     { key: RoutePaths.SETTING,   icon: <SettingOutlined />,       label: t('menu.settings') },
   ]

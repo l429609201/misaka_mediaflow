@@ -380,7 +380,7 @@ export const Drive115 = () => {
                 initialValues={{ media_prefix: '', cloud_prefix: '', strm_prefix: '' }}
               >
                 {/* 网盘媒体库根目录 + 选择按钮 */}
-                <Form.Item name="cloud_prefix" label={t('p115.cloudPrefix')} tooltip={t('p115.cloudPrefixHint')} rules={[{ required: true }]}>
+                <Form.Item name="cloud_prefix" label={t('p115.cloudPrefix')} tooltip={t('p115.cloudPrefixHint')}>
                   <Input
                     placeholder="/影视/电影"
                     addonAfter={
@@ -395,11 +395,11 @@ export const Drive115 = () => {
                   />
                 </Form.Item>
                 {/* 媒体库挂载路径 */}
-                <Form.Item name="media_prefix" label={t('p115.mediaPrefix')} tooltip={t('p115.mediaPrefixHint')} rules={[{ required: true }]}>
+                <Form.Item name="media_prefix" label={t('p115.mediaPrefix')} tooltip={t('p115.mediaPrefixHint')}>
                   <Input placeholder="/media/movies" />
                 </Form.Item>
                 {/* 本地 STRM 根目录 */}
-                <Form.Item name="strm_prefix" label={t('p115.strmPrefix')} tooltip={t('p115.strmPrefixHint')} rules={[{ required: true }]}>
+                <Form.Item name="strm_prefix" label={t('p115.strmPrefix')} tooltip={t('p115.strmPrefixHint')}>
                   <Input
                     placeholder="/config/strm/movies"
                     addonAfter={

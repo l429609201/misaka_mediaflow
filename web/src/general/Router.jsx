@@ -12,7 +12,7 @@ import Login from '@/pages/login/index.jsx'
 import Storage from '@/pages/storage/index.jsx'
 import Strm from '@/pages/strm/index.jsx'
 import Drive115 from '@/pages/drive115/index.jsx'
-import P115 from '@/pages/p115/index.jsx'
+import P115 from '@/pages/media-proxy/index.jsx'
 import Logs from '@/pages/logs/index.jsx'
 import Setting from '@/pages/setting/index.jsx'
 
@@ -68,7 +68,7 @@ export const router = createBrowserRouter(
         { path: RoutePaths.STORAGE.slice(1),   element: <Storage /> },
         { path: RoutePaths.STRM.slice(1),      element: <Strm /> },
         { path: RoutePaths.DRIVE115.slice(1),  element: <Drive115 /> },
-        { path: RoutePaths.P115.slice(1),      element: <P115 /> },
+        { path: RoutePaths.MEDIA_PROXY.slice(1), element: <P115 /> },
         { path: RoutePaths.LOGS.slice(1),      element: <Logs /> },
         { path: RoutePaths.SETTING.slice(1),   element: <Setting /> },
       ],
