@@ -65,8 +65,9 @@ func (h *RedirectHandler) HandleVideoStream(c *gin.Context) {
 		return
 	}
 
-	// 2. 缓存未命中 → 调用 Python 解析（带 UserId）
-	result, err := h.pyClient.ResolveLink(itemID, 0, apiKeyStr, userID)
+	// 2. 缓存未命中 → 调用 Python 解析（带 UserId + 播放器真实 UA）
+	userAgent := c.GetHeader("User-Agent")
+	result, err := h.pyClient.ResolveLink(itemID, 0, apiKeyStr, userID, userAgent)
 	if err != nil || result.URL == "" {
 		log.Printf("直链解析失败: %s, err=%v", itemID, err)
 		// 回退透传

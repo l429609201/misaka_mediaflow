@@ -78,6 +78,7 @@ class RedirectService:
         item_id: str = "",        # Emby item_id（兜底）
         storage_id: int = 0,
         api_key: str = "",
+        user_agent: str = "",     # 播放器真实 UA，透传给 115 downurl 接口
     ) -> dict:
         """
         统一解析入口，返回 {url, expires_in, source, error}
@@ -87,14 +88,14 @@ class RedirectService:
         pc = (pickcode or pick_code or "").strip()
         if pc:
             logger.info("[redirect] 优先级1 pickcode=%s", pc)
-            return await self._resolve_by_pickcode(pc, source="pickcode")
+            return await self._resolve_by_pickcode(pc, user_agent=user_agent, source="pickcode")
 
         # ── 2. url 中提取 pickcode ──────────────────────────────────────
         if url:
             extracted_pc = _extract_pickcode_from_text(url)
             if extracted_pc:
                 logger.info("[redirect] 优先级2 url->pickcode=%s", extracted_pc)
-                return await self._resolve_by_pickcode(extracted_pc, source="url_pickcode")
+                return await self._resolve_by_pickcode(extracted_pc, user_agent=user_agent, source="url_pickcode")
 
         # ── 3. args_path（路径拼接方式）─────────────────────────────────
         if args_path:
@@ -145,7 +146,7 @@ class RedirectService:
     #  解析分支
     # ──────────────────────────────────────────────────────────────────────
 
-    async def _resolve_by_pickcode(self, pickcode: str, source: str = "pickcode") -> dict:
+    async def _resolve_by_pickcode(self, pickcode: str, user_agent: str = "", source: str = "pickcode") -> dict:
         """通过 pick_code 直接获取 115 直链"""
         try:
             from src.adapters.storage.p115 import P115Manager
@@ -164,7 +165,7 @@ class RedirectService:
             if not manager.auth.has_cookie:
                 return {"url": "", "expires_in": 0, "source": source, "error": "115 cookie not set"}
 
-            link = await manager.adapter.get_download_url(pickcode)
+            link = await manager.adapter.get_direct_link("", pick_code=pickcode, user_agent=user_agent)
             if link and link.url:
                 logger.info("[redirect] pickcode=%s 直链成功 source=%s", pickcode, source)
                 return {"url": link.url, "expires_in": link.expires_in, "source": source, "error": ""}

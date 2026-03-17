@@ -55,8 +55,9 @@ func (h *P115PlayHandler) HandlePlay(c *gin.Context) {
 		return
 	}
 
-	// 2. 缓存未命中 → 调用 Python 统一解析接口（通过 pickcode）
-	result, err := h.pyClient.ResolveByPickcode(pickCode)
+	// 2. 缓存未命中 → 调用 Python 统一解析接口（通过 pickcode + 播放器真实 UA）
+	userAgent := c.GetHeader("User-Agent")
+	result, err := h.pyClient.ResolveByPickcode(pickCode, userAgent)
 	if err != nil || result.URL == "" {
 		errMsg := ""
 		if err != nil {

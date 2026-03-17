@@ -39,8 +39,8 @@ func NewPythonClient(cfg *config.Config) *PythonClient {
 	}
 }
 
-// ResolveLink 通过 item_id 解析直链（旧接口，兼容保留）
-func (pc *PythonClient) ResolveLink(itemID string, storageID int, apiKey string, userID string) (*ResolveResult, error) {
+// ResolveLink 通过 item_id 解析直链
+func (pc *PythonClient) ResolveLink(itemID string, storageID int, apiKey string, userID string, userAgent string) (*ResolveResult, error) {
 	q := url.Values{}
 	q.Set("item_id", itemID)
 	q.Set("storage_id", fmt.Sprintf("%d", storageID))
@@ -50,14 +50,21 @@ func (pc *PythonClient) ResolveLink(itemID string, storageID int, apiKey string,
 	if userID != "" {
 		q.Set("user_id", userID)
 	}
+	if userAgent != "" {
+		q.Set("user_agent", userAgent)
+	}
 	reqURL := fmt.Sprintf("%s/internal/resolve-link?%s", pc.baseURL, q.Encode())
 	return pc.doGet(reqURL)
 }
 
 // ResolveByPickcode 通过 pickcode 调用统一解析接口
-func (pc *PythonClient) ResolveByPickcode(pickcode string) (*ResolveResult, error) {
-	reqURL := fmt.Sprintf("%s/internal/redirect_url/resolve?pickcode=%s",
-		pc.baseURL, url.QueryEscape(pickcode))
+func (pc *PythonClient) ResolveByPickcode(pickcode string, userAgent string) (*ResolveResult, error) {
+	q := url.Values{}
+	q.Set("pickcode", pickcode)
+	if userAgent != "" {
+		q.Set("user_agent", userAgent)
+	}
+	reqURL := fmt.Sprintf("%s/internal/redirect_url/resolve?%s", pc.baseURL, q.Encode())
 	return pc.doGet(reqURL)
 }
 

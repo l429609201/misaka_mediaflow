@@ -47,28 +47,32 @@ class P115StorageAdapter(StorageAdapter):
         获取 115 CDN 直链
         kwargs 支持:
           - pick_code: str  直接传入 pick_code 跳过路径查找
-          - sha1: str       文件 SHA1
+          - user_agent: str 播放器真实 UA（透传给 115，影响 CDN 鉴权）
         """
-        pick_code = kwargs.get("pick_code", "")
+        pick_code = kwargs.get("pick_code", "").lower()  # 115 接口要求小写
+        user_agent = kwargs.get("user_agent", "")
         if not pick_code:
             # 通过路径从 ID/Path 缓存反查 pick_code
-            # 生产环境中应查询 p115fscache 数据表
             file_id = self._cache.get_id(cloud_path)
             if not file_id:
                 logger.warning("115 路径无法解析 pick_code: %s", cloud_path)
                 return DirectLink()
-            # file_id 场景下 pick_code 需从数据库取，此处做保护
             logger.warning("115 通过路径反查 pick_code 需数据库支持: %s", cloud_path)
             return DirectLink()
 
         await self._rate.acquire()
         client = await self._ensure_client()
 
+        # 请求头：Cookie + UA（优先用播放器真实 UA，fallback 到默认浏览器 UA）
+        headers = self._auth.get_cookie_headers()
+        if user_agent:
+            headers["User-Agent"] = user_agent
+
         try:
             resp = await client.post(
                 _115_DOWNLOAD_URL,
                 data={"pickcode": pick_code},
-                headers=self._auth.get_cookie_headers(),
+                headers=headers,
             )
             data = resp.json()
 

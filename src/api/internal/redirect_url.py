@@ -23,6 +23,7 @@ async def resolve_redirect_url(
     item_id: str = "",
     storage_id: int = 0,
     api_key: str = "",
+    user_agent: str = "",
 ):
     """
     内部统一解析接口（Go 反代调用，返回 JSON）
@@ -52,5 +53,6 @@ async def resolve_redirect_url(
         item_id=item_id,
         storage_id=storage_id,
         api_key=api_key,
+        user_agent=user_agent,
     )
 

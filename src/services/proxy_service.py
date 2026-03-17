@@ -43,7 +43,7 @@ class ProxyService:
     """302 反代业务逻辑"""
 
     async def resolve_direct_link(
-        self, item_id: str, storage_id: int = 0, api_key: str = "", user_id: str = ""
+        self, item_id: str, storage_id: int = 0, api_key: str = "", user_id: str = "", user_agent: str = ""
     ) -> dict:
         """
         解析媒体条目直链
@@ -64,30 +64,26 @@ class ProxyService:
             if media:
                 # 2. 如果有 pick_code → 直走 115
                 if media.pick_code:
-                    return await self._resolve_via_115(media.pick_code)
+                    return await self._resolve_via_115(media.pick_code, user_agent)
 
                 # 3. 通过路径映射解析
                 file_path = media.file_path
                 if not file_path:
                     return {"url": "", "expires_in": 0, "error": "no file path"}
-                return await self._resolve_via_path_mapping(db, file_path, storage_id)
+                return await self._resolve_via_path_mapping(db, file_path, storage_id, user_agent)
 
             # ⭐ 4. MediaItem 不存在 → Fallback: 通过 Emby API 获取文件信息
             logger.info("MediaItem 不存在, 尝试 Emby API fallback: item_id=%s", item_id)
-            return await self._fallback_via_emby(db, item_id, api_key, user_id, storage_id)
+            return await self._fallback_via_emby(db, item_id, api_key, user_id, storage_id, user_agent)
 
     # ------------------------------------------------------------------
     #  核心解析方法
     # ------------------------------------------------------------------
 
-    async def _resolve_via_115(self, pick_code: str) -> dict:
+    async def _resolve_via_115(self, pick_code: str, user_agent: str = "") -> dict:
         """
         通过 115 pick_code 直接获取直链。
-
-        与 redirect_service._resolve_by_pickcode 保持一致：
-          1. 确保 P115Manager 已初始化
-          2. 从数据库加载 Cookie（解决重启后 Cookie 丢失问题）
-          3. 调 downurl API 获取 CDN 直链
+        user_agent: 播放器真实 UA，透传给 115 downurl 接口
         """
         try:
             from src.adapters.storage.p115 import P115Manager
@@ -95,21 +91,15 @@ class ProxyService:
             if not manager.enabled:
                 return {"url": "", "expires_in": 0, "error": "115 not enabled"}
 
-            # ── 确保已初始化 ──────────────────────────────────────────────
             if not manager.ready:
                 manager.initialize()
-
-            # ── 从数据库加载 Cookie（Cookie 未设置时从 DB 读取）──────────
             if not manager.auth.has_cookie:
                 await self._load_115_cookie(manager)
-
             if not manager.auth.has_cookie:
                 logger.error("115 Cookie 未配置，无法获取直链: pick_code=%s", pick_code)
                 return {"url": "", "expires_in": 0, "error": "115 cookie not set"}
 
-            # ⭐ 注意：adapter 上是 get_direct_link，不是 get_download_url
-            # get_direct_link(cloud_path="", pick_code=xxx) → 直接用 pick_code 调 downurl API
-            link = await manager.adapter.get_direct_link("", pick_code=pick_code)
+            link = await manager.adapter.get_direct_link("", pick_code=pick_code, user_agent=user_agent)
             if link and link.url:
                 return {"url": link.url, "expires_in": link.expires_in}
             return {"url": "", "expires_in": 0, "error": "115 link failed"}
@@ -127,8 +117,15 @@ class ProxyService:
                 )
                 cfg = result.scalars().first()
                 if cfg and cfg.value:
-                    manager.auth.set_cookie(cfg.value)
-                    logger.info("proxy_service: 从数据库加载 115 Cookie 成功 (len=%d)", len(cfg.value))
+                    # 去除可能的外层引号和首尾空白（数据库存储时可能带引号）
+                    cookie_val = cfg.value.strip().strip('"').strip("'")
+                    manager.auth.set_cookie(cookie_val)
+                    logger.info(
+                        "proxy_service: 从数据库加载 115 Cookie 成功 (len=%d, preview=%s...)",
+                        len(cookie_val), cookie_val[:20],
+                    )
+                else:
+                    logger.warning("proxy_service: 数据库中无 p115_cookie 配置")
         except Exception as e:
             logger.warning("proxy_service: 从数据库加载 115 Cookie 失败: %s", e)
 
@@ -172,18 +169,9 @@ class ProxyService:
             return await _query(session)
 
     async def _resolve_via_path_mapping(
-        self, db: AsyncSession, file_path: str, storage_id: int
+        self, db: AsyncSession, file_path: str, storage_id: int, user_agent: str = ""
     ) -> dict:
-        """
-        通过路径映射 + 存储适配器获取直链。
-
-        路径映射的作用：把挂载路径（如 /cd2/115open/影音/xxx.mp4）
-        转换为网盘云端路径（如 /影音/xxx.mp4），再用云端路径查直链。
-
-        降级策略（路径映射未配置时）：
-          若 115 已启用，则把原始挂载路径直接作为云端路径，
-          调 115 搜索 API 按文件名查 pick_code（参考 _ref_server.txt 思路）。
-        """
+        """通过路径映射 + 存储适配器获取直链，user_agent 透传给 115"""
         # ── 查找所有有效的路径映射规则 ──
         query = select(PathMapping).where(PathMapping.is_active == 1)
         if storage_id > 0:
@@ -210,7 +198,7 @@ class ProxyService:
         if not cloud_path:
             logger.warning("无匹配路径映射: %s，尝试直接用文件名查 115", file_path)
             # 把挂载路径当云端路径，让 _resolve_115_by_cloud_path 用文件名搜索
-            return await self._resolve_115_by_cloud_path(file_path, db)
+            return await self._resolve_115_by_cloud_path(file_path, db, user_agent)
 
         # ── 查找匹配的存储源配置 ──────────────────────────────────────────
         result = await db.execute(
@@ -219,11 +207,11 @@ class ProxyService:
         storage = result.scalars().first()
         if not storage or storage.is_active != 1:
             logger.warning("存储源未找到或已禁用: storage_id=%s，降级到 115 搜索", matched_storage_id)
-            return await self._resolve_115_by_cloud_path(cloud_path, db)
+            return await self._resolve_115_by_cloud_path(cloud_path, db, user_agent)
 
         # ── 115 存储 → FsCache + 115 API 搜索 ──────────────────────────
         if storage.type == "p115":
-            return await self._resolve_115_by_cloud_path(cloud_path, db)
+            return await self._resolve_115_by_cloud_path(cloud_path, db, user_agent)
 
         # ── 其他存储类型 → 通用适配器 ────────────────────────────────────
         try:
@@ -239,17 +227,10 @@ class ProxyService:
             return {"url": "", "expires_in": 0, "error": str(e)}
 
     async def _resolve_115_by_cloud_path(
-        self, cloud_path: str, db: AsyncSession | None = None
+        self, cloud_path: str, db: AsyncSession | None = None, user_agent: str = ""
     ) -> dict:
         """
-        通过云端路径查找 115 pick_code 并获取直链。三步降级：
-
-          步骤 1: P115FsCache 数据库精确匹配 / 文件名匹配
-          步骤 2: 调用 115 搜索 API（files/search）按文件名实时搜索
-                  ← 这是关键兜底：FsCache 没数据时仍能解析
-          步骤 3: （内存 ID/Path 缓存，当前只能确认存在，无法取 pick_code）
-
-        参考：_ref_server.txt handle115PanDirectLink 的 pathCache 思路
+        通过挂载路径 → 网盘路径 → pick_code → 115直链，完整三步解析。
         """
         try:
             from src.adapters.storage.p115 import P115Manager
@@ -257,7 +238,6 @@ class ProxyService:
             if not manager.enabled:
                 return {"url": "", "expires_in": 0, "error": "115 not enabled"}
 
-            # ── 确保已初始化 + Cookie 已加载 ─────────────────────────────
             if not manager.ready:
                 manager.initialize()
             if not manager.auth.has_cookie:
@@ -265,38 +245,50 @@ class ProxyService:
             if not manager.auth.has_cookie:
                 return {"url": "", "expires_in": 0, "error": "115 cookie not set"}
 
-            # ── 步骤 1: P115FsCache 数据库查找 ────────────────────────────
-            pick_code = await self._lookup_pickcode_from_fscache(cloud_path, db)
+            # 步骤1: 去除挂载前缀 → 得到网盘路径
+            pan_path = await self._strip_mount_prefix(cloud_path, db)
+
+            # 步骤2: 查 pick_code（FsCache → 115搜索API）
+            pick_code = ""
+            step2_via = ""
+            pick_code = await self._lookup_pickcode_from_fscache(pan_path, db)
             if pick_code:
-                logger.info("P115FsCache 命中: cloud_path=%s → pick_code=%s", cloud_path, pick_code)
-                return await self._resolve_via_115(pick_code)
+                step2_via = "FsCache命中"
+            else:
+                file_name = PurePosixPath(pan_path).name
+                if not file_name:
+                    logger.warning(
+                        "\n"
+                        "  步骤1  挂载路径 → 网盘路径: %s → %s\n"
+                        "  步骤2  查 pick_code: 无法提取文件名\n"
+                        "  步骤3  获取直链: 跳过",
+                        cloud_path, pan_path,
+                    )
+                    return {"url": "", "expires_in": 0, "error": "no filename"}
+                pick_code = await self._search_115_by_filename(manager, file_name, pan_path)
+                step2_via = "115搜索API命中" if pick_code else "未命中"
 
-            # ── 步骤 2: 调用 115 搜索 API 实时查文件 ─────────────────────
-            # 先从路径映射表剥离挂载前缀，得到网盘相对路径后再搜索
-            # 例：/cd2/115open/影音/R18/SNOS-144/xxx.mp4
-            #   → 去掉 /cd2/115open → /影音/R18/SNOS-144/xxx.mp4（网盘路径）
-            file_name = PurePosixPath(cloud_path).name
-            if file_name:
-                # 尝试从路径映射表剥离挂载前缀，得到真实网盘路径
-                pan_path = await self._strip_mount_prefix(cloud_path, db)
-                logger.info(
-                    "P115FsCache 未命中，调用 115 搜索 API: file_name=%s pan_path=%s",
-                    file_name, pan_path,
+            if not pick_code:
+                logger.warning(
+                    "\n"
+                    "  步骤1  挂载路径 → 网盘路径: %s → %s\n"
+                    "  步骤2  查 pick_code: %s  file_name=%s\n"
+                    "  步骤3  获取直链: 跳过（pick_code 未找到）",
+                    cloud_path, pan_path, step2_via,
+                    PurePosixPath(pan_path).name,
                 )
-                pick_code = await self._search_115_by_filename(
-                    manager, file_name, pan_path
-                )
-                if pick_code:
-                    logger.info("115 搜索 API 命中: %s → pick_code=%s", pan_path, pick_code)
-                    return await self._resolve_via_115(pick_code)
+                return {"url": "", "expires_in": 0, "error": "115 path resolve failed"}
 
-            # ── 步骤 3: 内存 ID/Path 缓存（仅确认存在，当前无法取 pick_code）
-            file_id = manager.id_path_cache.get_id(cloud_path)
-            if file_id:
-                logger.debug("内存缓存命中 file_id=%s，但无 pick_code", file_id)
+            # 步骤3: 用 pick_code 获取直链（结果由 _resolve_via_115 日志输出）
+            logger.info(
+                "\n"
+                "  步骤1  挂载路径 → 网盘路径: %s → %s\n"
+                "  步骤2  查 pick_code: %s  pick_code=%s\n"
+                "  步骤3  获取直链...",
+                cloud_path, pan_path, step2_via, pick_code,
+            )
+            return await self._resolve_via_115(pick_code, user_agent)
 
-            logger.warning("115 云端路径三步均未找到 pick_code: %s", cloud_path)
-            return {"url": "", "expires_in": 0, "error": "115 path resolve failed"}
         except Exception as e:
             logger.error("115 路径解析异常: %s", e)
             return {"url": "", "expires_in": 0, "error": str(e)}
@@ -414,7 +406,7 @@ class ProxyService:
     # ------------------------------------------------------------------
 
     async def _fallback_via_emby(
-        self, db: AsyncSession, item_id: str, api_key: str, user_id: str, storage_id: int
+        self, db: AsyncSession, item_id: str, api_key: str, user_id: str, storage_id: int, user_agent: str = ""
     ) -> dict:
         """
         当 MediaItem 表中没有记录时，三段式降级链获取文件路径：
@@ -471,7 +463,7 @@ class ProxyService:
             pick_code = self._extract_pick_code(file_path)
             if pick_code:
                 logger.info("从PlaybackInfo URL提取到pick_code=%s item_id=%s", pick_code, item_id)
-                result = await self._resolve_via_115(pick_code)
+                result = await self._resolve_via_115(pick_code, user_agent)
                 if result.get("url"):
                     # 缓存命中结果，下次走快路径
                     await self._cache_media_mapping(
@@ -484,15 +476,15 @@ class ProxyService:
 
         # 情况B: 本地 .strm 文件路径 → 读文件内容 → 提取 pick_code
         if file_path.lower().endswith(".strm"):
-            result = await self._resolve_strm_fallback(db, item_id, item_info or {}, file_path)
+            result = await self._resolve_strm_fallback(db, item_id, item_info or {}, file_path, user_agent)
             if result and result.get("url"):
                 return result
 
         # 情况C: 普通本地挂载路径 → PathMapping → FsCache
-        return await self._resolve_via_path_mapping(db, file_path, storage_id)
+        return await self._resolve_via_path_mapping(db, file_path, storage_id, user_agent)
 
     async def _resolve_strm_fallback(
-        self, db: AsyncSession, item_id: str, item_info: dict, strm_path: str
+        self, db: AsyncSession, item_id: str, item_info: dict, strm_path: str, user_agent: str = ""
     ) -> dict | None:
         """
         STRM 文件 fallback:
@@ -516,7 +508,7 @@ class ProxyService:
         logger.info("从 STRM 提取到 pick_code: item_id=%s, pick_code=%s", item_id, pick_code)
 
         # 获取 115 直链
-        result = await self._resolve_via_115(pick_code)
+        result = await self._resolve_via_115(pick_code, user_agent)
 
         # 如果成功，缓存映射到 MediaItem 表
         if result.get("url"):
