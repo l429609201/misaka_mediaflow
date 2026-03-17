@@ -103,10 +103,11 @@ func NewProxyHandler(cfg *config.Config, pyClient *service.PythonClient) *ProxyH
 		originalDirector(req)
 		req.Host = target.Host
 
-		// ⭐ 对 htmlvideoplayer/plugin.js 请求，去掉 Accept-Encoding
+		// ⭐ 对 htmlvideoplayer JS 请求，去掉 Accept-Encoding
 		// 让 Go Transport 自动用 gzip 并自动解压，确保 ModifyResponse 收到纯文本
 		// 否则浏览器发 Accept-Encoding: br,gzip → Emby 返回 Brotli → 我们无法解压替换
-		if strings.Contains(req.URL.Path, "htmlvideoplayer/plugin.js") {
+		// 需要同时处理 plugin.js（旧版 Emby）和 basehtmlplayer.js（新版 Emby）
+		if isHtmlPlayerJS(req.URL.Path) {
 			req.Header.Del("Accept-Encoding")
 		}
 	}
@@ -128,40 +129,58 @@ func NewProxyHandler(cfg *config.Config, pyClient *service.PythonClient) *ProxyH
 		targetURL:    target,
 		pyClient:     pyClient,
 	}
-	rp.ModifyResponse = h.patchPluginJS
+	rp.ModifyResponse = h.patchHtmlPlayerJS
 
 	return h
 }
 
-// patchPluginJS 拦截 Emby htmlvideoplayer/plugin.js 响应，
-// 1) 把 .crossOrigin 替换掉（解决 115 CDN CORS 问题）
-// 2) 追加 seek 防抖脚本（防止拖拽产生大量 Range 请求导致 403）
-// MIN_INTERVAL_MS 通过内部 API 从 Python 端 api_interval 配置读取。
-func (h *ProxyHandler) patchPluginJS(resp *http.Response) error {
-	// 只处理 htmlvideoplayer/plugin.js
+// isHtmlPlayerJS 判断是否为 Emby htmlvideoplayer 的 JS 文件
+// 需要 patch 的文件：
+//   - plugin.js（旧版 Emby，路径含 htmlvideoplayer/plugin.js）
+//   - basehtmlplayer.js（新版 Emby，路径含 htmlvideoplayer/basehtmlplayer.js）
+func isHtmlPlayerJS(path string) bool {
+	return strings.Contains(path, "htmlvideoplayer/plugin.js") ||
+		strings.Contains(path, "htmlvideoplayer/basehtmlplayer.js")
+}
+
+// patchHtmlPlayerJS 统一拦截 Emby htmlvideoplayer 的 JS 响应，
+// 去除 crossOrigin 设置 + 注入 seek 防抖脚本。
+//
+// 解决两类 CORS 问题（115 CDN 不返回 Access-Control-Allow-Origin）：
+//   - 旧版 Emby plugin.js: &&(elem.crossOrigin=xxx) 直接赋值
+//   - 新版 Emby basehtmlplayer.js: getCrossOriginValue() 返回 "anonymous"
+//
+// 参考:
+//   - https://github.com/bpking1/embyExternalUrl/issues/236
+//   - https://github.com/chen3861229/embyExternalUrl/issues/64
+func (h *ProxyHandler) patchHtmlPlayerJS(resp *http.Response) error {
 	path := resp.Request.URL.Path
-	if !strings.Contains(path, "htmlvideoplayer/plugin.js") {
+	if !isHtmlPlayerJS(path) {
 		return nil
 	}
 
-	// 只处理成功响应
 	if resp.StatusCode != http.StatusOK {
 		return nil
 	}
 
-	encoding := resp.Header.Get("Content-Encoding")
-	log.Printf("plugin.js 响应: status=%d, Content-Encoding=%q, Content-Length=%d",
-		resp.StatusCode, encoding, resp.ContentLength)
+	// 判断是哪个文件
+	isBasePlayer := strings.Contains(path, "basehtmlplayer.js")
+	fileName := "plugin.js"
+	if isBasePlayer {
+		fileName = "basehtmlplayer.js"
+	}
 
-	// 读取响应体
-	// Director 已去掉 Accept-Encoding，Transport 会自动解压 gzip
-	// 但以防万一也处理手动 gzip 的情况
+	encoding := resp.Header.Get("Content-Encoding")
+	log.Printf("%s 响应: status=%d, Content-Encoding=%q, Content-Length=%d",
+		fileName, resp.StatusCode, encoding, resp.ContentLength)
+
+	// 读取响应体（处理 gzip）
 	isGzip := strings.Contains(encoding, "gzip")
 	var bodyReader io.Reader = resp.Body
 	if isGzip {
 		gr, err := gzip.NewReader(resp.Body)
 		if err != nil {
-			log.Printf("plugin.js gzip 解压失败: %v", err)
+			log.Printf("%s gzip 解压失败: %v", fileName, err)
 			return nil
 		}
 		defer gr.Close()
@@ -171,45 +190,55 @@ func (h *ProxyHandler) patchPluginJS(resp *http.Response) error {
 	body, err := io.ReadAll(bodyReader)
 	resp.Body.Close()
 	if err != nil {
-		log.Printf("plugin.js 读取失败: %v", err)
+		log.Printf("%s 读取失败: %v", fileName, err)
 		return nil
 	}
 
-	log.Printf("plugin.js 原始内容: %d bytes, 包含 .crossOrigin=%v",
-		len(body), strings.Contains(string(body), ".crossOrigin"))
-
-	// ⭐ 核心：把所有 .crossOrigin 替换成 .crossOriginDisabled
-	// 同时覆盖旧版 &&(elem.crossOrigin=xxx) 和新版 getCrossOriginValue() 模式
 	original := string(body)
-	patchCount := strings.Count(original, ".crossOrigin")
-	patched := strings.ReplaceAll(original, ".crossOrigin", ".crossOriginDisabled")
+	patched := original
+
+	// ==================== crossOrigin patch ====================
+	if isBasePlayer {
+		// 新版 Emby basehtmlplayer.js:
+		// getCrossOriginValue=function(mediaSource,playMethod){return mediaSource.IsRemote&&"DirectPlay"===playMethod?null:"anonymous"}
+		// → 让 getCrossOriginValue 始终返回 null（不设置 crossorigin 属性）
+		patched = strings.ReplaceAll(patched, `"anonymous"`, `null`)
+		patched = strings.ReplaceAll(patched, `'anonymous'`, `null`)
+		log.Printf("%s 原始内容: %d bytes, 包含 getCrossOriginValue=%v",
+			fileName, len(body), strings.Contains(original, "getCrossOriginValue"))
+	}
+	// 通用：把所有 .crossOrigin 属性名替换掉（两个文件都可能有）
+	patchCount := strings.Count(patched, ".crossOrigin")
+	patched = strings.ReplaceAll(patched, ".crossOrigin", ".crossOriginDisabled")
 
 	if original != patched {
-		log.Printf("✅ plugin.js 已 patch: 替换 %d 处 .crossOrigin → .crossOriginDisabled", patchCount)
+		log.Printf("✅ %s 已 patch: 替换 %d 处 .crossOrigin → .crossOriginDisabled", fileName, patchCount)
 	} else {
-		snippet := string(body)
+		snippet := original
 		if len(snippet) > 200 {
 			snippet = snippet[:200]
 		}
-		log.Printf("⚠️ plugin.js 未找到 crossOrigin (大小=%d bytes, 前200字节=%q)", len(body), snippet)
+		log.Printf("⚠️ %s 未找到 crossOrigin (大小=%d bytes, 前200字节=%q)", fileName, len(body), snippet)
 	}
 
-	// ⭐ 追加 seek 防抖脚本，防止拖拽进度条产生大量 Range 请求导致 115 CDN 403
-	// 从 Python 内部 API 读取 api_interval 配置
-	intervalSec := h.pyClient.GetAPIInterval()
-	intervalMs := int(intervalSec * 1000)
-	seekJS := fmt.Sprintf(seekThrottleTpl, intervalMs)
-	patched += seekJS
-	log.Printf("✅ plugin.js 已注入 seek 防抖脚本 (minInterval=%dms, 来自 api_interval=%.1fs)", intervalMs, intervalSec)
+	// ==================== seek 防抖脚本（只在 plugin.js 中注入） ====================
+	// basehtmlplayer.js 不需要注入，只需要一份
+	if !isBasePlayer {
+		intervalSec := h.pyClient.GetAPIInterval()
+		intervalMs := int(intervalSec * 1000)
+		seekJS := fmt.Sprintf(seekThrottleTpl, intervalMs)
+		patched += seekJS
+		log.Printf("✅ %s 已注入 seek 防抖脚本 (minInterval=%dms, 来自 api_interval=%.1fs)", fileName, intervalMs, intervalSec)
+	}
 
-	// 写回响应体（不压缩，浏览器可以接受纯文本）
+	// ==================== 写回响应 ====================
 	newBody := []byte(patched)
 	resp.Body = io.NopCloser(bytes.NewReader(newBody))
 	resp.ContentLength = int64(len(newBody))
 	resp.Header.Set("Content-Length", strconv.Itoa(len(newBody)))
-	resp.Header.Del("Content-Encoding") // 确保无压缩头
+	resp.Header.Del("Content-Encoding")
 
-	// 禁止浏览器缓存
+	// 禁止浏览器缓存（确保每次都拿到 patch 后的版本）
 	resp.Header.Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	resp.Header.Set("Pragma", "no-cache")
 	resp.Header.Set("Expires", "0")
