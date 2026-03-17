@@ -43,41 +43,17 @@ class P115StorageAdapter(StorageAdapter):
         self._cache = id_path_cache
         self._client: httpx.AsyncClient | None = None
 
-    def _parse_cookies(self) -> dict:
-        """将 cookie 字符串解析为 dict，供 httpx cookies= 参数使用"""
-        cookie_str = self._auth.cookie
-        if not cookie_str:
-            return {}
-        cookies = {}
-        for pair in cookie_str.split(";"):
-            pair = pair.strip()
-            if "=" in pair:
-                k, v = pair.split("=", 1)
-                cookies[k.strip()] = v.strip()
-        return cookies
-
     async def _ensure_client(self) -> httpx.AsyncClient:
-        """
-        获取 HTTP 客户端。
-        严格参照 p115strmhelper: cookies 在初始化时传入 AsyncClient。
-        """
+        """获取 HTTP 客户端（不带 cookie，cookie 通过 headers 每次请求时传）"""
         if self._client is None:
             self._client = httpx.AsyncClient(
-                follow_redirects=True,
                 timeout=httpx.Timeout(10.0, connect=5.0),
                 limits=httpx.Limits(
                     max_connections=200,
                     max_keepalive_connections=100,
                 ),
-                cookies=self._parse_cookies(),
             )
         return self._client
-
-    async def refresh_client(self):
-        """Cookie 更新后需要重建 client（cookie jar 需要刷新）"""
-        if self._client is not None:
-            await self._client.aclose()
-            self._client = None
 
     async def get_direct_link(self, cloud_path: str, **kwargs) -> DirectLink:
         """
@@ -106,13 +82,15 @@ class P115StorageAdapter(StorageAdapter):
         client = await self._ensure_client()
 
         try:
-            # ── 严格参照 p115strmhelper get_downurl_cookie ──────────────────
+            # ── 参照 p115strmhelper get_downurl_cookie ──────────────────
+            # Cookie 通过 headers 每次请求时传，避免 client 初始化时 cookie 还没加载的时序问题
             resp = await client.post(
                 _115_PROAPI_DOWNLOAD_URL,
                 data={
                     "data": encrypt(f'{{"pick_code":"{pick_code}"}}').decode("utf-8")
                 },
                 headers={
+                    "Cookie": self._auth.cookie,
                     "User-Agent": user_agent,
                 },
             )
