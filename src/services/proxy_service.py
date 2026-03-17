@@ -142,6 +142,52 @@ class ProxyService:
         except Exception as e:
             logger.warning("proxy_service: 从数据库加载 115 Cookie 失败: %s", e)
 
+
+    @staticmethod
+    async def _try_p115_path_config(
+        db: AsyncSession, file_path: str
+    ) -> tuple[str, int]:
+        """
+        尝试用 115 页面配置的 media_prefix / local_media_prefix → cloud_prefix 做路径匹配。
+
+        当 PathMapping 表为空或未命中时，回退到 115 配置页面的路径设置。
+        返回 (cloud_path, 0) 或 ("", 0)。
+        """
+        try:
+            import json as _json
+            result = await db.execute(
+                select(SystemConfig).where(SystemConfig.key == "p115_path_mapping")
+            )
+            cfg = result.scalars().first()
+            if not cfg or not cfg.value:
+                return ("", 0)
+            data = _json.loads(cfg.value)
+
+            # 优先用 local_media_prefix（本地媒体路径），其次用 media_prefix（挂载路径）
+            prefixes_to_try = []
+            local_media = data.get("local_media_prefix", "").strip().rstrip("/")
+            media = data.get("media_prefix", "").strip().rstrip("/")
+            if local_media:
+                prefixes_to_try.append(local_media)
+            if media and media != local_media:
+                prefixes_to_try.append(media)
+
+            cloud = data.get("cloud_prefix", "").strip().rstrip("/") or "/"
+
+            for prefix in prefixes_to_try:
+                if prefix and file_path.startswith(prefix):
+                    cloud_path = file_path.replace(prefix, cloud, 1)
+                    cloud_path = "/" + cloud_path.lstrip("/")
+                    logger.info(
+                        "115路径配置命中: %s → %s (prefix=%s)",
+                        file_path, cloud_path, prefix,
+                    )
+                    return (cloud_path, 0)
+        except Exception as e:
+            logger.debug("_try_p115_path_config 异常: %s", e)
+
+        return ("", 0)
+
     @staticmethod
     async def _strip_mount_prefix(
         local_path: str, db: AsyncSession | None = None
@@ -207,10 +253,15 @@ class ProxyService:
                 )
                 break
 
-        # ── 路径映射未命中：兜底直接用原始路径 ──────────────────────────
+        # ── 路径映射未命中：尝试 115 页面配置的 media_prefix → cloud_prefix ──
+        if not cloud_path:
+            cloud_path, matched_storage_id = await self._try_p115_path_config(
+                db, file_path
+            )
+
+        # ── 仍然未命中：兜底用文件名搜索 ──────────────────────────
         if not cloud_path:
             logger.warning("无匹配路径映射: %s，尝试直接用文件名查 115", file_path)
-            # 路径映射已查过且未命中，传 _path_mapping_checked=True 跳过重复查询
             return await self._resolve_115_by_cloud_path(
                 file_path, db, user_agent, _path_mapping_checked=True
             )
