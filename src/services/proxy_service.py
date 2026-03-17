@@ -148,7 +148,8 @@ class ProxyService:
         db: AsyncSession, file_path: str
     ) -> tuple[str, int]:
         """
-        尝试用 115 页面配置的 media_prefix / local_media_prefix → cloud_prefix 做路径匹配。
+        尝试用 115 页面配置的 local_media_prefix / media_prefix 剥离本地挂载前缀，
+        得到 115 云端路径。
 
         当 PathMapping 表为空或未命中时，回退到 115 配置页面的路径设置。
         返回 (cloud_path, 0) 或 ("", 0)。
@@ -172,14 +173,15 @@ class ProxyService:
             if media and media != local_media:
                 prefixes_to_try.append(media)
 
-            cloud = data.get("cloud_prefix", "").strip().rstrip("/") or "/"
-
             for prefix in prefixes_to_try:
                 if prefix and file_path.startswith(prefix):
-                    cloud_path = file_path.replace(prefix, cloud, 1)
-                    cloud_path = "/" + cloud_path.lstrip("/")
+                    # 剥离本地挂载前缀，剩余部分即为 115 云端路径
+                    # 例: /cd2/115open/影音/R18/xxx.mp4 → /影音/R18/xxx.mp4
+                    cloud_path = file_path[len(prefix):]
+                    if not cloud_path.startswith("/"):
+                        cloud_path = "/" + cloud_path
                     logger.info(
-                        "115路径配置命中: %s → %s (prefix=%s)",
+                        "115路径配置命中: %s → %s (剥离前缀=%s)",
                         file_path, cloud_path, prefix,
                     )
                     return (cloud_path, 0)
