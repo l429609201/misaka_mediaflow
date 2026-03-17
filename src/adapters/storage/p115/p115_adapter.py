@@ -66,8 +66,6 @@ class P115StorageAdapter(StorageAdapter):
     def _get_p115_client(self):
         """
         获取 P115Client 实例（同步方法）。
-
-        参照 ETK (emby-toolkit) handler/p115_service.py:
           - P115CookieClient 使用 P115Client(cookie_str) 创建客户端
           - download_url(pick_code, user_agent) 直接获取直链
           - p115client 库内部封装了 RSA 加解密、API 端点等所有复杂逻辑

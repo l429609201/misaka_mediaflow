@@ -10,6 +10,7 @@
 #   - emby-toolkit:       万能 STRM pick_code 提取器 + media_db 查找
 #   - p115strmhelper:     get_pickcode_by_path (数据库 + 115 API)
 
+import asyncio
 import json
 import logging
 import re
@@ -80,24 +81,34 @@ class ProxyService:
     #  核心解析方法
     # ------------------------------------------------------------------
 
-    async def _resolve_via_115(self, pick_code: str, user_agent: str = "") -> dict:
+    async def _ensure_115_manager(self):
+        """
+        获取已初始化且 Cookie 就绪的 P115Manager 单例。
+
+        优化: 所有 115 相关方法统一走这里，避免重复初始化和 DB 查询。
+        """
+        from src.adapters.storage.p115 import P115Manager
+        manager = P115Manager()
+        if not manager.enabled:
+            return None
+
+        if not manager.ready:
+            manager.initialize()
+        if not manager.auth.has_cookie:
+            await self._load_115_cookie(manager)
+        return manager if manager.auth.has_cookie else None
+
+    async def _resolve_via_115(self, pick_code: str, user_agent: str = "", *, _manager=None) -> dict:
         """
         通过 115 pick_code 直接获取直链。
         user_agent: 播放器真实 UA，透传给 115 downurl 接口
+        _manager: 可选，已初始化的 P115Manager，避免重复初始化
         """
         try:
-            from src.adapters.storage.p115 import P115Manager
-            manager = P115Manager()
-            if not manager.enabled:
-                return {"url": "", "expires_in": 0, "error": "115 not enabled"}
-
-            if not manager.ready:
-                manager.initialize()
-            if not manager.auth.has_cookie:
-                await self._load_115_cookie(manager)
-            if not manager.auth.has_cookie:
-                logger.error("115 Cookie 未配置，无法获取直链: pick_code=%s", pick_code)
-                return {"url": "", "expires_in": 0, "error": "115 cookie not set"}
+            manager = _manager or await self._ensure_115_manager()
+            if not manager:
+                logger.error("115 模块不可用，无法获取直链: pick_code=%s", pick_code)
+                return {"url": "", "expires_in": 0, "error": "115 not available"}
 
             link = await manager.adapter.get_direct_link("", pick_code=pick_code, user_agent=user_agent)
             if link and link.url:
@@ -109,7 +120,9 @@ class ProxyService:
 
     @staticmethod
     async def _load_115_cookie(manager) -> None:
-        """从数据库加载持久化 Cookie，与 redirect_service 保持完全一致"""
+        """从数据库加载持久化 Cookie（已有 cookie 时跳过）"""
+        if manager.auth.has_cookie:
+            return
         try:
             async with get_async_session_local() as db:
                 result = await db.execute(
@@ -231,30 +244,35 @@ class ProxyService:
     ) -> dict:
         """
         通过挂载路径 → 网盘路径 → pick_code → 115直链，完整三步解析。
+
+        优化: 步骤1(路径映射) 和 步骤2(FsCache查询) 并行执行；
+              步骤3 复用已有 manager，不再重复初始化。
         """
         try:
-            from src.adapters.storage.p115 import P115Manager
-            manager = P115Manager()
-            if not manager.enabled:
-                return {"url": "", "expires_in": 0, "error": "115 not enabled"}
+            manager = await self._ensure_115_manager()
+            if not manager:
+                return {"url": "", "expires_in": 0, "error": "115 not available"}
 
-            if not manager.ready:
-                manager.initialize()
-            if not manager.auth.has_cookie:
-                await self._load_115_cookie(manager)
-            if not manager.auth.has_cookie:
-                return {"url": "", "expires_in": 0, "error": "115 cookie not set"}
+            # 步骤1 和步骤2 并行执行：路径映射 + FsCache 查 pick_code
+            pan_path_task = self._strip_mount_prefix(cloud_path, db)
+            fscache_task = self._lookup_pickcode_from_fscache(cloud_path, db)
+            pan_path, fscache_pick_code = await asyncio.gather(pan_path_task, fscache_task)
 
-            # 步骤1: 去除挂载前缀 → 得到网盘路径
-            pan_path = await self._strip_mount_prefix(cloud_path, db)
-
-            # 步骤2: 查 pick_code（FsCache → 115搜索API）
+            # 步骤2: 优先用 FsCache 结果
             pick_code = ""
             step2_via = ""
-            pick_code = await self._lookup_pickcode_from_fscache(pan_path, db)
-            if pick_code:
+            if fscache_pick_code:
+                pick_code = fscache_pick_code
                 step2_via = "FsCache命中"
             else:
+                # FsCache 未命中，再用转换后的 pan_path 查 FsCache（路径可能不同）
+                if pan_path != cloud_path:
+                    pick_code = await self._lookup_pickcode_from_fscache(pan_path, db)
+                    if pick_code:
+                        step2_via = "FsCache命中(pan_path)"
+
+            # FsCache 全未命中 → 降级到 115 搜索 API
+            if not pick_code:
                 file_name = PurePosixPath(pan_path).name
                 if not file_name:
                     logger.warning(
@@ -279,7 +297,7 @@ class ProxyService:
                 )
                 return {"url": "", "expires_in": 0, "error": "115 path resolve failed"}
 
-            # 步骤3: 用 pick_code 获取直链（结果由 _resolve_via_115 日志输出）
+            # 步骤3: 用 pick_code 获取直链（复用 manager，不再重复初始化）
             logger.info(
                 "\n"
                 "  步骤1  挂载路径 → 网盘路径: %s → %s\n"
@@ -287,7 +305,7 @@ class ProxyService:
                 "  步骤3  获取直链...",
                 cloud_path, pan_path, step2_via, pick_code,
             )
-            return await self._resolve_via_115(pick_code, user_agent)
+            return await self._resolve_via_115(pick_code, user_agent, _manager=manager)
 
         except Exception as e:
             logger.error("115 路径解析异常: %s", e)
