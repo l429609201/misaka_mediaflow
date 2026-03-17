@@ -71,6 +71,7 @@ def setup_logging():
     """
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_file = LOG_DIR / "misaka-mediaflow.log"
+    go_log_file = LOG_DIR / "go-proxy.log"
 
     log_level = getattr(logging, settings.server.log_level.upper(), logging.INFO)
 
@@ -120,9 +121,39 @@ def setup_logging():
     # src_logger 本身也需要 DEBUG，才能让 DEBUG 日志流过来
     src_logger.setLevel(logging.DEBUG)
 
+    # ==================== Go 反代日志 ====================
+    # go-proxy logger: 写独立日志文件 + 共享控制台 + 共享内存队列
+    go_logger = logging.getLogger("go-proxy")
+    go_logger.setLevel(logging.DEBUG)
+    go_logger.propagate = False
+
+    if go_logger.hasHandlers():
+        go_logger.handlers.clear()
+
+    # Go 独立日志文件（可轮转）
+    go_file_handler = logging.handlers.RotatingFileHandler(
+        str(go_log_file), maxBytes=10 * 1024 * 1024, backupCount=3, encoding='utf-8',
+    )
+    go_file_handler.setLevel(logging.DEBUG)
+    go_file_handler.setFormatter(verbose_formatter)
+    go_logger.addHandler(go_file_handler)
+
+    # Go 日志也输出到控制台
+    go_console_handler = logging.StreamHandler()
+    go_console_handler.setLevel(log_level)
+    go_console_handler.setFormatter(verbose_formatter)
+    go_logger.addHandler(go_console_handler)
+
+    # Go 日志也进内存队列（Web UI 可以看到）
+    go_deque_handler = DequeHandler(_logs_deque)
+    go_deque_handler.setLevel(logging.DEBUG)
+    go_deque_handler.setFormatter(ui_formatter)
+    go_logger.addHandler(go_deque_handler)
+
     logging.getLogger("src").info(
         f"日志系统已初始化 (目录: {LOG_DIR})\n"
-        f"  - {log_file.name} (主日志)"
+        f"  - {log_file.name} (主日志)\n"
+        f"  - {go_log_file.name} (Go反代日志)"
     )
 
 
