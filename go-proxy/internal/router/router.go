@@ -118,6 +118,11 @@ func Setup(cfg *config.Config, cm *cache.Manager) *gin.Engine {
 		c.JSON(http.StatusOK, traffic.Counter.Snapshot())
 	})
 
+	// ===== 缓存统计 API =====
+	r.GET("/api/cache/stats", func(c *gin.Context) {
+		c.JSON(http.StatusOK, cm.Stats())
+	})
+
 	// ===== 其他请求透传到 Emby/Jellyfin =====
 	r.NoRoute(proxyHandler.HandleProxy)
 

@@ -75,15 +75,15 @@ func (h *RedirectHandler) HandleVideoStream(c *gin.Context) {
 		return
 	}
 
-	// 3. 写入缓存
-	h.cache.Set(cacheKey, result.URL)
+	// 3. 写入缓存（利用 Python 返回的 expires_in 设置精确 TTL）
+	ttl := h.cache.SetWithExpiry(cacheKey, result.URL, result.ExpiresIn)
 
 	// 4. 302 重定向
 	urlSnippet := result.URL
 	if len(urlSnippet) > 80 {
 		urlSnippet = urlSnippet[:80] + "..."
 	}
-	log.Printf("302 重定向: %s → %s", itemID, urlSnippet)
+	log.Printf("302 重定向: %s → %s (缓存TTL=%v)", itemID, urlSnippet, ttl)
 	c.Redirect(http.StatusFound, result.URL)
 }
 

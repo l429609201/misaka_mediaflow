@@ -50,8 +50,8 @@ func main() {
 	log.Printf("时区: %s", cfg.Timezone)
 	log.Printf("Emby 后端: %s", cfg.MediaServer.Host)
 
-	// 3. 初始化缓存
-	cacheManager := cache.NewManager(cfg.Redis, cfg.Proxy.MemCacheSize)
+	// 3. 初始化缓存（TTL 来自配置 proxy.cache_ttl）
+	cacheManager := cache.NewManager(cfg.Redis, cfg.Proxy.CacheTTL, cfg.Proxy.MemCacheSize)
 	defer cacheManager.Close()
 
 	// 4. 启动 HTTP 服务
