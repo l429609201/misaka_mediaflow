@@ -48,8 +48,15 @@ func (h *RedirectHandler) HandleVideoStream(c *gin.Context) {
 	apiKey, _ := c.Get("api_key")
 	apiKeyStr, _ := apiKey.(string)
 
-	// 生成缓存键
-	cacheKey := makeCacheKey(itemID, "0", apiKeyStr)
+	// 提取 UserId（Emby Items API 必需）
+	// Emby 播放请求通常把 UserId 放在 query string 里
+	userID := c.Query("UserId")
+	if userID == "" {
+		userID = c.Query("userId")
+	}
+
+	// 生成缓存键（含 userID 避免不同用户共用同一条缓存）
+	cacheKey := makeCacheKey(itemID, userID, apiKeyStr)
 
 	// 1. 查缓存
 	if url, ok := h.cache.Get(cacheKey); ok {
@@ -58,8 +65,8 @@ func (h *RedirectHandler) HandleVideoStream(c *gin.Context) {
 		return
 	}
 
-	// 2. 缓存未命中 → 调用 Python 解析
-	result, err := h.pyClient.ResolveLink(itemID, 0, apiKeyStr)
+	// 2. 缓存未命中 → 调用 Python 解析（带 UserId）
+	result, err := h.pyClient.ResolveLink(itemID, 0, apiKeyStr, userID)
 	if err != nil || result.URL == "" {
 		log.Printf("直链解析失败: %s, err=%v", itemID, err)
 		// 回退透传

@@ -40,9 +40,17 @@ func NewPythonClient(cfg *config.Config) *PythonClient {
 }
 
 // ResolveLink 通过 item_id 解析直链（旧接口，兼容保留）
-func (pc *PythonClient) ResolveLink(itemID string, storageID int, apiKey string) (*ResolveResult, error) {
-	reqURL := fmt.Sprintf("%s/internal/resolve-link?item_id=%s&storage_id=%d&api_key=%s",
-		pc.baseURL, url.QueryEscape(itemID), storageID, url.QueryEscape(apiKey))
+func (pc *PythonClient) ResolveLink(itemID string, storageID int, apiKey string, userID string) (*ResolveResult, error) {
+	q := url.Values{}
+	q.Set("item_id", itemID)
+	q.Set("storage_id", fmt.Sprintf("%d", storageID))
+	if apiKey != "" {
+		q.Set("api_key", apiKey)
+	}
+	if userID != "" {
+		q.Set("user_id", userID)
+	}
+	reqURL := fmt.Sprintf("%s/internal/resolve-link?%s", pc.baseURL, q.Encode())
 	return pc.doGet(reqURL)
 }
 

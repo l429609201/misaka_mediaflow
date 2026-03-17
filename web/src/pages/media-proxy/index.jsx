@@ -65,13 +65,6 @@ export const P115 = () => {
     } catch { /* ignore */ }
   }, [])
 
-  const fetchTraffic = useCallback(async () => {
-    try {
-      const { data } = await systemApi.getGoProxyTraffic()
-      setTraffic(data)
-    } catch { /* ignore */ }
-  }, [])
-
   const fetchMediaServer = useCallback(async () => {
     try {
       const { data } = await systemApi.getMediaServer()
@@ -100,27 +93,30 @@ export const P115 = () => {
   useEffect(() => {
     fetchProxyConfig()
     fetchGoStatus()
-    fetchTraffic()
     fetchMediaServer()
     fetchSelectedLibraries()
     fetchMediaLibraries()
 
-    // SSE 订阅 Go 反代状态
+    // SSE 订阅 Go 反代状态（状态变化时推送）
     const token = localStorage.getItem('token') || ''
-    const evtSource = new EventSource(`/api/v1/system/go-proxy/status/stream?token=${token}`)
-    evtSource.onmessage = (e) => {
+    const statusEvt = new EventSource(`/api/v1/system/go-proxy/status/stream?token=${token}`)
+    statusEvt.onmessage = (e) => {
       try { setGoStatus(JSON.parse(e.data)) } catch { /* ignore */ }
     }
-    evtSource.onerror = () => evtSource.close()
+    statusEvt.onerror = () => statusEvt.close()
 
-    // 流量统计定时刷新（每 5 秒）
-    const trafficTimer = setInterval(fetchTraffic, 5000)
+    // SSE 订阅流量统计（每 2 秒推送，替代轮询）
+    const trafficEvt = new EventSource(`/api/v1/system/go-proxy/traffic/stream?token=${token}`)
+    trafficEvt.onmessage = (e) => {
+      try { setTraffic(JSON.parse(e.data)) } catch { /* ignore */ }
+    }
+    trafficEvt.onerror = () => trafficEvt.close()
 
     return () => {
-      evtSource.close()
-      clearInterval(trafficTimer)
+      statusEvt.close()
+      trafficEvt.close()
     }
-  }, [fetchProxyConfig, fetchGoStatus, fetchTraffic, fetchMediaServer, fetchSelectedLibraries, fetchMediaLibraries])
+  }, [fetchProxyConfig, fetchGoStatus, fetchMediaServer, fetchSelectedLibraries, fetchMediaLibraries])
 
   // ===================================================================
   //                          保存操作

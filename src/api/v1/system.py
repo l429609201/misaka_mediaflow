@@ -502,8 +502,38 @@ async def browse_local_dir(path: str = ""):
 
 @router.get("/go-proxy/traffic", dependencies=[Depends(verify_token)])
 async def get_go_proxy_traffic():
-    """获取 Go 反代流量统计"""
+    """获取 Go 反代流量统计（单次 REST，兼容保留）"""
     return go_proxy_service.get_traffic()
+
+
+@router.get("/go-proxy/traffic/stream")
+async def go_proxy_traffic_stream(token: str = ""):
+    """Go 反代流量统计 SSE 推送（每 2 秒推送一次，替代前端轮询）"""
+    # SSE 通过 query param 传 token 认证（与 status/stream 一致）
+    if token:
+        try:
+            verify_token(token)
+        except Exception:
+            raise HTTPException(status_code=401, detail="Invalid token")
+
+    async def _event_generator():
+        while True:
+            try:
+                data = go_proxy_service.get_traffic()
+                yield f"data: {_json.dumps(data)}\n\n"
+            except Exception:
+                pass
+            await asyncio.sleep(2)
+
+    return StreamingResponse(
+        _event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ==================== 操作日志 ====================

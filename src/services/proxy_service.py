@@ -43,7 +43,7 @@ class ProxyService:
     """302 反代业务逻辑"""
 
     async def resolve_direct_link(
-        self, item_id: str, storage_id: int = 0, api_key: str = ""
+        self, item_id: str, storage_id: int = 0, api_key: str = "", user_id: str = ""
     ) -> dict:
         """
         解析媒体条目直链
@@ -52,7 +52,7 @@ class ProxyService:
         3. 否则匹配 pathmapping 转换为云端路径 → 调用存储适配器
         4. ⭐ Fallback: MediaItem 不存在时，调 Emby API 获取文件路径 → 解析直链
         """
-        logger.info("resolve_direct_link: item_id=%s, storage_id=%d", item_id, storage_id)
+        logger.info("resolve_direct_link: item_id=%s, storage_id=%d, user_id=%s", item_id, storage_id, user_id or "N/A")
 
         async with get_async_session_local() as db:
             # 1. 查询媒体条目
@@ -74,7 +74,7 @@ class ProxyService:
 
             # ⭐ 4. MediaItem 不存在 → Fallback: 通过 Emby API 获取文件信息
             logger.info("MediaItem 不存在, 尝试 Emby API fallback: item_id=%s", item_id)
-            return await self._fallback_via_emby(db, item_id, api_key, storage_id)
+            return await self._fallback_via_emby(db, item_id, api_key, user_id, storage_id)
 
     # ------------------------------------------------------------------
     #  核心解析方法
@@ -230,7 +230,7 @@ class ProxyService:
     # ------------------------------------------------------------------
 
     async def _fallback_via_emby(
-        self, db: AsyncSession, item_id: str, api_key: str, storage_id: int
+        self, db: AsyncSession, item_id: str, api_key: str, user_id: str, storage_id: int
     ) -> dict:
         """
         当 MediaItem 表中没有记录时，通过 Emby/Jellyfin API 获取文件路径，
@@ -244,8 +244,8 @@ class ProxyService:
             logger.warning("媒体服务器未配置, 无法 fallback: item_id=%s", item_id)
             return {"url": "", "expires_in": 0, "error": "media server not configured"}
 
-        # 2. 调 Emby API 获取条目详情
-        item_info = await self._fetch_emby_item(ms_host, effective_api_key, item_id)
+        # 2. 调 Emby API 获取条目详情（带 user_id）
+        item_info = await self._fetch_emby_item(ms_host, effective_api_key, item_id, user_id)
         if not item_info:
             logger.warning("Emby API 未返回条目信息: item_id=%s", item_id)
             return {"url": "", "expires_in": 0, "error": "emby item not found"}
@@ -321,21 +321,25 @@ class ProxyService:
 
         return host.rstrip("/") if host else "", api_key or ""
 
-    async def _fetch_emby_item(self, host: str, api_key: str, item_id: str) -> dict | None:
-        """调用 Emby/Jellyfin API 获取条目详情"""
+    async def _fetch_emby_item(self, host: str, api_key: str, item_id: str, user_id: str = "") -> dict | None:
+        """调用 Emby/Jellyfin API 获取条目详情（必须带 UserId，否则 Emby 返回 404）"""
         import httpx
+        params = {
+            "api_key": api_key,
+            "Fields": "Path,MediaSources",
+        }
+        if user_id:
+            params["UserId"] = user_id
+
         try:
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.get(
                     f"{host}/emby/Items/{item_id}",
-                    params={
-                        "api_key": api_key,
-                        "Fields": "Path,MediaSources",
-                    },
+                    params=params,
                 )
                 if resp.status_code == 200:
                     return resp.json()
-                logger.warning("Emby API 返回 %d: item_id=%s", resp.status_code, item_id)
+                logger.warning("Emby API 返回 %d: item_id=%s user_id=%s", resp.status_code, item_id, user_id or "N/A")
                 return None
         except Exception as e:
             logger.error("调用 Emby API 异常: %s", e)
