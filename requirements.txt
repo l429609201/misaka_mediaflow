@@ -28,6 +28,7 @@ clouddrive2-client>=0.1.0       # CloudDrive2 存储适配器（gRPC）
 
 # ---- 115 网盘 ----
 # p115client 使用纯 httpx，无额外依赖（已通过 httpx 覆盖）
+p115rsacipher>=0.0.3                # 115 proapi RSA 加解密（解除 webapi 大文件限制）
 
 # ---- 工具 ----
 python-multipart>=0.0.9         # FastAPI 文件上传 / Form 解析
