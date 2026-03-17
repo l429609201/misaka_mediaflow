@@ -89,37 +89,41 @@ class P115StorageAdapter(StorageAdapter):
     ) -> DirectLink:
         """
         使用 proapi Android 2.0 加密接口获取直链（无文件大小限制）。
-        严格对齐参考实现: p115strmhelper r302/__init__.py get_downurl_cookie
+        参考: p115strmhelper r302/__init__.py get_downurl_cookie
 
-        关键点:
-          - Cookie 通过 httpx cookies= 参数传入（不放在 header）
-          - headers 只传 User-Agent
-          - POST body: data=encrypt('{"pick_code":"xxx"}')
-          - 响应 data 字段需要 decrypt 解密
-          - file_name 从 URL path unquote 解析（与参考实现一致）
+        Cookie 直接放 headers["Cookie"]，不走 httpx cookie jar
+        （cookie jar 有域名匹配逻辑，proapi.115.com 可能匹配不上）
         """
-        import json as _json_mod
         from urllib.parse import unquote
-        client = await self._ensure_client()
+        import json as _json_mod
 
-        # 严格参照参考项目：headers 只传 UA，Cookie 单独通过 cookies= 传
-        req_headers = {"User-Agent": user_agent} if user_agent else {}
-        cookie_str = self._auth.cookie  # 原始 cookie 字符串
+        client = await self._ensure_client()
+        cookie_str = self._auth.cookie
+
+        req_headers = {
+            "Cookie": cookie_str,
+            "User-Agent": user_agent or (
+                "Mozilla/5.0 (Linux; Android 11; SM-G998B) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/96.0.4664.45 Mobile Safari/537.36"
+            ),
+        }
 
         try:
-            payload_json = f'{{"pick_code":"{pick_code}"}}'
+            payload_json = '{"pick_code":"' + pick_code + '"}'
             encrypted_data = encrypt_fn(payload_json).decode("utf-8")
 
             resp = await client.post(
                 _115_PROAPI_DOWNLOAD_URL,
                 data={"data": encrypted_data},
                 headers=req_headers,
-                cookies=dict(
-                    pair.split("=", 1)
-                    for pair in (s.strip() for s in cookie_str.split(";"))
-                    if "=" in pair
-                ) if cookie_str else {},
             )
+
+            logger.debug(
+                "115 proapi 响应状态: %s body_preview: %s",
+                resp.status_code, resp.text[:200]
+            )
+
             resp_json = resp.json()
 
             if not resp_json.get("state"):
@@ -142,10 +146,10 @@ class P115StorageAdapter(StorageAdapter):
                 logger.warning("115 proapi 解密后无 URL: pick_code=%s data=%s", pick_code, data)
                 return DirectLink()
 
-            # file_name 从 URL path unquote 解析（参照参考项目）
+            # file_name 从 URL path unquote 解析
             file_name = unquote(urlsplit(download_url).path.rpartition("/")[-1])
 
-            # 从 URL 的 t 参数解析精确过期时间，提前 5 分钟失效（参照参考项目 -60*5）
+            # 从 URL 的 t 参数解析精确过期时间，提前 5 分钟失效
             expires_in = 7200
             try:
                 t_val = next(
@@ -166,7 +170,7 @@ class P115StorageAdapter(StorageAdapter):
                 file_name=file_name,
                 file_size=int(data.get("file_size", 0)),
                 expires_in=expires_in,
-                headers={"User-Agent": user_agent} if user_agent else {},
+                headers={"User-Agent": req_headers["User-Agent"]},
             )
 
         except Exception as e:

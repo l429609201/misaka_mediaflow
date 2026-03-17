@@ -74,7 +74,11 @@ async def _create_db_if_not_exists():
         admin_url = _build_db_url(database="postgres")
 
     try:
-        engine = create_async_engine(admin_url, poolclass=AsyncAdaptedQueuePool)
+        engine = create_async_engine(
+            admin_url,
+            poolclass=AsyncAdaptedQueuePool,
+            isolation_level="AUTOCOMMIT",   # CREATE DATABASE 必须在 autocommit 下执行
+        )
         async with engine.connect() as conn:
             if db_cfg.type == "mysql":
                 result = await conn.execute(
@@ -87,14 +91,13 @@ async def _create_db_if_not_exists():
                     ))
                     logger.info(f"Database '{db_name}' created (MySQL)")
             else:
-                # PostgreSQL: autocommit 模式才能 CREATE DATABASE
-                raw_conn = await conn.get_raw_connection()
-                raw_pg = raw_conn.dbapi_connection
-                result = await raw_pg.fetch(
-                    "SELECT 1 FROM pg_database WHERE datname = $1", db_name
+                # PostgreSQL: 用 SQLAlchemy text() 查 pg_database，autocommit 引擎直接 CREATE DATABASE
+                result = await conn.execute(
+                    text("SELECT 1 FROM pg_database WHERE datname = :name"),
+                    {"name": db_name}
                 )
-                if not result:
-                    await raw_pg.execute(f'CREATE DATABASE "{db_name}"')
+                if not result.fetchone():
+                    await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
                     logger.info(f"Database '{db_name}' created (PostgreSQL)")
         await engine.dispose()
     except Exception as e:
