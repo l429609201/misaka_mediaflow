@@ -26,24 +26,9 @@ _115_SEARCH_URL = "https://webapi.115.com/files/search"
 _115_SPACE_URL = "https://webapi.115.com/files/index_info"
 _115_USER_URL = "https://my.115.com/?ct=ajax&ac=nav"
 
-# ── RSA 加解密（p115rsacipher）懒加载 ────────────────────────────────────────
-_rsa_encrypt = None
-_rsa_decrypt = None
-
-def _load_rsa():
-    """懒加载 p115rsacipher，避免未安装时启动报错"""
-    global _rsa_encrypt, _rsa_decrypt
-    if _rsa_encrypt is None:
-        try:
-            from p115rsacipher import encrypt, decrypt
-            _rsa_encrypt = encrypt
-            _rsa_decrypt = decrypt
-        except ImportError:
-            logger.warning(
-                "p115rsacipher 未安装，无法使用 proapi 加密接口（大文件将报错）。"
-                "请执行: pip install p115rsacipher"
-            )
-    return _rsa_encrypt, _rsa_decrypt
+# ── RSA 加解密 — 内嵌实现，无外部依赖，兼容 Python 3.11+ ────────────────────
+# p115rsacipher 包要求 Python>=3.12，故将算法内嵌至 p115_rsa.py
+from src.adapters.storage.p115.p115_rsa import encrypt as _rsa_encrypt, decrypt as _rsa_decrypt
 
 
 class P115StorageAdapter(StorageAdapter):
@@ -96,40 +81,44 @@ class P115StorageAdapter(StorageAdapter):
 
         await self._rate.acquire()
 
-        # ── 主路径: proapi 加密接口（无文件大小限制）──────────────────────────
-        encrypt_fn, decrypt_fn = _load_rsa()
-        if encrypt_fn and decrypt_fn:
-            result = await self._get_direct_link_proapi(pick_code, user_agent, encrypt_fn, decrypt_fn)
-            if result.url:
-                return result
-            # proapi 失败时不继续降级到 webapi（两者都受登录态限制，失败原因相同）
-            return result
-
-        # ── 降级路径: webapi（p115rsacipher 未安装时的兜底）─────────────────
-        logger.warning("p115rsacipher 未安装，降级使用 webapi（大文件可能失败）: pick_code=%s", pick_code)
-        return await self._get_direct_link_webapi(pick_code, user_agent)
+        # ── proapi 加密接口（无文件大小限制，内嵌 RSA 实现）─────────────────
+        return await self._get_direct_link_proapi(pick_code, user_agent, _rsa_encrypt, _rsa_decrypt)
 
     async def _get_direct_link_proapi(
         self, pick_code: str, user_agent: str, encrypt_fn, decrypt_fn
     ) -> DirectLink:
         """
         使用 proapi Android 2.0 加密接口获取直链（无文件大小限制）。
-        参考: p115strmhelper r302/__init__.py get_downurl_cookie
+        严格对齐参考实现: p115strmhelper r302/__init__.py get_downurl_cookie
+
+        关键点:
+          - Cookie 通过 httpx cookies= 参数传入（不放在 header）
+          - headers 只传 User-Agent
+          - POST body: data=encrypt('{"pick_code":"xxx"}')
+          - 响应 data 字段需要 decrypt 解密
+          - file_name 从 URL path unquote 解析（与参考实现一致）
         """
         import json as _json_mod
+        from urllib.parse import unquote
         client = await self._ensure_client()
-        headers = self._auth.get_cookie_headers()
-        if user_agent:
-            headers["User-Agent"] = user_agent
+
+        # 严格参照参考项目：headers 只传 UA，Cookie 单独通过 cookies= 传
+        req_headers = {"User-Agent": user_agent} if user_agent else {}
+        cookie_str = self._auth.cookie  # 原始 cookie 字符串
 
         try:
-            payload_json = _json_mod.dumps({"pick_code": pick_code})
+            payload_json = f'{{"pick_code":"{pick_code}"}}'
             encrypted_data = encrypt_fn(payload_json).decode("utf-8")
 
             resp = await client.post(
                 _115_PROAPI_DOWNLOAD_URL,
                 data={"data": encrypted_data},
-                headers=headers,
+                headers=req_headers,
+                cookies=dict(
+                    pair.split("=", 1)
+                    for pair in (s.strip() for s in cookie_str.split(";"))
+                    if "=" in pair
+                ) if cookie_str else {},
             )
             resp_json = resp.json()
 
@@ -138,24 +127,25 @@ class P115StorageAdapter(StorageAdapter):
                 logger.error("115 proapi 直链获取失败: %s (pick_code=%s)", err_msg, pick_code)
                 return DirectLink()
 
-            # 解密响应体中的 data 字段
+            # 解密响应 data 字段
             raw_data = resp_json.get("data", "")
             if not raw_data:
-                logger.error("115 proapi 响应无 data 字段: pick_code=%s resp=%s", pick_code, resp_json)
+                logger.error("115 proapi 响应无 data 字段: pick_code=%s", pick_code)
                 return DirectLink()
 
-            decrypted_bytes = decrypt_fn(raw_data)
-            data = _json_mod.loads(decrypted_bytes)
+            data = _json_mod.loads(decrypt_fn(raw_data))
 
             download_url = data.get("url", "")
             if isinstance(download_url, dict):
                 download_url = download_url.get("url", "")
-
             if not download_url:
                 logger.warning("115 proapi 解密后无 URL: pick_code=%s data=%s", pick_code, data)
                 return DirectLink()
 
-            # 从 URL 的 t 参数解析精确过期时间（参考 p115strmhelper）
+            # file_name 从 URL path unquote 解析（参照参考项目）
+            file_name = unquote(urlsplit(download_url).path.rpartition("/")[-1])
+
+            # 从 URL 的 t 参数解析精确过期时间，提前 5 分钟失效（参照参考项目 -60*5）
             expires_in = 7200
             try:
                 t_val = next(
@@ -163,20 +153,20 @@ class P115StorageAdapter(StorageAdapter):
                     None,
                 )
                 if t_val:
-                    expires_in = max(0, int(t_val) - int(time.time()) - 300)  # 提前5分钟
+                    expires_in = max(0, int(t_val) - int(time.time()) - 300)
             except Exception:
                 pass
 
             logger.info(
-                "115 proapi 直链获取成功: pick_code=%s expires_in=%ds url_preview=%s...",
-                pick_code, expires_in, download_url[:60],
+                "115 proapi 直链获取成功: pick_code=%s expires_in=%ds file_name=%s",
+                pick_code, expires_in, file_name,
             )
             return DirectLink(
                 url=download_url,
-                file_name=data.get("file_name", ""),
+                file_name=file_name,
                 file_size=int(data.get("file_size", 0)),
                 expires_in=expires_in,
-                headers={"User-Agent": headers.get("User-Agent", "")},
+                headers={"User-Agent": user_agent} if user_agent else {},
             )
 
         except Exception as e:
