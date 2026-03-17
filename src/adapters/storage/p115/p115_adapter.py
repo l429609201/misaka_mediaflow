@@ -1,16 +1,16 @@
 # app/adapters/storage/p115/p115_adapter.py
 # 115 存储适配器 — 实现 StorageAdapter 接口
 #
-# 直链获取完全参照: p115strmhelper r302/__init__.py get_downurl_cookie
-# 使用 proapi.115.com/android/2.0/ufile/download 加密接口，无文件大小限制
+# 直链获取参照 ETK (emby-toolkit) 的方案:
+# 使用 p115client 库的 P115Client.download_url() 获取直链
+# p115client 内部已封装 RSA 加解密、API 端点选择等所有复杂逻辑
 
+import asyncio
 import logging
 import time
-from typing import cast
 from urllib.parse import parse_qsl, unquote, urlsplit
 
 import httpx
-from p115rsacipher import encrypt, decrypt
 
 from src.adapters.storage.base import StorageAdapter, DirectLink, FileEntry
 from src.adapters.storage.p115.p115_rate import P115RateLimiter
@@ -19,8 +19,14 @@ from src.adapters.storage.p115.p115_cache import P115IdPathCache
 
 logger = logging.getLogger(__name__)
 
-# ── 115 接口地址 ─────────────────────────────────────────────────────────────
-_115_PROAPI_DOWNLOAD_URL = "http://proapi.115.com/android/2.0/ufile/download"
+# ── 尝试导入 p115client ──────────────────────────────────────────────────────
+try:
+    from p115client import P115Client
+except ImportError:
+    P115Client = None  # type: ignore
+    logger.warning("p115client 未安装，115 直链功能不可用")
+
+# ── 115 接口地址（webapi，用于目录/搜索等非直链操作）────────────────────────
 _115_FILES_URL = "https://webapi.115.com/files"
 _115_SEARCH_URL = "https://webapi.115.com/files/search"
 _115_SPACE_URL = "https://webapi.115.com/files/index_info"
@@ -42,30 +48,11 @@ class P115StorageAdapter(StorageAdapter):
         self._rate = rate_limiter
         self._cache = id_path_cache
         self._client: httpx.AsyncClient | None = None
-
-    @staticmethod
-    def _extract_proapi_cookies(cookie_str: str) -> str:
-        """
-        从完整 cookie 字符串中提取 proapi 安卓接口所需的字段。
-
-        参照 p115strmhelper schemas/cookie.py U115Cookie.to_dict():
-          proapi 只认 UID、CID、SEID、KID 这几个字段。
-          传入 web 端的多余字段（115_lang、USERSESSIONID 等）会导致 "请重新登录"。
-        """
-        if not cookie_str:
-            return ""
-        proapi_keys = {"UID", "CID", "SEID", "KID"}
-        parts = []
-        for pair in cookie_str.split(";"):
-            pair = pair.strip()
-            if "=" in pair:
-                k = pair.split("=", 1)[0].strip()
-                if k in proapi_keys:
-                    parts.append(pair.strip())
-        return "; ".join(parts)
+        self._p115_client = None  # P115Client 实例（同步，懒初始化）
+        self._p115_client_cookie: str = ""  # 上次创建 P115Client 时用的 cookie
 
     async def _ensure_client(self) -> httpx.AsyncClient:
-        """获取 HTTP 客户端（不带 cookie，cookie 通过 headers 每次请求时传）"""
+        """获取 HTTP 客户端（用于目录/搜索等 webapi 操作）"""
         if self._client is None:
             self._client = httpx.AsyncClient(
                 timeout=httpx.Timeout(10.0, connect=5.0),
@@ -76,17 +63,66 @@ class P115StorageAdapter(StorageAdapter):
             )
         return self._client
 
+    def _get_p115_client(self):
+        """
+        获取 P115Client 实例（同步方法）。
+
+        参照 ETK (emby-toolkit) handler/p115_service.py:
+          - P115CookieClient 使用 P115Client(cookie_str) 创建客户端
+          - download_url(pick_code, user_agent) 直接获取直链
+          - p115client 库内部封装了 RSA 加解密、API 端点等所有复杂逻辑
+
+        如果 cookie 变更了，会自动重建客户端。
+        """
+        if P115Client is None:
+            logger.error("p115client 库未安装，无法获取 115 直链")
+            return None
+
+        current_cookie = self._auth.cookie
+        if not current_cookie:
+            logger.error("115 Cookie 为空，无法创建 P115Client")
+            return None
+
+        # cookie 变更时重建客户端
+        if self._p115_client is None or self._p115_client_cookie != current_cookie:
+            try:
+                self._p115_client = P115Client(current_cookie)
+                self._p115_client_cookie = current_cookie
+                logger.info("P115Client 已创建/重建 (cookie len=%d)", len(current_cookie))
+            except Exception as e:
+                logger.error("P115Client 创建失败: %s", e)
+                self._p115_client = None
+                return None
+
+        return self._p115_client
+
+    def _sync_download_url(self, pick_code: str, user_agent: str) -> str | None:
+        """
+        同步方法：调用 P115Client.download_url() 获取直链。
+
+        参照 ETK routes/p115.py _get_cached_115_url():
+          url_obj = client.download_url(pick_code, user_agent=user_agent)
+          direct_url = str(url_obj) if url_obj else None
+        """
+        p115 = self._get_p115_client()
+        if p115 is None:
+            return None
+
+        try:
+            url_obj = p115.download_url(pick_code, user_agent=user_agent)
+            return str(url_obj) if url_obj else None
+        except Exception as e:
+            logger.error("P115Client.download_url 异常: %s (pick_code=%s)", e, pick_code)
+            return None
+
     async def get_direct_link(self, cloud_path: str, **kwargs) -> DirectLink:
         """
         获取 115 CDN 直链。
 
-        完全参照 p115strmhelper r302/__init__.py get_downurl_cookie：
-          POST proapi.115.com/android/2.0/ufile/download
-          请求体: data=encrypt('{"pick_code":"xxx"}')
-          响应体: {"state":true, "data":"<加密字符串>"}  → decrypt 解密得到 URL
-
-        关键: proapi 是安卓接口，只认 UID/CID/SEID/KID 这几个 cookie 字段，
-              传入 web 端的多余字段会导致 "请重新登录"。
+        参照 ETK (emby-toolkit) 的方案：
+          - 使用 p115client 库的 P115Client(cookie).download_url(pick_code, user_agent)
+          - p115client 内部自动处理 RSA 加解密、API 端点、cookie 格式等
+          - 无文件大小限制
 
         kwargs:
           - pick_code: str  直接传入 pick_code
@@ -103,46 +139,18 @@ class P115StorageAdapter(StorageAdapter):
             return DirectLink()
 
         await self._rate.acquire()
-        client = await self._ensure_client()
-
-        # 提取 proapi 需要的 cookie 字段（参照 p115strmhelper U115Cookie.to_dict）
-        proapi_cookie = self._extract_proapi_cookies(self._auth.cookie)
-        if not proapi_cookie:
-            logger.error("115 Cookie 中缺少 UID/CID/SEID 字段，无法调用 proapi")
-            return DirectLink()
 
         try:
-            resp = await client.post(
-                _115_PROAPI_DOWNLOAD_URL,
-                data={
-                    "data": encrypt(f'{{"pick_code":"{pick_code}"}}').decode("utf-8")
-                },
-                headers={
-                    "Cookie": proapi_cookie,
-                    "User-Agent": user_agent,
-                },
+            # P115Client.download_url() 是同步方法，用 asyncio.to_thread 包装
+            download_url = await asyncio.to_thread(
+                self._sync_download_url, pick_code, user_agent
             )
 
-            resp_json = resp.json()
-
-            if not resp_json.get("state"):
-                err_msg = resp_json.get("msg", resp_json.get("error", str(resp_json)))
-                logger.error("115 直链获取失败: %s (pick_code=%s)", err_msg, pick_code)
-                return DirectLink()
-
-            # 解密响应 data（参照: data = loads(decrypt(json["data"]))）
-            import json as _json
-            data = _json.loads(decrypt(resp_json["data"]))
-
-            # 提取 URL（参照: url 可能是 dict 或 str）
-            download_url = data.get("url", "")
-            if isinstance(download_url, dict):
-                download_url = download_url.get("url", "")
             if not download_url:
-                logger.warning("115 解密后无 URL: pick_code=%s data_keys=%s", pick_code, list(data.keys()))
+                logger.error("115 直链获取失败: 返回空 URL (pick_code=%s)", pick_code)
                 return DirectLink()
 
-            # file_name 从 URL path 解析（参照 p115strmhelper）
+            # file_name 从 URL path 解析
             file_name = unquote(urlsplit(download_url).path.rpartition("/")[-1])
 
             # 过期时间从 URL 的 t 参数解析，提前 5 分钟
@@ -164,7 +172,6 @@ class P115StorageAdapter(StorageAdapter):
             return DirectLink(
                 url=download_url,
                 file_name=file_name,
-                file_size=int(data.get("file_size", 0)),
                 expires_in=expires_in,
                 headers={"User-Agent": user_agent},
             )

@@ -104,7 +104,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=py-builder /install /usr/local/lib/python3.12/site-packages
 
 # 验证关键依赖能正常 import（构建时就发现问题，而不是运行时才报错）
-RUN python -c "import uvicorn; import fastapi; import p115rsacipher; print('All imports OK')"
+RUN python -c "import uvicorn; import fastapi; import p115client; print('All imports OK')"
 
 # 应用代码
 COPY src/ ./src/
