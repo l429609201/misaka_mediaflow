@@ -129,8 +129,6 @@ jobs:
             VERSION=${{ steps.vars.outputs.version }}
             GIT_COMMIT=${{ steps.vars.outputs.git_commit }}
             BUILD_DATE=${{ steps.vars.outputs.build_date }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       # ==================== 10. 输出结果 ====================
       - name: 输出镜像结果
