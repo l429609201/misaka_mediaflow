@@ -1,8 +1,13 @@
 # app/api/internal/p115.py
 # 内部 API — Go 反代调用获取 115 直链（/p115/play 路由回调）
 
+import json as _json
 import logging
 from fastapi import APIRouter
+from sqlalchemy import select
+
+from src.db import get_async_session_local
+from src.db.models import SystemConfig
 
 logger = logging.getLogger(__name__)
 
@@ -57,4 +62,21 @@ async def get_download_url(pick_code: str):
     except Exception as e:
         logger.error("115 直链获取失败: pick_code=%s, error=%s", pick_code, str(e))
         return {"url": "", "expires_in": 0, "file_name": "", "error": str(e)}
+
+
+@router.get("/api-interval")
+async def get_api_interval():
+    """Go 反代调用 — 获取 115 API 请求间隔（秒），用于 seek 防抖"""
+    try:
+        async with get_async_session_local() as db:
+            result = await db.execute(
+                select(SystemConfig).where(SystemConfig.key == "p115_settings")
+            )
+            cfg = result.scalars().first()
+            if cfg and cfg.value:
+                data = _json.loads(cfg.value)
+                return {"api_interval": data.get("api_interval", 1.0)}
+    except Exception:
+        pass
+    return {"api_interval": 1.0}
 

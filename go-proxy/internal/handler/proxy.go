@@ -6,6 +6,7 @@ package handler
 import (
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -17,16 +18,15 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/mediaflow/go-proxy/internal/config"
+	"github.com/mediaflow/go-proxy/internal/service"
 )
 
-// seekThrottleJS 注入到 plugin.js 末尾的 seek 防抖脚本。
-// 拦截 HTMLMediaElement.prototype.currentTime setter，快速拖拽时只在用户松手后
-// 执行一次真正的 seek，防止瞬间并发大量 Range 请求导致 115 CDN 返回 403。
-const seekThrottleJS = `
+// seekThrottleJS 注入到 plugin.js 末尾的 seek 防抖脚本模板。
+// %d 会被替换为实际的 MIN_INTERVAL_MS（从后端 api_interval 配置读取）。
+const seekThrottleTpl = `
 ;(function(){
-  /* ===== Misaka MediaFlow Seek Throttle ===== */
-  var DEBOUNCE_MS = 500;       /* 松手后等待 ms 再 seek */
-  var MIN_INTERVAL_MS = 2000;  /* 两次真实 seek 最小间隔 */
+  var DEBOUNCE_MS = 500;
+  var MIN_INTERVAL_MS = %d;
   var proto = HTMLMediaElement.prototype;
   var desc = Object.getOwnPropertyDescriptor(proto, 'currentTime');
   if (!desc || !desc.set) return;
@@ -35,20 +35,17 @@ const seekThrottleJS = `
   var _timer = null;
   var _lastSeekTime = 0;
   var _pendingTime = null;
-  var _isSeeking = false;
 
   function doSeek(elem, t) {
     var now = Date.now();
     var elapsed = now - _lastSeekTime;
     if (elapsed < MIN_INTERVAL_MS) {
-      /* 距上次 seek 太近，延迟执行 */
       clearTimeout(_timer);
       _timer = setTimeout(function(){ doSeek(elem, t); }, MIN_INTERVAL_MS - elapsed + 50);
       return;
     }
     _lastSeekTime = now;
     _pendingTime = null;
-    _isSeeking = false;
     origSet.call(elem, t);
   }
 
@@ -62,29 +59,24 @@ const seekThrottleJS = `
 
   Object.defineProperty(proto, 'currentTime', {
     get: function() {
-      /* 拖拽中返回目标时间，让进度条 UI 跟手 */
       if (_pendingTime !== null) return _pendingTime;
       return origGet.call(this);
     },
     set: function(v) {
-      /* 在已缓冲范围内，直接 seek（不产生网络请求） */
       if (isInBuffered(this, v)) {
         clearTimeout(_timer);
         _pendingTime = null;
-        _isSeeking = false;
         origSet.call(this, v);
         return;
       }
-      /* 超出缓冲区：防抖 */
       _pendingTime = v;
-      _isSeeking = true;
       var self = this;
       clearTimeout(_timer);
       _timer = setTimeout(function(){ doSeek(self, v); }, DEBOUNCE_MS);
     },
     configurable: true
   });
-  console.log('[Misaka] seek throttle active: debounce=' + DEBOUNCE_MS + 'ms, minInterval=' + MIN_INTERVAL_MS + 'ms');
+  console.log('[Misaka] seek throttle: debounce=' + DEBOUNCE_MS + 'ms, minInterval=' + MIN_INTERVAL_MS + 'ms');
 })();
 `
 
@@ -93,10 +85,11 @@ type ProxyHandler struct {
 	cfg          *config.Config
 	reverseProxy *httputil.ReverseProxy
 	targetURL    *url.URL
+	pyClient     *service.PythonClient
 }
 
 // NewProxyHandler 创建透传处理器
-func NewProxyHandler(cfg *config.Config) *ProxyHandler {
+func NewProxyHandler(cfg *config.Config, pyClient *service.PythonClient) *ProxyHandler {
 	target, err := url.Parse(cfg.MediaServer.Host)
 	if err != nil {
 		log.Fatalf("MediaServer.Host 解析失败: %v", err)
@@ -126,22 +119,25 @@ func NewProxyHandler(cfg *config.Config) *ProxyHandler {
 	}
 
 	// ⭐ 修改响应：自动去除 Emby htmlvideoplayer 的 crossOrigin 设置
-	// 解决 Web 浏览器 302 重定向到 115 CDN 时的 CORS 跨域问题
+	// + 注入 seek 防抖脚本（防止 115 CDN 403）
 	// 参考: https://github.com/bpking1/embyExternalUrl/issues/236
-	rp.ModifyResponse = patchPluginJS
 
-	return &ProxyHandler{
+	h := &ProxyHandler{
 		cfg:          cfg,
 		reverseProxy: rp,
 		targetURL:    target,
+		pyClient:     pyClient,
 	}
+	rp.ModifyResponse = h.patchPluginJS
+
+	return h
 }
 
 // patchPluginJS 拦截 Emby htmlvideoplayer/plugin.js 响应，
-// 用正则去除 .crossOrigin 赋值（兼容压缩/非压缩变量名）。
-// 115 CDN 不返回 Access-Control-Allow-Origin 头，浏览器带 crossorigin="anonymous"
-// 的 <video> 元素在 302 重定向后会被 CORS 策略阻止。
-func patchPluginJS(resp *http.Response) error {
+// 1) 把 .crossOrigin 替换掉（解决 115 CDN CORS 问题）
+// 2) 追加 seek 防抖脚本（防止拖拽产生大量 Range 请求导致 403）
+// MIN_INTERVAL_MS 通过内部 API 从 Python 端 api_interval 配置读取。
+func (h *ProxyHandler) patchPluginJS(resp *http.Response) error {
 	// 只处理 htmlvideoplayer/plugin.js
 	path := resp.Request.URL.Path
 	if !strings.Contains(path, "htmlvideoplayer/plugin.js") {
@@ -199,8 +195,12 @@ func patchPluginJS(resp *http.Response) error {
 	}
 
 	// ⭐ 追加 seek 防抖脚本，防止拖拽进度条产生大量 Range 请求导致 115 CDN 403
-	patched += seekThrottleJS
-	log.Printf("✅ plugin.js 已注入 seek 防抖脚本")
+	// 从 Python 内部 API 读取 api_interval 配置
+	intervalSec := h.pyClient.GetAPIInterval()
+	intervalMs := int(intervalSec * 1000)
+	seekJS := fmt.Sprintf(seekThrottleTpl, intervalMs)
+	patched += seekJS
+	log.Printf("✅ plugin.js 已注入 seek 防抖脚本 (minInterval=%dms, 来自 api_interval=%.1fs)", intervalMs, intervalSec)
 
 	// 写回响应体（不压缩，浏览器可以接受纯文本）
 	newBody := []byte(patched)

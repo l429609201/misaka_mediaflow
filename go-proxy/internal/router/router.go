@@ -34,7 +34,7 @@ func Setup(cfg *config.Config, cm *cache.Manager) *gin.Engine {
 
 	// 处理器
 	redirectHandler := handler.NewRedirectHandler(cfg, cm, pyClient)
-	proxyHandler := handler.NewProxyHandler(cfg)
+	proxyHandler := handler.NewProxyHandler(cfg, pyClient)
 	wsHandler := handler.NewWSHandler(cfg)
 	p115Handler := handler.NewP115PlayHandler(cfg, cm, pyClient) // ⭐ 传入共享 pyClient
 

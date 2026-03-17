@@ -115,4 +115,27 @@ func (pc *PythonClient) doGet(reqURL string) (*ResolveResult, error) {
 	return &result, nil
 }
 
+// GetAPIInterval 从 Python 获取 115 的 API 请求间隔（秒）
+func (pc *PythonClient) GetAPIInterval() float64 {
+	reqURL := fmt.Sprintf("%s/internal/p115/api-interval", pc.baseURL)
+	resp, err := pc.client.Get(reqURL)
+	if err != nil {
+		return 1.0 // 默认 1 秒
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 1.0
+	}
+
+	var result struct {
+		APIInterval float64 `json:"api_interval"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil || result.APIInterval <= 0 {
+		return 1.0
+	}
+	return result.APIInterval
+}
+
 
