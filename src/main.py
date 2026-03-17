@@ -7,7 +7,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.version import APP_NAME, VERSION
@@ -142,8 +142,10 @@ app.include_router(internal_router)
 
 # Static files (production build)
 _web_dist = Path(__file__).parent.parent / "web" / "dist"
-if _web_dist.exists():
-    app.mount("/web", StaticFiles(directory=str(_web_dist), html=True), name="web")
+_web_index = _web_dist / "index.html"
+_web_assets = _web_dist / "assets"
+if _web_assets.exists():
+    app.mount("/web/assets", StaticFiles(directory=str(_web_assets)), name="web-assets")
 
 
 @app.get("/", include_in_schema=False)
@@ -154,6 +156,23 @@ async def root():
 @app.get("/web", include_in_schema=False)
 async def web_root():
     return RedirectResponse(url="/web/login", status_code=302)
+
+
+@app.get("/web/{path:path}", include_in_schema=False)
+async def web_spa(path: str):
+    if not _web_dist.exists() or not _web_index.exists():
+        return {"detail": "Web frontend not built"}
+
+    requested = (_web_dist / path).resolve()
+    try:
+        requested.relative_to(_web_dist.resolve())
+    except ValueError:
+        return {"detail": "Not Found"}
+
+    if requested.is_file():
+        return FileResponse(str(requested))
+
+    return FileResponse(str(_web_index))
 
 
 # ==================== 直接运行入口（对齐弹幕库 python -m src.main） ====================

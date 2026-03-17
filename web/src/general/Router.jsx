@@ -68,6 +68,7 @@ export const router = createBrowserRouter(
         { path: RoutePaths.STORAGE.slice(1),   element: <Storage /> },
         { path: RoutePaths.STRM.slice(1),      element: <Strm /> },
         { path: RoutePaths.DRIVE115.slice(1),  element: <Drive115 /> },
+        { path: 'p115', loader: () => redirect(RoutePaths.MEDIA_PROXY) },
         { path: RoutePaths.MEDIA_PROXY.slice(1), element: <P115 /> },
         { path: RoutePaths.LOGS.slice(1),      element: <Logs /> },
         { path: RoutePaths.SETTING.slice(1),   element: <Setting /> },
