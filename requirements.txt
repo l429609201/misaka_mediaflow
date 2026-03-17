@@ -27,7 +27,7 @@ pydantic-settings>=2.0.0
 clouddrive2-client>=0.1.0       # CloudDrive2 存储适配器（gRPC）
 
 # ---- 115 网盘 ----
-p115rsacipher                        # 115 proapi RSA 加解密（解除 webapi 大文件限制）
+p115rsacipher                        # 115 proapi RSA 加解密
 
 # ---- 工具 ----
 python-multipart>=0.0.9         # FastAPI 文件上传 / Form 解析
