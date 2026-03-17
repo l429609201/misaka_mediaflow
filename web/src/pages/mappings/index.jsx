@@ -2,8 +2,8 @@
 // 路径映射管理
 
 import { useEffect, useState } from 'react'
-import { Card, Table, Button, Modal, Form, Input, InputNumber, Select, message, Space, Popconfirm } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
+import { Card, Table, Button, Modal, Form, Input, InputNumber, Select, Switch, message, Space, Popconfirm, Alert } from 'antd'
+import { PlusOutlined, EditOutlined, DeleteOutlined, NodeIndexOutlined } from '@ant-design/icons'
 import { useTranslation } from 'react-i18next'
 import { mappingApi, storageApi } from '@/apis'
 
@@ -58,6 +58,11 @@ export const Mappings = () => {
     fetchData()
   }
 
+  const handleToggle = async (id) => {
+    await mappingApi.toggle(id)
+    fetchData()
+  }
+
   const columns = [
     { title: 'ID', dataIndex: 'id', width: 60 },
     {
@@ -66,9 +71,19 @@ export const Mappings = () => {
     },
     { title: t('mappings.localPrefix'), dataIndex: 'local_prefix', ellipsis: true },
     { title: t('mappings.cloudPrefix'), dataIndex: 'cloud_prefix', ellipsis: true },
-    { title: t('mappings.priority'), dataIndex: 'priority', width: 80 },
+    { title: t('mappings.priority'), dataIndex: 'priority', width: 70 },
     {
-      title: t('common.action'), width: 120,
+      title: t('common.status'), dataIndex: 'is_active', width: 80,
+      render: (v, record) => (
+        <Switch
+          size="small"
+          checked={!!v}
+          onChange={() => handleToggle(record.id)}
+        />
+      ),
+    },
+    {
+      title: t('common.action'), width: 100,
       render: (_, record) => (
         <Space>
           <Button size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)} />
@@ -82,13 +97,17 @@ export const Mappings = () => {
 
   return (
     <Card
-      title={t('mappings.title')}
+      title={<Space><NodeIndexOutlined />{t('mappings.title')}</Space>}
       extra={
         <Button type="primary" icon={<PlusOutlined />} onClick={() => { setEditingId(null); form.resetFields(); setModalOpen(true) }}>
           {t('mappings.addMapping')}
         </Button>
       }
     >
+      <Alert
+        type="info" showIcon style={{ marginBottom: 16 }}
+        message={t('mappings.hint')}
+      />
       <Table rowKey="id" columns={columns} dataSource={data} loading={loading} pagination={false} />
 
       <Modal
@@ -103,11 +122,13 @@ export const Mappings = () => {
           <Form.Item name="storage_id" label={t('mappings.storageSource')} rules={[{ required: true }]}>
             <Select options={storages.map((s) => ({ value: s.id, label: s.name }))} />
           </Form.Item>
-          <Form.Item name="local_prefix" label={t('mappings.localPrefix')} rules={[{ required: true }]}>
-            <Input placeholder="/media/movies" />
+          <Form.Item name="local_prefix" label={t('mappings.localPrefix')} rules={[{ required: true }]}
+            tooltip={t('mappings.localPrefixHint')}>
+            <Input placeholder="/mnt/115" />
           </Form.Item>
-          <Form.Item name="cloud_prefix" label={t('mappings.cloudPrefix')} rules={[{ required: true }]}>
-            <Input placeholder="/movies" />
+          <Form.Item name="cloud_prefix" label={t('mappings.cloudPrefix')} rules={[{ required: true }]}
+            tooltip={t('mappings.cloudPrefixHint')}>
+            <Input placeholder="/" />
           </Form.Item>
           <Form.Item name="priority" label={t('mappings.priority')} tooltip={t('mappings.priorityHint')}>
             <InputNumber min={0} max={999} style={{ width: '100%' }} />

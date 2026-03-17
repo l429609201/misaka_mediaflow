@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 # 115 文件 API
 _115_DOWNLOAD_URL = "https://proapi.115.com/app/chrome/downurl"
 _115_FILES_URL = "https://webapi.115.com/files"
+_115_SEARCH_URL = "https://webapi.115.com/files/search"
 _115_SPACE_URL = "https://webapi.115.com/files/index_info"
 _115_USER_URL = "https://my.115.com/?ct=ajax&ac=nav"
 
@@ -269,4 +270,68 @@ class P115StorageAdapter(StorageAdapter):
     async def get_download_url(self, pick_code: str) -> DirectLink:
         """通过 pick_code 直接获取直链（供 Go 内部 API 调用）"""
         return await self.get_direct_link("", pick_code=pick_code)
+
+    async def search_file_by_cloud_path(self, cloud_path: str) -> str:
+        """
+        通过云端路径搜索文件，返回 pick_code（FsCache 无数据时的兜底方案）。
+
+        原理：
+          - 用文件名调用 115 搜索 API（webapi.115.com/files/search）
+          - 遍历结果，用文件名精确匹配（n 字段 == filename）
+          - 找到后返回 pick_code（pc 字段）
+
+        参考：gostrm 参考项目 handle115PanDirectLink 的 pathCache 逻辑
+        """
+        from pathlib import Path as _Path
+        filename = _Path(cloud_path).name
+        if not filename:
+            logger.warning("[p115] search_file_by_cloud_path: cloud_path 无文件名 '%s'", cloud_path)
+            return ""
+
+        await self._rate.acquire()
+        client = await self._ensure_client()
+
+        try:
+            resp = await client.get(
+                _115_SEARCH_URL,
+                params={
+                    "search_value": filename,
+                    "limit": 20,
+                    "offset": 0,
+                    "format": "json",
+                    "type": 99,   # 99 = 仅文件（不含目录）
+                },
+                headers=self._auth.get_cookie_headers(),
+            )
+            data = resp.json()
+
+            if not data.get("state", True) and data.get("errno"):
+                logger.error("[p115] 搜索 API 返回错误: %s", data.get("error", data))
+                return ""
+
+            items = data.get("data", [])
+            if not items:
+                logger.info("[p115] 搜索无结果: filename=%s cloud_path=%s", filename, cloud_path)
+                return ""
+
+            # 精确匹配文件名，取第一个命中
+            for item in items:
+                name = item.get("n", "")
+                pc = item.get("pc", "")
+                if name == filename and pc:
+                    logger.info(
+                        "[p115] 搜索命中: filename=%s → pickcode=%s (cloud_path=%s)",
+                        filename, pc, cloud_path,
+                    )
+                    return pc
+
+            logger.info(
+                "[p115] 搜索结果中无精确匹配: filename=%s cloud_path=%s (共%d条结果)",
+                filename, cloud_path, len(items),
+            )
+            return ""
+
+        except Exception as e:
+            logger.error("[p115] search_file_by_cloud_path 异常: %s (cloud_path=%s)", e, cloud_path)
+            return ""
 

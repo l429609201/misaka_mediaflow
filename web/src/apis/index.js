@@ -60,6 +60,7 @@ export const mappingApi = {
   list: (params) => api.get('/storage/mappings', { params }),
   create: (payload) => api.post('/storage/mappings', payload),
   update: (id, payload) => api.put(`/storage/mappings/${id}`, payload),
+  toggle: (id) => api.patch(`/storage/mappings/${id}/toggle`),
   remove: (id) => api.delete(`/storage/mappings/${id}`),
 }
 

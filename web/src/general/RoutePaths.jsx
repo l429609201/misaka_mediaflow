@@ -5,6 +5,7 @@ export const RoutePaths = {
   HOME: '/',
   LOGIN: '/login',
   STORAGE: '/storage',
+  MAPPINGS: '/mappings',
   STRM: '/strm',
   DRIVE115: '/115',
   MEDIA_PROXY: '/media-proxy',

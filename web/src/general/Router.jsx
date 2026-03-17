@@ -10,6 +10,7 @@ import { LayoutLogin } from './LayoutLogin'
 import Home from '@/pages/home/index.jsx'
 import Login from '@/pages/login/index.jsx'
 import Storage from '@/pages/storage/index.jsx'
+import Mappings from '@/pages/mappings/index.jsx'
 import Strm from '@/pages/strm/index.jsx'
 import Drive115 from '@/pages/drive115/index.jsx'
 import P115 from '@/pages/media-proxy/index.jsx'
@@ -64,14 +65,15 @@ export const router = createBrowserRouter(
       element: <Layout />,
       loader: authLoader,
       children: [
-        { index: true,                        element: <Home /> },
-        { path: RoutePaths.STORAGE.slice(1),   element: <Storage /> },
-        { path: RoutePaths.STRM.slice(1),      element: <Strm /> },
-        { path: RoutePaths.DRIVE115.slice(1),  element: <Drive115 /> },
+        { index: true,                          element: <Home /> },
+        { path: RoutePaths.STORAGE.slice(1),     element: <Storage /> },
+        { path: RoutePaths.MAPPINGS.slice(1),    element: <Mappings /> },
+        { path: RoutePaths.STRM.slice(1),        element: <Strm /> },
+        { path: RoutePaths.DRIVE115.slice(1),    element: <Drive115 /> },
         { path: 'p115', loader: () => redirect(RoutePaths.MEDIA_PROXY) },
         { path: RoutePaths.MEDIA_PROXY.slice(1), element: <P115 /> },
-        { path: RoutePaths.LOGS.slice(1),      element: <Logs /> },
-        { path: RoutePaths.SETTING.slice(1),   element: <Setting /> },
+        { path: RoutePaths.LOGS.slice(1),        element: <Logs /> },
+        { path: RoutePaths.SETTING.slice(1),     element: <Setting /> },
       ],
     },
     {

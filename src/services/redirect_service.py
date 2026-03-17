@@ -152,6 +152,18 @@ class RedirectService:
             manager = P115Manager()
             if not manager.enabled:
                 return {"url": "", "expires_in": 0, "source": source, "error": "115 not enabled"}
+
+            # ── 确保已初始化 ─────────────────────────────────────────────────
+            if not manager.ready:
+                manager.initialize()
+
+            # ── 从数据库加载 Cookie（解决扫码后重启 Cookie 丢失问题）─────────
+            if not manager.auth.has_cookie:
+                await self._load_cookie_from_db(manager)
+
+            if not manager.auth.has_cookie:
+                return {"url": "", "expires_in": 0, "source": source, "error": "115 cookie not set"}
+
             link = await manager.adapter.get_download_url(pickcode)
             if link and link.url:
                 logger.info("[redirect] pickcode=%s 直链成功 source=%s", pickcode, source)
@@ -161,6 +173,22 @@ class RedirectService:
             logger.error("[redirect] pickcode=%s 直链异常: %s", pickcode, e)
             return {"url": "", "expires_in": 0, "source": source, "error": str(e)}
 
+    @staticmethod
+    async def _load_cookie_from_db(manager) -> None:
+        """从数据库加载持久化 Cookie，与 P115Service 保持一致"""
+        try:
+            from src.db.models.system import SystemConfig
+            async with get_async_session_local() as db:
+                result = await db.execute(
+                    select(SystemConfig).where(SystemConfig.key == "p115_cookie")
+                )
+                cfg = result.scalars().first()
+                if cfg and cfg.value:
+                    manager.auth.set_cookie(cfg.value)
+                    logger.info("[redirect] 从数据库加载 115 Cookie 成功 (len=%d)", len(cfg.value))
+        except Exception as e:
+            logger.warning("[redirect] 从数据库加载 115 Cookie 失败: %s", e)
+
     async def _resolve_by_path(
         self, db: AsyncSession, file_path: str, storage_id: int, source: str = "path"
     ) -> dict:
@@ -168,7 +196,9 @@ class RedirectService:
         通过路径解析：
         1. 先尝试从路径中提取 pickcode（STRM 内容场景）
         2. PathMapping 本地路径 → 云端路径
-        3. P115FsCache 查 pickcode
+        3. P115FsCache 查 pickcode（精确路径）
+        4. P115FsCache 查 pickcode（文件名兜底）
+        5. 115 API 搜索（FsCache 无数据时直接调用网盘 API）⭐ 参考 gostrm 逻辑
         """
         # 1. 路径本身就是 STRM 文件 → 读取内容提取 pickcode
         if file_path.lower().endswith(".strm"):
@@ -187,7 +217,7 @@ class RedirectService:
         # 2. PathMapping：本地挂载路径 → 云端路径
         cloud_path = await self._apply_path_mapping(db, file_path)
 
-        # 3. P115FsCache 查 pickcode
+        # 3. P115FsCache 查 pickcode（精确路径）
         if cloud_path:
             pc = await self._lookup_pickcode_from_fscache(db, cloud_path)
             if pc:
@@ -201,6 +231,16 @@ class RedirectService:
             if pc:
                 logger.info("[redirect] 文件名命中 filename=%s → pickcode=%s", filename, pc)
                 return await self._resolve_by_pickcode(pc, source=f"{source}_filename")
+
+        # 5. ⭐ FsCache 无数据时，直接调用 115 API 搜索（对齐 gostrm handle115PanDirectLink 逻辑）
+        #    前提：必须有 cloud_path（PathMapping 转换成功），才能确定文件在网盘中的位置
+        if cloud_path:
+            logger.info(
+                "[redirect] FsCache未命中，尝试直接调用 115 API 搜索: cloud_path=%s", cloud_path
+            )
+            pc = await self._search_115_by_cloud_path(cloud_path, source)
+            if pc:
+                return await self._resolve_by_pickcode(pc, source=f"{source}_api_search")
 
         logger.warning("[redirect] 路径解析失败 path=%s cloud=%s", file_path, cloud_path)
         return {"url": "", "expires_in": 0, "source": source, "error": "path not resolved"}
@@ -275,17 +315,28 @@ class RedirectService:
 
     @staticmethod
     async def _apply_path_mapping(db: AsyncSession, local_path: str) -> str:
-        """PathMapping：local_path → cloud_path"""
-        rows = await db.execute(select(PathMapping))
+        """PathMapping：local_path → cloud_path（仅启用的映射，按优先级降序匹配）"""
+        rows = await db.execute(
+            select(PathMapping)
+            .where(PathMapping.is_active == 1)
+            .order_by(PathMapping.priority.desc())
+        )
         mappings = rows.scalars().all()
+        norm = _normalize_path(local_path)
         for m in mappings:
             local_prefix = _normalize_path(m.local_prefix or "")
             cloud_prefix = _normalize_path(m.cloud_prefix or "")
             if not local_prefix or not cloud_prefix:
                 continue
-            norm = _normalize_path(local_path)
             if norm.startswith(local_prefix):
-                return cloud_prefix + norm[len(local_prefix):]
+                suffix = norm[len(local_prefix):]
+                cloud_path = cloud_prefix + suffix
+                logger.debug(
+                    "[redirect] PathMapping 命中: %s → %s (storage_id=%s, priority=%s)",
+                    local_path, cloud_path, m.storage_id, m.priority,
+                )
+                return cloud_path
+        logger.debug("[redirect] PathMapping 无匹配: %s", local_path)
         return ""
 
     @staticmethod
@@ -315,6 +366,45 @@ class RedirectService:
         except Exception as e:
             logger.debug("[redirect] 文件名FsCache查询异常: %s", e)
         return ""
+
+    async def _search_115_by_cloud_path(self, cloud_path: str, source: str) -> str:
+        """
+        ⭐ FsCache 无数据时的终极兜底：直接调用 115 API 搜索文件获取 pickcode。
+
+        对齐参考项目 gostrm 的 handle115PanDirectLink 逻辑：
+          - 参考项目用 pathParser 提取 relativePath，然后直接查 115 API
+          - 本项目通过 PathMapping 得到 cloud_path（等价于 relativePath）
+          - 用 cloud_path 的文件名调用 115 搜索接口，精确匹配文件名后返回 pick_code
+
+        搜索成功后 pick_code 会被上层 _resolve_by_pickcode 转换为 CDN 直链。
+        """
+        try:
+            from src.adapters.storage.p115 import P115Manager
+            manager = P115Manager()
+            if not manager.enabled:
+                logger.debug("[redirect] 115 未启用，跳过 API 搜索")
+                return ""
+
+            if not manager.ready:
+                manager.initialize()
+
+            if not manager.auth.has_cookie:
+                await self._load_cookie_from_db(manager)
+
+            if not manager.auth.has_cookie:
+                logger.warning("[redirect] 115 Cookie 未设置，无法执行 API 搜索")
+                return ""
+
+            pc = await manager.adapter.search_file_by_cloud_path(cloud_path)
+            if pc:
+                logger.info(
+                    "[redirect] ⭐ 115 API 搜索成功: cloud_path=%s → pickcode=%s (source=%s)",
+                    cloud_path, pc, source,
+                )
+            return pc
+        except Exception as e:
+            logger.error("[redirect] 115 API 搜索异常: %s (cloud_path=%s)", e, cloud_path)
+            return ""
 
     # ──────────────────────────────────────────────────────────────────────
     #  辅助：媒体服务器

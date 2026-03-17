@@ -242,6 +242,36 @@ async def create_mapping(payload: PathMappingCreate):
         return {"success": True, "id": mapping.id}
 
 
+@router.put("/mappings/{mapping_id}", dependencies=[Depends(verify_token)])
+async def update_mapping(mapping_id: int, payload: PathMappingCreate):
+    async with get_async_session_local() as db:
+        mapping = (await db.execute(
+            select(PathMapping).where(PathMapping.id == mapping_id)
+        )).scalars().first()
+        if not mapping:
+            raise HTTPException(status_code=404, detail="mapping not found")
+        mapping.storage_id   = payload.storage_id
+        mapping.local_prefix = payload.local_prefix
+        mapping.cloud_prefix = payload.cloud_prefix
+        mapping.priority     = payload.priority
+        await db.commit()
+        return {"success": True}
+
+
+@router.patch("/mappings/{mapping_id}/toggle", dependencies=[Depends(verify_token)])
+async def toggle_mapping(mapping_id: int):
+    """切换映射规则的启用/禁用状态"""
+    async with get_async_session_local() as db:
+        mapping = (await db.execute(
+            select(PathMapping).where(PathMapping.id == mapping_id)
+        )).scalars().first()
+        if not mapping:
+            raise HTTPException(status_code=404, detail="mapping not found")
+        mapping.is_active = 0 if mapping.is_active else 1
+        await db.commit()
+        return {"success": True, "is_active": mapping.is_active}
+
+
 @router.delete("/mappings/{mapping_id}", dependencies=[Depends(verify_token)])
 async def delete_mapping(mapping_id: int):
     async with get_async_session_local() as db:

@@ -273,7 +273,7 @@ export const P115 = () => {
         <Col xs={24} lg={12}>
           <Spin spinning={proxyLoading}>
             <Card
-              title={<Space><DashboardOutlined />Go 302 反代</Space>}
+              title={<Space><DashboardOutlined />{t('p115.goProxyCardTitle')}</Space>}
               extra={
                 <Button type="primary" icon={<SaveOutlined />} loading={proxySaving} onClick={handleSaveProxyConfig}>
                   {t('p115.saveConfig')}
@@ -284,8 +284,8 @@ export const P115 = () => {
               <Descriptions column={2} bordered size="small" style={{ marginBottom: 16 }}>
                 <Descriptions.Item label={t('p115.goProxyStatus')}>
                   {goStatus.running
-                    ? <Badge status="processing" text={<Tag color="success">{`Running (PID: ${goStatus.pid})`}</Tag>} />
-                    : <Badge status="default" text={<Tag color="default">Stopped</Tag>} />}
+                    ? <Badge status="processing" text={<Tag color="success">{`${t('p115.goProxyRunning')} (PID: ${goStatus.pid})`}</Tag>} />
+                    : <Badge status="default" text={<Tag color="default">{t('p115.goProxyStopped')}</Tag>} />}
                 </Descriptions.Item>
                 <Descriptions.Item label={t('p115.goProxyBinary')}>
                   {goStatus.binary_found
@@ -315,46 +315,46 @@ export const P115 = () => {
               {/* ---- 流量统计 ---- */}
               {goStatus.running && (
                 <>
-                  <Divider orientation="left" plain style={{ margin: '8px 0 12px' }}>流量统计</Divider>
+                  <Divider orientation="left" plain style={{ margin: '8px 0 12px' }}>{t('p115.goProxyTraffic')}</Divider>
                   {traffic.available ? (
                     <Row gutter={16}>
                       <Col span={12}>
                         <Statistic
-                          title="累计上行" value={traffic.total_upload || 0}
+                          title={t('p115.goProxyTrafficUp')} value={traffic.total_upload || 0}
                           prefix={<ArrowUpOutlined />} suffix="B"
                           formatter={(v) => formatTraffic(v)}
                         />
                       </Col>
                       <Col span={12}>
                         <Statistic
-                          title="累计下行" value={traffic.total_download || 0}
+                          title={t('p115.goProxyTrafficDown')} value={traffic.total_download || 0}
                           prefix={<ArrowDownOutlined />} suffix="B"
                           formatter={(v) => formatTraffic(v)}
                         />
                       </Col>
                       <Col span={12} style={{ marginTop: 12 }}>
                         <Statistic
-                          title="实时上行" value={traffic.current_upload || 0}
+                          title={t('p115.goProxyRateUp')} value={traffic.current_upload || 0}
                           prefix={<ArrowUpOutlined style={{ color: '#52c41a' }} />}
                           formatter={(v) => `${formatTraffic(v)}/s`}
                         />
                       </Col>
                       <Col span={12} style={{ marginTop: 12 }}>
                         <Statistic
-                          title="实时下行" value={traffic.current_download || 0}
+                          title={t('p115.goProxyRateDown')} value={traffic.current_download || 0}
                           prefix={<ArrowDownOutlined style={{ color: '#1677ff' }} />}
                           formatter={(v) => `${formatTraffic(v)}/s`}
                         />
                       </Col>
                     </Row>
                   ) : (
-                    <Alert type="info" showIcon message={traffic.message || 'Go 反代暂不支持流量统计'} />
+                    <Alert type="info" showIcon message={traffic.message || t('p115.goProxyNoTraffic')} />
                   )}
                 </>
               )}
 
               {/* ---- 配置表单 ---- */}
-              <Divider orientation="left" plain style={{ margin: '16px 0 12px' }}>反代配置</Divider>
+              <Divider orientation="left" plain style={{ margin: '16px 0 12px' }}>{t('p115.goProxyConfig')}</Divider>
               <Alert message={t('p115.configReadonly')} type="info" showIcon style={{ marginBottom: 16 }} />
               <Form form={proxyForm} layout="vertical" size="small">
                 <Form.Item name="go_port" label={t('p115.goPort')}>

@@ -141,19 +141,65 @@ class StrmService:
         if mode == "proxy" and external_url:
             # 302 代理模式 — 指向 Go 反代
             return f"{external_url}/emby/videos/{item.item_id}/stream?static=true"
+
         elif mode == "direct":
             # 直接路径模式
             return item.file_path
+
         elif mode == "p115" and item.pick_code:
-            # 115 直链模式 — 指向 Python API 解析
-            py_url = external_url or f"http://127.0.0.1:{settings.server.port}"
-            return f"{py_url}/internal/resolve-link?item_id={item.item_id}"
+            # ⭐ 115 直链模式 — STRM 直接指向 Go 代理 /p115/play/<pick_code>/<filename>
+            # Go 代理收到后: 查缓存 → 未命中调 Python 获取直链 → 302 到 115 CDN
+            link_host = self._get_strm_link_host() or external_url
+            if not link_host:
+                link_host = f"http://127.0.0.1:{settings.server.go_port}"
+            link_host = link_host.rstrip("/")
+            # 用文件名（不含路径）作为 URL 尾部，便于播放器识别格式
+            from pathlib import Path as _Path
+            filename = _Path(item.file_path).name if item.file_path else f"{item.item_id}.mkv"
+            return f"{link_host}/p115/play/{item.pick_code}/{filename}"
+
         elif mode == "p115_path":
             # 115 本地路径模式
             return item.file_path
+
         else:
             # 默认使用文件路径
             return item.file_path
+
+    @staticmethod
+    def _get_strm_link_host() -> str:
+        """
+        从数据库读取 p115_settings 中的 strm_link_host。
+        这是用户在 115 设置页面配置的"STRM 链接地址"（Go 反代对外访问地址）。
+        """
+        import asyncio, json as _json
+
+        async def _fetch() -> str:
+            from sqlalchemy import select as _select
+            from src.db import get_async_session_local as _get_sess
+            from src.db.models.system import SystemConfig as _SC
+            try:
+                async with _get_sess() as db:
+                    row = await db.execute(
+                        _select(_SC).where(_SC.key == "p115_settings")
+                    )
+                    cfg = row.scalars().first()
+                    if cfg and cfg.value:
+                        data = _json.loads(cfg.value)
+                        return (data.get("strm_link_host") or "").strip().rstrip("/")
+            except Exception:
+                pass
+            return ""
+
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # 异步上下文中用 run_coroutine_threadsafe 或直接返回空（由调用方处理）
+                # 此处退化：返回空，让调用方使用 external_url / go_port 兜底
+                return ""
+            return loop.run_until_complete(_fetch())
+        except Exception:
+            return ""
 
     async def get_task_status(self, task_id: int) -> dict:
         """获取任务状态"""
