@@ -29,14 +29,14 @@ func Setup(cfg *config.Config, cm *cache.Manager) *gin.Engine {
 		r.Use(middleware.ClientFilter(cfg.Security.UABlacklist))
 	}
 
-	// Python 客户端
+	// Python 客户端（共享，所有 handler 统一使用）
 	pyClient := service.NewPythonClient(cfg)
 
 	// 处理器
 	redirectHandler := handler.NewRedirectHandler(cfg, cm, pyClient)
 	proxyHandler := handler.NewProxyHandler(cfg)
 	wsHandler := handler.NewWSHandler(cfg)
-	p115Handler := handler.NewP115PlayHandler(cfg, cm)
+	p115Handler := handler.NewP115PlayHandler(cfg, cm, pyClient) // ⭐ 传入共享 pyClient
 
 	// ===== ⭐ 115 直链播放路由 =====
 	// STRM 内容: http://<go_proxy>:8888/p115/play/<pick_code>/<filename>

@@ -134,11 +134,14 @@ app.add_middleware(
 )
 
 # Routes
-from src.api.v1 import v1_router       # noqa: E402
-from src.api.internal import internal_router  # noqa: E402
+from src.api.v1 import v1_router                   # noqa: E402
+from src.api.internal import internal_router        # noqa: E402
+from src.api.redirect_url import router as redirect_url_router  # noqa: E402
 
 app.include_router(v1_router)
 app.include_router(internal_router)
+# ⭐ redirect_url 同时挂根路径，STRM 可直接写 http://host/redirect_url?pickcode=xxx
+app.include_router(redirect_url_router)
 
 # Static files (production build)
 _web_dist = Path(__file__).parent.parent / "web" / "dist"
