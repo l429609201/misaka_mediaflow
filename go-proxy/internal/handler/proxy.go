@@ -129,13 +129,16 @@ func NewProxyHandler(cfg *config.Config, pyClient *service.PythonClient) *ProxyH
 		}
 
 		// ⭐ 对需要 patch 的响应，去掉 Accept-Encoding
-		// 让 Go Transport 自动用 gzip 并自动解压，确保 ModifyResponse 收到纯文本
-		// 否则浏览器发 Accept-Encoding: br,gzip → Emby 返回 Brotli → 我们无法解压替换
-		// 需要处理的文件：
-		//   - htmlvideoplayer JS（crossOrigin patch）
-		//   - HTML 页面（crossOrigin 拦截脚本注入）
-		//   - PlaybackInfo API（STRM 强制 DirectPlay）
-		if isHtmlPlayerJS(req.URL.Path) || isHtmlPageRequest(req) || strings.HasSuffix(req.URL.Path, "/PlaybackInfo") {
+		// 让 Emby 返回未压缩的响应，确保 ModifyResponse 能读取和修改
+		// 否则浏览器发 Accept-Encoding: br,gzip → Emby 返回 Brotli → Go 无法解压
+		//
+		// 判断条件：路径匹配（不依赖 Accept 头，因为 Accept 头可能不存在或不准确）
+		needsPatch := isHtmlPlayerJS(req.URL.Path) ||
+			strings.HasSuffix(req.URL.Path, "/PlaybackInfo") ||
+			req.URL.Path == "/" || req.URL.Path == "" ||
+			strings.HasPrefix(req.URL.Path, "/web/") || req.URL.Path == "/web" ||
+			strings.HasSuffix(req.URL.Path, ".html") || strings.HasSuffix(req.URL.Path, ".htm")
+		if needsPatch {
 			req.Header.Del("Accept-Encoding")
 		}
 	}
@@ -166,23 +169,28 @@ func NewProxyHandler(cfg *config.Config, pyClient *service.PythonClient) *ProxyH
 // modifyResponse 统一拦截 Emby 响应，根据路径分发到不同的 patch 逻辑
 func (h *ProxyHandler) modifyResponse(resp *http.Response) error {
 	path := resp.Request.URL.Path
+	ct := resp.Header.Get("Content-Type")
+	encoding := resp.Header.Get("Content-Encoding")
+
+	// ⭐ 对所有 text/html 和 JS 请求打日志，方便排查
+	if strings.Contains(ct, "text/html") || isHtmlPlayerJS(path) || strings.HasSuffix(path, "/PlaybackInfo") {
+		log.Printf("[ModifyResponse] path=%s status=%d Content-Type=%q Content-Encoding=%q", path, resp.StatusCode, ct, encoding)
+	}
 
 	// PlaybackInfo → 强制 DirectPlay（阻止 STRM 文件被转码）
 	if strings.HasSuffix(path, "/PlaybackInfo") {
-		log.Printf("[ModifyResponse] 拦截 PlaybackInfo: %s (status=%d)", path, resp.StatusCode)
 		return h.patchPlaybackInfo(resp)
 	}
 
 	// htmlvideoplayer JS → crossOrigin patch（第1层防御：源码级替换）
 	if isHtmlPlayerJS(path) {
-		log.Printf("[ModifyResponse] 拦截 HtmlPlayerJS: %s", path)
+		log.Printf("[ModifyResponse] ✅ 拦截 HtmlPlayerJS: %s", path)
 		return h.patchHtmlPlayerJS(resp)
 	}
 
 	// HTML 页面 → 注入 crossOrigin 运行时拦截脚本（第2层防御：运行时兜底）
-	ct := resp.Header.Get("Content-Type")
 	if strings.Contains(ct, "text/html") && resp.StatusCode == http.StatusOK {
-		log.Printf("[ModifyResponse] 拦截 HTML 页面: %s (Content-Type=%s)", path, ct)
+		log.Printf("[ModifyResponse] ✅ 拦截 HTML 页面: %s", path)
 		return h.patchHtmlPage(resp)
 	}
 
