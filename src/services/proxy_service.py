@@ -149,10 +149,17 @@ class ProxyService:
     ) -> tuple[str, int]:
         """
         尝试用 115 页面配置的 local_media_prefix / media_prefix 剥离本地挂载前缀，
-        得到 115 云端路径。
+        再拼接 cloud_prefix，得到 115 云端路径。
 
         当 PathMapping 表为空或未命中时，回退到 115 配置页面的路径设置。
         返回 (cloud_path, 0) 或 ("", 0)。
+
+        示例:
+          local_media_prefix = /cd2/115open/影音
+          cloud_prefix       = /影音
+          file_path          = /cd2/115open/影音/R18/xxx.mp4
+          → 剥离本地前缀 → /R18/xxx.mp4
+          → 拼接云端前缀 → /影音/R18/xxx.mp4  ✅
         """
         try:
             import json as _json
@@ -163,6 +170,9 @@ class ProxyService:
             if not cfg or not cfg.value:
                 return ("", 0)
             data = _json.loads(cfg.value)
+
+            # 云端路径前缀（拼接用）
+            cloud_prefix = data.get("cloud_prefix", "").strip().rstrip("/")
 
             # 优先用 local_media_prefix（本地媒体路径），其次用 media_prefix（挂载路径）
             prefixes_to_try = []
@@ -175,14 +185,17 @@ class ProxyService:
 
             for prefix in prefixes_to_try:
                 if prefix and file_path.startswith(prefix):
-                    # 剥离本地挂载前缀，剩余部分即为 115 云端路径
-                    # 例: /cd2/115open/影音/R18/xxx.mp4 → /影音/R18/xxx.mp4
-                    cloud_path = file_path[len(prefix):]
+                    # 1. 剥离本地挂载前缀，得到相对路径
+                    relative = file_path[len(prefix):]
+                    if not relative.startswith("/"):
+                        relative = "/" + relative
+                    # 2. 拼接云端前缀，还原完整云端路径
+                    cloud_path = (cloud_prefix + relative) if cloud_prefix else relative
                     if not cloud_path.startswith("/"):
                         cloud_path = "/" + cloud_path
                     logger.info(
-                        "115路径配置命中: %s → %s (剥离前缀=%s)",
-                        file_path, cloud_path, prefix,
+                        "115路径配置命中: %s → %s (本地前缀=%s, 云端前缀=%s)",
+                        file_path, cloud_path, prefix, cloud_prefix or "/",
                     )
                     return (cloud_path, 0)
         except Exception as e:
