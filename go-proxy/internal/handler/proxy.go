@@ -101,7 +101,8 @@ type ProxyHandler struct {
 func NewProxyHandler(cfg *config.Config, pyClient *service.PythonClient) *ProxyHandler {
 	target, err := url.Parse(cfg.MediaServer.Host)
 	if err != nil {
-		log.Fatalf("MediaServer.Host 解析失败: %v", err)
+		logger.Errorf("MediaServer.Host 解析失败: %v", err)
+		panic("MediaServer.Host 解析失败")
 	}
 
 	rp := httputil.NewSingleHostReverseProxy(target)
