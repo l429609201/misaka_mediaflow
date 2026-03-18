@@ -99,6 +99,99 @@ const seekThrottleTpl = `
 })();
 `
 
+// directUrlTpl 注入到 plugin.js 末尾的"直链直出"脚本。
+// 拦截 <video>/<audio> 元素的 src 设置，当检测到 Emby 的 stream URL 时，
+// 先通过 directurl API 获取 CDN 直链，直接设为 src。
+// 效果：后续所有 Range 请求直连 CDN（复用 Keep-Alive），不再每次走 302。
+//
+// 工作流程：
+//   1. Emby 设置 video.src = "/emby/videos/7579/stream?api_key=xxx"
+//   2. 脚本拦截 → fetch /emby/videos/7579/directurl?api_key=xxx → 获取 CDN URL
+//   3. 直接设 video.src = "https://115cdn.com/..." → 浏览器直连 CDN
+//   4. 如果 fetch 失败 → 自动回退到原始 302 URL
+const directUrlTpl = `
+;(function(){
+  var TAG = '[Misaka]';
+  var proto = HTMLMediaElement.prototype;
+  var srcDesc = Object.getOwnPropertyDescriptor(proto, 'src');
+  if (!srcDesc || !srcDesc.set) { console.warn(TAG + ' src descriptor not found'); return; }
+  var origSrcSet = srcDesc.set;
+  var origSrcGet = srcDesc.get;
+
+  // 匹配 /emby/videos/{id}/stream 或 /Videos/{id}/stream（含可选后缀 .mkv 等）
+  var streamRe = /\/(?:emby\/)?(?:videos|Videos|audio|Audio)\/(\d+)\/(?:stream|original)(?:\.\w+)?/;
+
+  // 替换 stream/original 为 directurl
+  function toResolveUrl(url) {
+    try {
+      var u = new URL(url, location.origin);
+      u.pathname = u.pathname.replace(/\/(stream|original)(\.\w+)?$/, '/directurl');
+      return u.toString();
+    } catch(e) { return ''; }
+  }
+
+  var origPlay = proto.play;
+
+  // hook play()：如果正在 resolve 直链，等待完成后再 play
+  proto.play = function() {
+    var self = this;
+    if (self._mskResolving) {
+      return new Promise(function(resolve, reject) {
+        var t = setInterval(function() {
+          if (!self._mskResolving) {
+            clearInterval(t);
+            origPlay.call(self).then(resolve, reject);
+          }
+        }, 50);
+        // 超时 5 秒自动放行
+        setTimeout(function() { clearInterval(t); if (self._mskResolving) { self._mskResolving = false; origPlay.call(self).then(resolve, reject); } }, 5000);
+      });
+    }
+    return origPlay.call(self);
+  };
+
+  Object.defineProperty(proto, 'src', {
+    get: function() { return origSrcGet.call(this); },
+    set: function(url) {
+      var self = this;
+      if (!url || typeof url !== 'string') { origSrcSet.call(self, url); return; }
+
+      var m = streamRe.exec(url);
+      if (!m) { origSrcSet.call(self, url); return; }
+
+      var itemId = m[1];
+      var resolveUrl = toResolveUrl(url);
+      if (!resolveUrl) { origSrcSet.call(self, url); return; }
+
+      self._mskResolving = true;
+      console.log(TAG + ' 直链解析: itemId=' + itemId);
+
+      fetch(resolveUrl)
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          self._mskResolving = false;
+          if (data && data.url) {
+            console.log(TAG + ' 直链直出 ✓ itemId=' + itemId);
+            origSrcSet.call(self, data.url);
+          } else {
+            console.warn(TAG + ' 直链为空, 回退302: itemId=' + itemId);
+            origSrcSet.call(self, url);
+          }
+        })
+        .catch(function(err) {
+          self._mskResolving = false;
+          console.warn(TAG + ' 直链异常, 回退302: ' + err);
+          origSrcSet.call(self, url);
+        });
+    },
+    configurable: true,
+    enumerable: true
+  });
+
+  console.log(TAG + ' 直链直出: video.src hook 已启用');
+})();
+`
+
 // ProxyHandler 透传处理器
 type ProxyHandler struct {
 	cfg          *config.Config
@@ -262,7 +355,7 @@ func (h *ProxyHandler) patchHtmlPlayerJS(resp *http.Response) error {
 		log.Printf("✅ %s crossOrigin patch 完成 (原始=%d bytes, patch后=%d bytes)", fileName, len(original), len(patched))
 	}
 
-	// ==================== seek 防抖脚本（只在 plugin.js 中注入） ====================
+	// ==================== seek 防抖 + 直链直出脚本（只在 plugin.js 中注入） ====================
 	// basehtmlplayer.js 不需要注入，只需要一份
 	if !isBasePlayer {
 		intervalSec := h.pyClient.GetAPIInterval()
@@ -270,6 +363,10 @@ func (h *ProxyHandler) patchHtmlPlayerJS(resp *http.Response) error {
 		seekJS := fmt.Sprintf(seekThrottleTpl, intervalMs)
 		patched += seekJS
 		log.Printf("✅ %s 已注入 seek 防抖脚本 (minInterval=%dms, 来自 api_interval=%.1fs)", fileName, intervalMs, intervalSec)
+
+		// ⭐ 直链直出：hook video.src，让浏览器直连 CDN 而非每次走 302
+		patched += directUrlTpl
+		log.Printf("✅ %s 已注入直链直出脚本 (video.src hook)", fileName)
 	}
 
 	// ==================== 写回响应 ====================
