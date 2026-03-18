@@ -39,10 +39,19 @@ func Setup(cfg *config.Config) *gin.Engine {
 	wsHandler := handler.NewWSHandler(cfg)
 	p115Handler := handler.NewP115PlayHandler(cfg, pyClient)
 
+	// ⭐ 302 请求节流器（防止 Web UI 并行 Range 请求导致 115 CDN 限流）
+	throttler := middleware.NewRedirectThrottler()
+	itemThrottle := throttler.Throttle(func(c *gin.Context) string {
+		return c.Param("itemId")
+	})
+	pickCodeThrottle := throttler.Throttle(func(c *gin.Context) string {
+		return c.Param("pickCode")
+	})
+
 	// ===== ⭐ 115 直链播放路由 =====
 	// STRM 内容: http://<go_proxy>:8888/p115/play/<pick_code>/<filename>
-	r.GET("/p115/play/:pickCode/*filename", p115Handler.HandlePlay)
-	r.HEAD("/p115/play/:pickCode/*filename", p115Handler.HandlePlay)
+	r.GET("/p115/play/:pickCode/*filename", pickCodeThrottle, p115Handler.HandlePlay)
+	r.HEAD("/p115/play/:pickCode/*filename", pickCodeThrottle, p115Handler.HandlePlay)
 
 	// ===== Emby 拦截路由（需要 API Key 认证）=====
 	embyGroup := r.Group("/emby")
@@ -50,30 +59,30 @@ func Setup(cfg *config.Config) *gin.Engine {
 	{
 		// 视频流（同时注册大小写路径，Emby Web 前端用大写 /Videos/）
 		for _, prefix := range []string{"/videos", "/Videos"} {
-			embyGroup.GET(prefix+"/:itemId/stream", redirectHandler.HandleVideoStream)
-			embyGroup.GET(prefix+"/:itemId/stream.:format", redirectHandler.HandleVideoStream)
-			embyGroup.HEAD(prefix+"/:itemId/stream", redirectHandler.HandleVideoStream)
-			embyGroup.HEAD(prefix+"/:itemId/stream.:format", redirectHandler.HandleVideoStream)
+			embyGroup.GET(prefix+"/:itemId/stream", itemThrottle, redirectHandler.HandleVideoStream)
+			embyGroup.GET(prefix+"/:itemId/stream.:format", itemThrottle, redirectHandler.HandleVideoStream)
+			embyGroup.HEAD(prefix+"/:itemId/stream", itemThrottle, redirectHandler.HandleVideoStream)
+			embyGroup.HEAD(prefix+"/:itemId/stream.:format", itemThrottle, redirectHandler.HandleVideoStream)
 
 			// 原始文件
-			embyGroup.GET(prefix+"/:itemId/original", redirectHandler.HandleVideoStream)
-			embyGroup.GET(prefix+"/:itemId/original.:format", redirectHandler.HandleVideoStream)
-			embyGroup.HEAD(prefix+"/:itemId/original", redirectHandler.HandleVideoStream)
-			embyGroup.HEAD(prefix+"/:itemId/original.:format", redirectHandler.HandleVideoStream)
+			embyGroup.GET(prefix+"/:itemId/original", itemThrottle, redirectHandler.HandleVideoStream)
+			embyGroup.GET(prefix+"/:itemId/original.:format", itemThrottle, redirectHandler.HandleVideoStream)
+			embyGroup.HEAD(prefix+"/:itemId/original", itemThrottle, redirectHandler.HandleVideoStream)
+			embyGroup.HEAD(prefix+"/:itemId/original.:format", itemThrottle, redirectHandler.HandleVideoStream)
 		}
 
 		// 音频流
 		for _, prefix := range []string{"/audio", "/Audio"} {
-			embyGroup.GET(prefix+"/:itemId/stream", redirectHandler.HandleVideoStream)
-			embyGroup.GET(prefix+"/:itemId/stream.:format", redirectHandler.HandleVideoStream)
-			embyGroup.HEAD(prefix+"/:itemId/stream", redirectHandler.HandleVideoStream)
-			embyGroup.HEAD(prefix+"/:itemId/stream.:format", redirectHandler.HandleVideoStream)
+			embyGroup.GET(prefix+"/:itemId/stream", itemThrottle, redirectHandler.HandleVideoStream)
+			embyGroup.GET(prefix+"/:itemId/stream.:format", itemThrottle, redirectHandler.HandleVideoStream)
+			embyGroup.HEAD(prefix+"/:itemId/stream", itemThrottle, redirectHandler.HandleVideoStream)
+			embyGroup.HEAD(prefix+"/:itemId/stream.:format", itemThrottle, redirectHandler.HandleVideoStream)
 		}
 
 		// 下载
 		for _, prefix := range []string{"/items", "/Items"} {
-			embyGroup.GET(prefix+"/:itemId/Download", redirectHandler.HandleVideoStream)
-			embyGroup.HEAD(prefix+"/:itemId/Download", redirectHandler.HandleVideoStream)
+			embyGroup.GET(prefix+"/:itemId/Download", itemThrottle, redirectHandler.HandleVideoStream)
+			embyGroup.HEAD(prefix+"/:itemId/Download", itemThrottle, redirectHandler.HandleVideoStream)
 		}
 	}
 
@@ -83,30 +92,30 @@ func Setup(cfg *config.Config) *gin.Engine {
 	{
 		// 视频流
 		for _, prefix := range []string{"/videos", "/Videos"} {
-			jellyGroup.GET(prefix+"/:itemId/stream", redirectHandler.HandleVideoStream)
-			jellyGroup.GET(prefix+"/:itemId/stream.:format", redirectHandler.HandleVideoStream)
-			jellyGroup.HEAD(prefix+"/:itemId/stream", redirectHandler.HandleVideoStream)
-			jellyGroup.HEAD(prefix+"/:itemId/stream.:format", redirectHandler.HandleVideoStream)
+			jellyGroup.GET(prefix+"/:itemId/stream", itemThrottle, redirectHandler.HandleVideoStream)
+			jellyGroup.GET(prefix+"/:itemId/stream.:format", itemThrottle, redirectHandler.HandleVideoStream)
+			jellyGroup.HEAD(prefix+"/:itemId/stream", itemThrottle, redirectHandler.HandleVideoStream)
+			jellyGroup.HEAD(prefix+"/:itemId/stream.:format", itemThrottle, redirectHandler.HandleVideoStream)
 
 			// 原始文件
-			jellyGroup.GET(prefix+"/:itemId/original", redirectHandler.HandleVideoStream)
-			jellyGroup.GET(prefix+"/:itemId/original.:format", redirectHandler.HandleVideoStream)
-			jellyGroup.HEAD(prefix+"/:itemId/original", redirectHandler.HandleVideoStream)
-			jellyGroup.HEAD(prefix+"/:itemId/original.:format", redirectHandler.HandleVideoStream)
+			jellyGroup.GET(prefix+"/:itemId/original", itemThrottle, redirectHandler.HandleVideoStream)
+			jellyGroup.GET(prefix+"/:itemId/original.:format", itemThrottle, redirectHandler.HandleVideoStream)
+			jellyGroup.HEAD(prefix+"/:itemId/original", itemThrottle, redirectHandler.HandleVideoStream)
+			jellyGroup.HEAD(prefix+"/:itemId/original.:format", itemThrottle, redirectHandler.HandleVideoStream)
 		}
 
 		// 音频流
 		for _, prefix := range []string{"/audio", "/Audio"} {
-			jellyGroup.GET(prefix+"/:itemId/stream", redirectHandler.HandleVideoStream)
-			jellyGroup.GET(prefix+"/:itemId/stream.:format", redirectHandler.HandleVideoStream)
-			jellyGroup.HEAD(prefix+"/:itemId/stream", redirectHandler.HandleVideoStream)
-			jellyGroup.HEAD(prefix+"/:itemId/stream.:format", redirectHandler.HandleVideoStream)
+			jellyGroup.GET(prefix+"/:itemId/stream", itemThrottle, redirectHandler.HandleVideoStream)
+			jellyGroup.GET(prefix+"/:itemId/stream.:format", itemThrottle, redirectHandler.HandleVideoStream)
+			jellyGroup.HEAD(prefix+"/:itemId/stream", itemThrottle, redirectHandler.HandleVideoStream)
+			jellyGroup.HEAD(prefix+"/:itemId/stream.:format", itemThrottle, redirectHandler.HandleVideoStream)
 		}
 
 		// 下载
 		for _, prefix := range []string{"/items", "/Items"} {
-			jellyGroup.GET(prefix+"/:itemId/Download", redirectHandler.HandleVideoStream)
-			jellyGroup.HEAD(prefix+"/:itemId/Download", redirectHandler.HandleVideoStream)
+			jellyGroup.GET(prefix+"/:itemId/Download", itemThrottle, redirectHandler.HandleVideoStream)
+			jellyGroup.HEAD(prefix+"/:itemId/Download", itemThrottle, redirectHandler.HandleVideoStream)
 		}
 	}
 
