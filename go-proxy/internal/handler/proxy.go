@@ -205,11 +205,13 @@ func isHtmlPageRequest(req *http.Request) bool {
 
 	// 根路径
 	if path == "/" || path == "" {
+		log.Printf("[isHtmlPageRequest] ✅ 匹配根路径: path=%q", path)
 		return true
 	}
 
 	// /web/ 相关路径
 	if strings.HasPrefix(path, "/web/") || path == "/web" {
+		log.Printf("[isHtmlPageRequest] ✅ 匹配 /web/ 路径: path=%q", path)
 		return true
 	}
 
@@ -225,11 +227,13 @@ func isHtmlPageRequest(req *http.Request) bool {
 		lastPart = path[lastSlash:]
 	}
 	if !strings.Contains(lastPart, ".") {
+		log.Printf("[isHtmlPageRequest] ✅ 匹配无扩展名路径(SPA): path=%q", path)
 		return true
 	}
 
 	// .html 文件
 	if strings.HasSuffix(path, ".html") || strings.HasSuffix(path, ".htm") {
+		log.Printf("[isHtmlPageRequest] ✅ 匹配 .html 文件: path=%q", path)
 		return true
 	}
 
@@ -247,13 +251,23 @@ func isHtmlPageRequest(req *http.Request) bool {
 //   - 效果: <video> 永远不会有 crossorigin 属性
 //   - 浏览器以 no-cors 模式请求 → 302 到 115 CDN 后不做 CORS 检查
 func (h *ProxyHandler) patchHtmlPage(resp *http.Response) error {
-	// 读取响应体（处理 gzip）
+	path := resp.Request.URL.Path
 	encoding := resp.Header.Get("Content-Encoding")
+	log.Printf("[HTML注入] 开始处理: path=%s, Content-Encoding=%q, Status=%d", path, encoding, resp.StatusCode)
+
+	// 如果是 Brotli 等不支持的编码，跳过（应该不会出现，因为 Director 已删 Accept-Encoding）
+	if encoding != "" && !strings.Contains(encoding, "gzip") {
+		log.Printf("⚠️ [HTML注入] 不支持的编码 %q，跳过注入 (path=%s)", encoding, path)
+		return nil
+	}
+
+	// 读取响应体（处理 gzip）
 	isGzip := strings.Contains(encoding, "gzip")
 	var bodyReader io.Reader = resp.Body
 	if isGzip {
 		gr, err := gzip.NewReader(resp.Body)
 		if err != nil {
+			log.Printf("❌ [HTML注入] gzip 解压失败: %v (path=%s)", err, path)
 			return nil
 		}
 		defer gr.Close()
@@ -263,13 +277,17 @@ func (h *ProxyHandler) patchHtmlPage(resp *http.Response) error {
 	body, err := io.ReadAll(bodyReader)
 	resp.Body.Close()
 	if err != nil {
+		log.Printf("❌ [HTML注入] 读取 body 失败: %v (path=%s)", err, path)
 		return nil
 	}
 
 	html := string(body)
+	log.Printf("[HTML注入] body 读取成功: %d bytes, 包含</head>=%v (path=%s)",
+		len(body), strings.Contains(html, "</head>"), path)
 
 	// 避免重复注入（如果已经有我们的标识就跳过）
 	if strings.Contains(html, "[MisakaF] crossOrigin") {
+		log.Printf("[HTML注入] 已有注入标识，跳过 (path=%s)", path)
 		resp.Body = io.NopCloser(bytes.NewReader(body))
 		return nil
 	}
@@ -287,8 +305,13 @@ func (h *ProxyHandler) patchHtmlPage(resp *http.Response) error {
 	}
 
 	if injected {
-		log.Printf("✅ HTML 页面注入 crossOrigin 拦截脚本 (path=%s, 原始=%d bytes)",
-			resp.Request.URL.Path, len(body))
+		log.Printf("✅ [HTML注入] 成功! path=%s, 原始=%d bytes, 注入后=%d bytes", path, len(body), len(html))
+	} else {
+		bodyPreview := html
+		if len(bodyPreview) > 200 {
+			bodyPreview = bodyPreview[:200]
+		}
+		log.Printf("❌ [HTML注入] 未找到 <head>/<head> 标签，注入失败 (path=%s, body前200字符=%q)", path, bodyPreview)
 	}
 
 	// 写回响应
