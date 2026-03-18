@@ -128,24 +128,6 @@ func NewProxyHandler(cfg *config.Config, pyClient *service.PythonClient) *ProxyH
 			req.Header.Set("Authorization", origAuth)
 		}
 
-		// ⭐ PlaybackInfo 请求侧 patch：修改 DeviceProfile，声明支持所有视频格式
-		// 原因：浏览器的 DeviceProfile 只包含 H.264 等原生支持的格式，
-		// Emby 服务端看到 HEVC/x265 不在列表里就会生成 TranscodingUrl 走 HLS。
-		// 在这里把 DeviceProfile 改成全格式支持，让服务端直接返回 SupportsDirectPlay=true。
-		if req.Method == "POST" && strings.HasSuffix(req.URL.Path, "/PlaybackInfo") && req.Body != nil {
-			if origBody, err := io.ReadAll(req.Body); err == nil {
-				req.Body.Close()
-				if patched, ok := patchDeviceProfile(origBody); ok {
-					req.Body = io.NopCloser(bytes.NewReader(patched))
-					req.ContentLength = int64(len(patched))
-					req.Header.Set("Content-Length", strconv.Itoa(len(patched)))
-					logger.Infof("[PlaybackInfo] DeviceProfile 已注入全格式支持")
-				} else {
-					req.Body = io.NopCloser(bytes.NewReader(origBody))
-				}
-			}
-		}
-
 		// ⭐ 对需要 patch 的响应，去掉 Accept-Encoding
 		// 让 Emby 返回未压缩的响应，确保 ModifyResponse 能读取和修改
 		// 否则浏览器发 Accept-Encoding: br,gzip → Emby 返回 Brotli → Go 无法解压
@@ -646,26 +628,6 @@ func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 		delete(source, "TranscodingUrl")
 		delete(source, "TranscodingContainer")
 		delete(source, "TranscodingSubProtocol")
-
-		// ⭐ 修改 Container + MediaStreams Codec，骗过 Emby Web 客户端的格式兼容性检查
-		// 问题：即使服务端返回 SupportsDirectPlay=true，Emby Web 自身还会在客户端
-		//       调用 canDirectPlay() 检查格式（Container/Codec），
-		//       Chrome 不支持 HEVC/x265，canDirectPlay() 返回 false → 走 HLS
-		// 方案：把 Container 改成 mp4（浏览器通用），把视频流 Codec 改成 h264，
-		//       让客户端检查通过 → 走 DirectPlay → 请求 /stream → 我们302到直链
-		source["Container"] = "mp4"
-		if streams, ok := source["MediaStreams"].([]interface{}); ok {
-			for _, s := range streams {
-				stream, ok := s.(map[string]interface{})
-				if !ok {
-					continue
-				}
-				if t, _ := stream["Type"].(string); t == "Video" {
-					stream["Codec"] = "h264"
-					stream["IsAVC"] = true
-				}
-			}
-		}
 	}
 
 	// 重新序列化
@@ -684,43 +646,3 @@ func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 
 	return nil
 }
-
-// patchDeviceProfile 修改 PlaybackInfo POST 请求体里的 DeviceProfile，
-// 注入全格式支持，让 Emby 服务端认为浏览器支持 HEVC/AV1 等格式，
-// 从而在服务端就返回 SupportsDirectPlay=true，不生成 TranscodingUrl。
-func patchDeviceProfile(body []byte) ([]byte, bool) {
-	var payload map[string]interface{}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, false
-	}
-	dp, ok := payload["DeviceProfile"].(map[string]interface{})
-	if !ok {
-		return nil, false
-	}
-
-	// 覆盖码率上限（防止高码率视频因为超出限制被强制转码）
-	dp["MaxStreamingBitrate"] = 2147483647
-	dp["MaxStaticBitrate"] = 2147483647
-	dp["MusicStreamingTranscodingBitrate"] = 2147483647
-
-	// 覆盖 DirectPlayProfiles：声明支持所有常见容器和编解码器
-	dp["DirectPlayProfiles"] = []map[string]interface{}{
-		{
-			"Type":       "Video",
-			"Container":  "mp4,m4v,mov,mkv,webm,ts,mpegts,avi,wmv,asf,m2ts,mts,vob,3gp,flv,rm,rmvb,mpeg,m2v",
-			"VideoCodec": "h264,hevc,h265,av1,vp8,vp9,mpeg4,mpeg2video,vc1,wmv3",
-			"AudioCodec": "aac,mp3,ac3,eac3,dts,opus,vorbis,flac,alac,pcm_s16le,pcm_s24le,truehd,wma",
-		},
-		{
-			"Type":      "Audio",
-			"Container": "mp4,m4a,mp3,flac,ogg,opus,wav,aac,wma",
-		},
-	}
-
-	newBody, err := json.Marshal(payload)
-	if err != nil {
-		return nil, false
-	}
-	return newBody, true
-}
-
