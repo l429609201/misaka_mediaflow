@@ -4,6 +4,7 @@
 package handler
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -14,6 +15,13 @@ import (
 
 	"github.com/mediaflow/go-proxy/internal/config"
 	"github.com/mediaflow/go-proxy/internal/service"
+)
+
+const (
+	// 302 缓存上限（秒）：即使 CDN 直链有效期更长，浏览器也最多缓存这么久
+	redirectCacheMaxSec     = 600
+	// 当 Python 端未返回 expires_in 时的默认缓存时长
+	redirectCacheDefaultSec = 300
 )
 
 // RedirectHandler 302 重定向处理器
@@ -62,6 +70,13 @@ func (h *RedirectHandler) HandleVideoStream(c *gin.Context) {
 		urlSnippet = urlSnippet[:80] + "..."
 	}
 	log.Printf("302 重定向: %s → %s (source=%s)", itemID, urlSnippet, result.Source)
+
+	// 让浏览器缓存此 302，后续 Range 请求直接跳转到 CDN，不再回 go-proxy
+	age := redirectCacheDefaultSec
+	if result.ExpiresIn > 0 && result.ExpiresIn < redirectCacheMaxSec {
+		age = result.ExpiresIn
+	}
+	c.Header("Cache-Control", fmt.Sprintf("public, max-age=%d", age))
 	c.Redirect(http.StatusFound, result.URL)
 }
 

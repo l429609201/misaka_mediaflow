@@ -4,6 +4,7 @@
 package handler
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 
@@ -56,6 +57,12 @@ func (h *P115PlayHandler) HandlePlay(c *gin.Context) {
 		urlSnippet = urlSnippet[:80] + "..."
 	}
 	log.Printf("[115] 302 重定向: %s → %s (source=%s)", pickCode, urlSnippet, result.Source)
+
+	age := redirectCacheDefaultSec
+	if result.ExpiresIn > 0 && result.ExpiresIn < redirectCacheMaxSec {
+		age = result.ExpiresIn
+	}
+	c.Header("Cache-Control", fmt.Sprintf("public, max-age=%d", age))
 	c.Redirect(http.StatusFound, result.URL)
 }
 
