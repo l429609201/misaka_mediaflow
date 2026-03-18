@@ -2,48 +2,66 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Ant Design 全局样式适配 */
+/* ── CSS 变量默认值（由 ThemeProvider useEffect 实时覆盖）────────────── */
+:root {
+  --color-bg:             #f5f7fa;
+  --color-card:           #ffffff;
+  --color-header:         #ffffff;
+  --color-hover:          #f0f5ff;
+  --color-text:           #333333;
+  --color-border:         #d6e4ff;
+  --color-border-sec:     #bae0ff;
+  --color-hover-bg:       rgba(22, 119, 255, 0.06);
+  --color-shadow:         rgba(22, 119, 255, 0.15);
+  --color-primary:        #1677ff;
+  --color-primary-hover:  #4096ff;
+  --color-primary-active: #0958d9;
+}
+
+/* ── 全局基础 ────────────────────────────────────────────────────────── */
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
-  transition: background-color 0.3s, color 0.3s;
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  transition: background-color 0.25s, color 0.25s;
 }
 
-/* 暗色模式全局背景 */
+/* ── 暗色模式覆盖 ────────────────────────────────────────────────────── */
 html[data-theme='dark'] body {
   background: #141414;
   color: rgba(255, 255, 255, 0.85);
 }
 
-/* 侧边栏布局 */
-.layout-sidebar {
-  min-height: 100vh;
+/* ── 自定义滚动条（对标弹幕库）────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+  transition: background 0.2s;
 }
+::-webkit-scrollbar-thumb:hover { background: var(--color-primary); }
 
-/* 登录页居中 */
+/* ── 布局 ────────────────────────────────────────────────────────────── */
+.layout-sidebar { min-height: 100vh; }
+
+/* ── 登录页 — 渐变色跟随主题色 ──────────────────────────────────────── */
 .login-container {
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-active) 100%);
 }
-
 html[data-theme='dark'] .login-container {
   background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
 }
 
-/* 统计卡片 */
-.stat-card {
-  transition: transform 0.2s, box-shadow 0.2s;
-}
+/* ── 统计卡片悬浮 ────────────────────────────────────────────────────── */
+.stat-card { transition: transform 0.2s, box-shadow 0.2s; }
 .stat-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 8px 25px var(--color-shadow);
 }
-
-html[data-theme='dark'] .stat-card:hover {
-  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.4);
-}
-

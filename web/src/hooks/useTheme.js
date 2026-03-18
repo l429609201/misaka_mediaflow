@@ -6,17 +6,19 @@ const THEME_KEY = 'theme_mode'
 const COLOR_KEY = 'theme_color'
 
 const PRESET_COLORS = [
-  { key: 'purple', color: '#6366f1', label: '靛紫' },
-  { key: 'blue',   color: '#1677ff', label: '蓝色' },
-  { key: 'green',  color: '#52c41a', label: '绿色' },
-  { key: 'orange', color: '#fa8c16', label: '橙色' },
-  { key: 'red',    color: '#f5222d', label: '红色' },
-  { key: 'cyan',   color: '#13c2c2', label: '青色' },
+  { key: 'blue',    color: '#1677ff', label: '蓝色' },
+  { key: 'purple',  color: '#6366f1', label: '靛紫' },
+  { key: 'pink',    color: '#ff6b9b', label: '粉色' },
+  { key: 'green',   color: '#52c41a', label: '绿色' },
+  { key: 'orange',  color: '#fa8c16', label: '橙色' },
+  { key: 'red',     color: '#f5222d', label: '红色' },
+  { key: 'cyan',    color: '#13c2c2', label: '青色' },
+  { key: 'volcano', color: '#fa541c', label: '火山' },
 ]
 
 export function useTheme() {
   const [mode, setMode] = useState(() => localStorage.getItem(THEME_KEY) || 'light')
-  const [colorPrimary, setColorPrimary] = useState(() => localStorage.getItem(COLOR_KEY) || '#6366f1')
+  const [colorPrimary, setColorPrimary] = useState(() => localStorage.getItem(COLOR_KEY) || '#1677ff')
 
   useEffect(() => {
     localStorage.setItem(THEME_KEY, mode)
