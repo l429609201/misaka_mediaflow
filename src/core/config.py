@@ -44,8 +44,18 @@ class DatabaseConfig(BaseModel):
     # URL 构建统一在 src/db/database.py 中用 URL.create() 处理
 
 
+class CacheConfig(BaseModel):
+    """缓存配置（环境变量前缀 MISAKAMF_CACHE__，风格同弹幕库）"""
+    backend: str = "hybrid"            # memory / database / redis / hybrid（默认混合：内存L1 + 数据库L2）
+    redis_url: str = ""                # Redis 连接地址，如 redis://:password@host:6379/0（仅 redis 模式需要）
+    key_prefix: str = "mmf:"           # Redis key 前缀
+    memory_maxsize: int = 10000        # 内存缓存最大条目数
+    memory_default_ttl: int = 600      # 默认缓存 TTL（秒），10 分钟
+
+
 class RedisConfig(BaseModel):
-    enabled: bool = False          # 默认不启用，使用内存缓存
+    """兼容旧版 Redis 分字段配置"""
+    enabled: bool = False
     host: str = "127.0.0.1"
     port: int = 6379
     db: int = 0
@@ -210,7 +220,8 @@ class Settings(BaseSettings):
     server: ServerConfig = ServerConfig()
     timezone: str = "Asia/Shanghai"
     database: DatabaseConfig = DatabaseConfig()
-    redis: RedisConfig = RedisConfig()
+    cache: CacheConfig = CacheConfig()
+    redis: RedisConfig = RedisConfig()  # 兼容旧版
     media_server: MediaServerConfig = MediaServerConfig()
     proxy: ProxyConfig = ProxyConfig()
     security: SecurityConfig = SecurityConfig()

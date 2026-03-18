@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -20,6 +21,12 @@ import (
 	"github.com/mediaflow/go-proxy/internal/config"
 	"github.com/mediaflow/go-proxy/internal/service"
 )
+
+// crossOriginValueRe 精确匹配 Emby basehtmlplayer.js 中 getCrossOriginValue 函数的返回值。
+// 原始代码: getCrossOriginValue=function(mediaSource,playMethod){return mediaSource.IsRemote&&"DirectPlay"===playMethod?null:"anonymous"}
+// 压缩后:   getCrossOriginValue=function(n,t){return n.IsRemote&&"DirectPlay"===t?null:"anonymous"}
+// 匹配整个三元表达式，替换为 null — 参考 embyExternalUrl modifyBaseHtmlPlayer
+var crossOriginValueRe = regexp.MustCompile(`\w+\.IsRemote\s*&&\s*"DirectPlay"\s*===\s*\w+\s*\?\s*null\s*:\s*"anonymous"`)
 
 // seekThrottleJS 注入到 plugin.js 末尾的 seek 防抖脚本模板。
 // %d 会被替换为实际的 MIN_INTERVAL_MS（从后端 api_interval 配置读取）。
@@ -199,15 +206,25 @@ func (h *ProxyHandler) patchHtmlPlayerJS(resp *http.Response) error {
 
 	// ==================== crossOrigin patch ====================
 	if isBasePlayer {
-		// 新版 Emby basehtmlplayer.js:
-		// getCrossOriginValue=function(mediaSource,playMethod){return mediaSource.IsRemote&&"DirectPlay"===playMethod?null:"anonymous"}
-		// → 让 getCrossOriginValue 始终返回 null（不设置 crossorigin 属性）
-		patched = strings.ReplaceAll(patched, `"anonymous"`, `null`)
-		patched = strings.ReplaceAll(patched, `'anonymous'`, `null`)
-		log.Printf("%s 原始内容: %d bytes, 包含 getCrossOriginValue=%v",
-			fileName, len(body), strings.Contains(original, "getCrossOriginValue"))
+		// 新版 Emby basehtmlplayer.js 的 getCrossOriginValue 函数：
+		// 原始:   getCrossOriginValue=function(mediaSource,playMethod){return mediaSource.IsRemote&&"DirectPlay"===playMethod?null:"anonymous"}
+		// 压缩后: getCrossOriginValue=function(n,t){return n.IsRemote&&"DirectPlay"===t?null:"anonymous"}
+		// → 用精确正则匹配三元表达式，替换为 null（参考 embyExternalUrl modifyBaseHtmlPlayer）
+		hasCrossOriginValue := strings.Contains(original, "getCrossOriginValue")
+		matchCount := len(crossOriginValueRe.FindAllString(patched, -1))
+		patched = crossOriginValueRe.ReplaceAllString(patched, `null`)
+		if matchCount > 0 {
+			log.Printf("✅ %s crossOriginValue: 精确匹配 %d 处三元表达式 → null", fileName, matchCount)
+		} else if hasCrossOriginValue {
+			// 正则没命中但函数存在，说明 Emby 代码格式变了，用宽松匹配兜底
+			log.Printf("⚠️ %s crossOriginValue: 精确正则未命中，尝试宽松替换", fileName)
+			patched = strings.ReplaceAll(patched, `"anonymous"`, `null`)
+			patched = strings.ReplaceAll(patched, `'anonymous'`, `null`)
+		}
+		log.Printf("%s 原始内容: %d bytes, getCrossOriginValue=%v",
+			fileName, len(body), hasCrossOriginValue)
 	}
-	// 通用：把所有 .crossOrigin 属性名替换掉（两个文件都可能有）
+	// 通用：把所有 .crossOrigin 属性名替换掉（安全网，两个文件都可能有直接赋值）
 	patchCount := strings.Count(patched, ".crossOrigin")
 	patched = strings.ReplaceAll(patched, ".crossOrigin", ".crossOriginDisabled")
 

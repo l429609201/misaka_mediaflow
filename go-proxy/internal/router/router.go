@@ -5,11 +5,12 @@
 package router
 
 import (
+	"fmt"
+	"io"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/mediaflow/go-proxy/internal/cache"
 	"github.com/mediaflow/go-proxy/internal/config"
 	"github.com/mediaflow/go-proxy/internal/handler"
 	"github.com/mediaflow/go-proxy/internal/middleware"
@@ -18,7 +19,7 @@ import (
 )
 
 // Setup 创建并配置 Gin 路由
-func Setup(cfg *config.Config, cm *cache.Manager) *gin.Engine {
+func Setup(cfg *config.Config) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Recovery())
@@ -32,11 +33,11 @@ func Setup(cfg *config.Config, cm *cache.Manager) *gin.Engine {
 	// Python 客户端（共享，所有 handler 统一使用）
 	pyClient := service.NewPythonClient(cfg)
 
-	// 处理器
-	redirectHandler := handler.NewRedirectHandler(cfg, cm, pyClient)
+	// 处理器（Go 只做转发，缓存由 Python 端管理）
+	redirectHandler := handler.NewRedirectHandler(cfg, pyClient)
 	proxyHandler := handler.NewProxyHandler(cfg, pyClient)
 	wsHandler := handler.NewWSHandler(cfg)
-	p115Handler := handler.NewP115PlayHandler(cfg, cm, pyClient) // ⭐ 传入共享 pyClient
+	p115Handler := handler.NewP115PlayHandler(cfg, pyClient)
 
 	// ===== ⭐ 115 直链播放路由 =====
 	// STRM 内容: http://<go_proxy>:8888/p115/play/<pick_code>/<filename>
@@ -118,9 +119,18 @@ func Setup(cfg *config.Config, cm *cache.Manager) *gin.Engine {
 		c.JSON(http.StatusOK, traffic.Counter.Snapshot())
 	})
 
-	// ===== 缓存统计 API =====
+	// ===== 缓存统计 API（转发到 Python 端）=====
 	r.GET("/api/cache/stats", func(c *gin.Context) {
-		c.JSON(http.StatusOK, cm.Stats())
+		pyURL := fmt.Sprintf("http://127.0.0.1:%d/internal/cache/stats", cfg.Server.PyPort)
+		resp, err := http.Get(pyURL)
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+			return
+		}
+		defer resp.Body.Close()
+		c.Status(resp.StatusCode)
+		c.Header("Content-Type", "application/json")
+		io.Copy(c.Writer, resp.Body)
 	})
 
 	// ===== 其他请求透传到 Emby/Jellyfin =====

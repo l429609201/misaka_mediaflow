@@ -5,7 +5,7 @@ services:
       - MISAKAMF_CONFIG_DIR=/app/config
       - TZ=Asia/Shanghai
       - MISAKAMF_SERVER__PORT=7789
-      
+
       - MISAKAMF_DATABASE__TYPE=postgresql
       - MISAKAMF_DATABASE__HOST=192.168.10.7
       - MISAKAMF_DATABASE__PORT=5432
@@ -14,9 +14,12 @@ services:
       - MISAKAMF_DATABASE__USER=mediaflow
       - MISAKAMF_DATABASE__PASSWORD=mediaflow
 
-      - MISAKAMF_REDIS__ENABLED=false
-      - MISAKAMF_REDIS__HOST=redis
-      - MISAKAMF_REDIS__PORT=6379
+      # 缓存配置（风格同弹幕库 DANMUAPI_CACHE__）
+      # 后端模式: memory / database / redis / hybrid（默认）
+      # - MISAKAMF_CACHE__BACKEND=hybrid
+      # - MISAKAMF_CACHE__REDIS_URL=redis://:password@host:6379/0
+      # - MISAKAMF_CACHE__MEMORY_MAXSIZE=10000
+      # - MISAKAMF_CACHE__MEMORY_DEFAULT_TTL=600
     image: l429609201/misaka-mediaflow:latest
     ports:
       - '7789:7789'

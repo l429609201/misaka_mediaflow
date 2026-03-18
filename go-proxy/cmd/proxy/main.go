@@ -11,7 +11,6 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/mediaflow/go-proxy/internal/cache"
 	"github.com/mediaflow/go-proxy/internal/config"
 	"github.com/mediaflow/go-proxy/internal/router"
 )
@@ -50,12 +49,8 @@ func main() {
 	log.Printf("时区: %s", cfg.Timezone)
 	log.Printf("Emby 后端: %s", cfg.MediaServer.Host)
 
-	// 3. 初始化缓存（TTL 来自配置 proxy.cache_ttl）
-	cacheManager := cache.NewManager(cfg.Redis, cfg.Proxy.CacheTTL, cfg.Proxy.MemCacheSize)
-	defer cacheManager.Close()
-
-	// 4. 启动 HTTP 服务
-	r := router.Setup(cfg, cacheManager)
+	// 3. 启动 HTTP 服务（Go 只做转发，缓存由 Python 端管理）
+	r := router.Setup(cfg)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.GoPort)
 	log.Printf("Go 反代监听: %s", addr)
@@ -66,7 +61,7 @@ func main() {
 		}
 	}()
 
-	// 5. 优雅关闭
+	// 4. 优雅关闭
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
