@@ -109,8 +109,24 @@ func NewProxyHandler(cfg *config.Config, pyClient *service.PythonClient) *ProxyH
 	// 自定义 Director：修正 Host 头，确保 Emby 能正确响应
 	originalDirector := rp.Director
 	rp.Director = func(req *http.Request) {
+		// ⭐ 保存原始认证头（originalDirector 可能丢失这些头）
+		origEmbyToken := req.Header.Get("X-Emby-Token")
+		origEmbyAuth := req.Header.Get("X-Emby-Authorization")
+		origAuth := req.Header.Get("Authorization")
+
 		originalDirector(req)
 		req.Host = target.Host
+
+		// ⭐ 恢复认证头（ModifyResponse 需要从 resp.Request 中提取 apiKey）
+		if origEmbyToken != "" {
+			req.Header.Set("X-Emby-Token", origEmbyToken)
+		}
+		if origEmbyAuth != "" {
+			req.Header.Set("X-Emby-Authorization", origEmbyAuth)
+		}
+		if origAuth != "" {
+			req.Header.Set("Authorization", origAuth)
+		}
 
 		// ⭐ 对需要 patch 的响应，去掉 Accept-Encoding
 		// 让 Go Transport 自动用 gzip 并自动解压，确保 ModifyResponse 收到纯文本
@@ -118,7 +134,8 @@ func NewProxyHandler(cfg *config.Config, pyClient *service.PythonClient) *ProxyH
 		// 需要处理的文件：
 		//   - htmlvideoplayer JS（crossOrigin patch）
 		//   - HTML 页面（crossOrigin 拦截脚本注入）
-		if isHtmlPlayerJS(req.URL.Path) || isHtmlPageRequest(req) {
+		//   - PlaybackInfo API（STRM 强制 DirectPlay）
+		if isHtmlPlayerJS(req.URL.Path) || isHtmlPageRequest(req) || strings.HasSuffix(req.URL.Path, "/PlaybackInfo") {
 			req.Header.Del("Accept-Encoding")
 		}
 	}
@@ -152,17 +169,20 @@ func (h *ProxyHandler) modifyResponse(resp *http.Response) error {
 
 	// PlaybackInfo → 强制 DirectPlay（阻止 STRM 文件被转码）
 	if strings.HasSuffix(path, "/PlaybackInfo") {
+		log.Printf("[ModifyResponse] 拦截 PlaybackInfo: %s (status=%d)", path, resp.StatusCode)
 		return h.patchPlaybackInfo(resp)
 	}
 
 	// htmlvideoplayer JS → crossOrigin patch（第1层防御：源码级替换）
 	if isHtmlPlayerJS(path) {
+		log.Printf("[ModifyResponse] 拦截 HtmlPlayerJS: %s", path)
 		return h.patchHtmlPlayerJS(resp)
 	}
 
 	// HTML 页面 → 注入 crossOrigin 运行时拦截脚本（第2层防御：运行时兜底）
 	ct := resp.Header.Get("Content-Type")
 	if strings.Contains(ct, "text/html") && resp.StatusCode == http.StatusOK {
+		log.Printf("[ModifyResponse] 拦截 HTML 页面: %s (Content-Type=%s)", path, ct)
 		return h.patchHtmlPage(resp)
 	}
 
@@ -416,6 +436,65 @@ func (h *ProxyHandler) HandleProxy(c *gin.Context) {
 	h.reverseProxy.ServeHTTP(c.Writer, c.Request)
 }
 
+// extractAPIKey 从请求中提取 Emby/Jellyfin API Key（Token）
+// 支持多种认证方式（按优先级）：
+//  1. X-Emby-Token header（最常用）
+//  2. X-Emby-Authorization header: MediaBrowser Client="...", Token="xxx"
+//  3. Authorization header: Bearer xxx 或 MediaBrowser Token="xxx"
+//  4. api_key query 参数
+//  5. X-Emby-Token query 参数
+func extractAPIKey(req *http.Request) string {
+	// 1. X-Emby-Token header
+	if token := req.Header.Get("X-Emby-Token"); token != "" {
+		return token
+	}
+
+	// 2. X-Emby-Authorization header
+	if auth := req.Header.Get("X-Emby-Authorization"); auth != "" {
+		if token := extractTokenFromMediaBrowser(auth); token != "" {
+			return token
+		}
+	}
+
+	// 3. Authorization header
+	if auth := req.Header.Get("Authorization"); auth != "" {
+		if strings.HasPrefix(auth, "Bearer ") {
+			return strings.TrimPrefix(auth, "Bearer ")
+		}
+		if token := extractTokenFromMediaBrowser(auth); token != "" {
+			return token
+		}
+	}
+
+	// 4. api_key query 参数
+	if apiKey := req.URL.Query().Get("api_key"); apiKey != "" {
+		return apiKey
+	}
+
+	// 5. X-Emby-Token query 参数
+	if token := req.URL.Query().Get("X-Emby-Token"); token != "" {
+		return token
+	}
+
+	return ""
+}
+
+// extractTokenFromMediaBrowser 从 MediaBrowser 格式的认证字符串中提取 Token
+// 格式: MediaBrowser Client="...", Device="...", DeviceId="...", Version="...", Token="xxx"
+func extractTokenFromMediaBrowser(auth string) string {
+	idx := strings.Index(auth, `Token="`)
+	if idx == -1 {
+		return ""
+	}
+	tokenStart := idx + 7 // len(`Token="`)
+	rest := auth[tokenStart:]
+	tokenEnd := strings.Index(rest, `"`)
+	if tokenEnd == -1 {
+		return ""
+	}
+	return rest[:tokenEnd]
+}
+
 // itemIdFromPath 从 PlaybackInfo URL 路径中提取 itemId
 // 路径格式: /emby/Items/44998/PlaybackInfo 或 /Items/44998/PlaybackInfo
 var playbackInfoRe = regexp.MustCompile(`/Items/(\d+)/PlaybackInfo`)
@@ -447,6 +526,7 @@ func (h *ProxyHandler) isStrmItem(itemID string, apiKey string) bool {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		log.Printf("⚠️ [PlaybackInfo] 查询 Item %s API 返回 status=%d (URL=%s)", itemID, resp.StatusCode, itemURL)
 		return false
 	}
 
@@ -478,16 +558,25 @@ func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 	path := resp.Request.URL.Path
 	itemID := itemIdFromPath(path)
 
-	// 从原始请求中提取 api_key
-	apiKey := resp.Request.URL.Query().Get("api_key")
+	// 从原始请求中提取 API Key（支持多种认证方式）
+	apiKey := extractAPIKey(resp.Request)
 	if apiKey == "" {
-		apiKey = resp.Request.Header.Get("X-Emby-Token")
+		log.Printf("⚠️ [PlaybackInfo] itemId=%s apiKey 提取失败，跳过 STRM 检测 (headers: X-Emby-Token=%q, X-Emby-Authorization=%q, Authorization=%q, api_key=%q)",
+			itemID,
+			resp.Request.Header.Get("X-Emby-Token"),
+			resp.Request.Header.Get("X-Emby-Authorization"),
+			resp.Request.Header.Get("Authorization"),
+			resp.Request.URL.Query().Get("api_key"))
+		return nil
 	}
+	log.Printf("[PlaybackInfo] itemId=%s apiKey提取成功 (长度=%d)", itemID, len(apiKey))
 
 	// 查 Item.Path 判断是否 STRM
 	if !h.isStrmItem(itemID, apiKey) {
+		log.Printf("[PlaybackInfo] itemId=%s 非 STRM 文件，保持原始行为", itemID)
 		return nil
 	}
+	log.Printf("[PlaybackInfo] itemId=%s 确认为 STRM 文件，开始强制 DirectPlay", itemID)
 
 	// ---- 以下只对 STRM 文件执行 ----
 
