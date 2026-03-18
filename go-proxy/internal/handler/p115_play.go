@@ -5,13 +5,13 @@ package handler
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/mediaflow/go-proxy/internal/config"
+	"github.com/mediaflow/go-proxy/internal/logger"
 	"github.com/mediaflow/go-proxy/internal/service"
 )
 
@@ -48,7 +48,7 @@ func (h *P115PlayHandler) HandlePlay(c *gin.Context) {
 		} else if result != nil {
 			errMsg = result.Error
 		}
-		log.Printf("[115] 直链解析失败: pickCode=%s, err=%s", pickCode, errMsg)
+		logger.Infof("[115] 直链解析失败: pickCode=%s, err=%s", pickCode, errMsg)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to resolve 115 download url"})
 		return
 	}
@@ -57,7 +57,7 @@ func (h *P115PlayHandler) HandlePlay(c *gin.Context) {
 	if len(urlSnippet) > 80 {
 		urlSnippet = urlSnippet[:80] + "..."
 	}
-	log.Printf("[115] 302 重定向: %s → %s (source=%s)", pickCode, urlSnippet, result.Source)
+	logger.Infof("[115] 302 重定向: %s → %s (source=%s)", pickCode, urlSnippet, result.Source)
 
 	age := redirectCacheDefaultSec
 	if result.ExpiresIn > 0 && result.ExpiresIn < redirectCacheMaxSec {
@@ -70,7 +70,7 @@ func (h *P115PlayHandler) HandlePlay(c *gin.Context) {
 	if (c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https") &&
 		strings.HasPrefix(cdnURL, "http://") {
 		cdnURL = "https://" + cdnURL[7:]
-		log.Printf("[115] 302 升级 HTTPS: %s", pickCode)
+		logger.Infof("[115] 302 升级 HTTPS: %s", pickCode)
 	}
 
 	c.Redirect(http.StatusFound, cdnURL)

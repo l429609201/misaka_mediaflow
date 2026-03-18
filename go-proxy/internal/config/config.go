@@ -15,6 +15,7 @@ import (
 type Config struct {
 	Server      ServerConfig      `yaml:"server"`
 	Timezone    string            `yaml:"timezone"`
+	LogLevel    string            `yaml:"log_level"` // debug / info（默认 info）
 	Proxy       ProxyConfig       `yaml:"proxy"`
 	MediaServer MediaServerConfig `yaml:"media_server"`
 	Security    SecurityConfig    `yaml:"security"`
@@ -67,6 +68,7 @@ func defaultConfig() *Config {
 			PyPort: 7789,
 		},
 		Timezone: "Asia/Shanghai",
+		LogLevel: "info",
 		Proxy: ProxyConfig{
 			ConnectTimeout: 10,
 			WSPingInterval: 30,
@@ -112,6 +114,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("MISAKAMF_SECURITY__API_TOKEN"); v != "" {
 		cfg.Security.APIToken = v
+	}
+	if v := os.Getenv("MISAKAMF_LOG_LEVEL"); v != "" {
+		cfg.LogLevel = v
 	}
 }
 

@@ -8,7 +8,6 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"io"
-	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -20,6 +19,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/mediaflow/go-proxy/internal/config"
+	"github.com/mediaflow/go-proxy/internal/logger"
 	"github.com/mediaflow/go-proxy/internal/service"
 )
 
@@ -145,7 +145,7 @@ func NewProxyHandler(cfg *config.Config, pyClient *service.PythonClient) *ProxyH
 
 	// 错误处理
 	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		log.Printf("反代透传失败: %s %s -> %s, err=%v", r.Method, r.URL.Path, target.String(), err)
+		logger.Infof("反代透传失败: %s %s -> %s, err=%v", r.Method, r.URL.Path, target.String(), err)
 		w.WriteHeader(http.StatusBadGateway)
 		w.Write([]byte(`{"error":"proxy request failed"}`))
 	}
@@ -174,7 +174,7 @@ func (h *ProxyHandler) modifyResponse(resp *http.Response) error {
 
 	// ⭐ 对所有 text/html 和 JS 请求打日志，方便排查
 	if strings.Contains(ct, "text/html") || isHtmlPlayerJS(path) || strings.HasSuffix(path, "/PlaybackInfo") {
-		log.Printf("[ModifyResponse] path=%s status=%d Content-Type=%q Content-Encoding=%q", path, resp.StatusCode, ct, encoding)
+		logger.Infof("[ModifyResponse] path=%s status=%d Content-Type=%q Content-Encoding=%q", path, resp.StatusCode, ct, encoding)
 	}
 
 	// PlaybackInfo → 强制 DirectPlay（阻止 STRM 文件被转码）
@@ -184,13 +184,13 @@ func (h *ProxyHandler) modifyResponse(resp *http.Response) error {
 
 	// htmlvideoplayer JS → crossOrigin patch（第1层防御：源码级替换）
 	if isHtmlPlayerJS(path) {
-		log.Printf("[ModifyResponse] ✅ 拦截 HtmlPlayerJS: %s", path)
+		logger.Infof("[ModifyResponse] ✅ 拦截 HtmlPlayerJS: %s", path)
 		return h.patchHtmlPlayerJS(resp)
 	}
 
 	// HTML 页面 → 注入 crossOrigin 运行时拦截脚本（第2层防御：运行时兜底）
 	if strings.Contains(ct, "text/html") && resp.StatusCode == http.StatusOK {
-		log.Printf("[ModifyResponse] ✅ 拦截 HTML 页面: %s", path)
+		logger.Infof("[ModifyResponse] ✅ 拦截 HTML 页面: %s", path)
 		return h.patchHtmlPage(resp)
 	}
 
@@ -213,13 +213,13 @@ func isHtmlPageRequest(req *http.Request) bool {
 
 	// 根路径
 	if path == "/" || path == "" {
-		log.Printf("[isHtmlPageRequest] ✅ 匹配根路径: path=%q", path)
+		logger.Infof("[isHtmlPageRequest] ✅ 匹配根路径: path=%q", path)
 		return true
 	}
 
 	// /web/ 相关路径
 	if strings.HasPrefix(path, "/web/") || path == "/web" {
-		log.Printf("[isHtmlPageRequest] ✅ 匹配 /web/ 路径: path=%q", path)
+		logger.Infof("[isHtmlPageRequest] ✅ 匹配 /web/ 路径: path=%q", path)
 		return true
 	}
 
@@ -235,13 +235,13 @@ func isHtmlPageRequest(req *http.Request) bool {
 		lastPart = path[lastSlash:]
 	}
 	if !strings.Contains(lastPart, ".") {
-		log.Printf("[isHtmlPageRequest] ✅ 匹配无扩展名路径(SPA): path=%q", path)
+		logger.Infof("[isHtmlPageRequest] ✅ 匹配无扩展名路径(SPA): path=%q", path)
 		return true
 	}
 
 	// .html 文件
 	if strings.HasSuffix(path, ".html") || strings.HasSuffix(path, ".htm") {
-		log.Printf("[isHtmlPageRequest] ✅ 匹配 .html 文件: path=%q", path)
+		logger.Infof("[isHtmlPageRequest] ✅ 匹配 .html 文件: path=%q", path)
 		return true
 	}
 
@@ -261,11 +261,11 @@ func isHtmlPageRequest(req *http.Request) bool {
 func (h *ProxyHandler) patchHtmlPage(resp *http.Response) error {
 	path := resp.Request.URL.Path
 	encoding := resp.Header.Get("Content-Encoding")
-	log.Printf("[HTML注入] 开始处理: path=%s, Content-Encoding=%q, Status=%d", path, encoding, resp.StatusCode)
+	logger.Infof("[HTML注入] 开始处理: path=%s, Content-Encoding=%q, Status=%d", path, encoding, resp.StatusCode)
 
 	// 如果是 Brotli 等不支持的编码，跳过（应该不会出现，因为 Director 已删 Accept-Encoding）
 	if encoding != "" && !strings.Contains(encoding, "gzip") {
-		log.Printf("⚠️ [HTML注入] 不支持的编码 %q，跳过注入 (path=%s)", encoding, path)
+		logger.Infof("⚠️ [HTML注入] 不支持的编码 %q，跳过注入 (path=%s)", encoding, path)
 		return nil
 	}
 
@@ -275,7 +275,7 @@ func (h *ProxyHandler) patchHtmlPage(resp *http.Response) error {
 	if isGzip {
 		gr, err := gzip.NewReader(resp.Body)
 		if err != nil {
-			log.Printf("❌ [HTML注入] gzip 解压失败: %v (path=%s)", err, path)
+			logger.Infof("❌ [HTML注入] gzip 解压失败: %v (path=%s)", err, path)
 			return nil
 		}
 		defer gr.Close()
@@ -285,17 +285,17 @@ func (h *ProxyHandler) patchHtmlPage(resp *http.Response) error {
 	body, err := io.ReadAll(bodyReader)
 	resp.Body.Close()
 	if err != nil {
-		log.Printf("❌ [HTML注入] 读取 body 失败: %v (path=%s)", err, path)
+		logger.Infof("❌ [HTML注入] 读取 body 失败: %v (path=%s)", err, path)
 		return nil
 	}
 
 	html := string(body)
-	log.Printf("[HTML注入] body 读取成功: %d bytes, 包含</head>=%v (path=%s)",
+	logger.Infof("[HTML注入] body 读取成功: %d bytes, 包含</head>=%v (path=%s)",
 		len(body), strings.Contains(html, "</head>"), path)
 
 	// 避免重复注入（如果已经有我们的标识就跳过）
 	if strings.Contains(html, "[MisakaF] crossOrigin") {
-		log.Printf("[HTML注入] 已有注入标识，跳过 (path=%s)", path)
+		logger.Infof("[HTML注入] 已有注入标识，跳过 (path=%s)", path)
 		resp.Body = io.NopCloser(bytes.NewReader(body))
 		return nil
 	}
@@ -313,13 +313,13 @@ func (h *ProxyHandler) patchHtmlPage(resp *http.Response) error {
 	}
 
 	if injected {
-		log.Printf("✅ [HTML注入] 成功! path=%s, 原始=%d bytes, 注入后=%d bytes", path, len(body), len(html))
+		logger.Infof("✅ [HTML注入] 成功! path=%s, 原始=%d bytes, 注入后=%d bytes", path, len(body), len(html))
 	} else {
 		bodyPreview := html
 		if len(bodyPreview) > 200 {
 			bodyPreview = bodyPreview[:200]
 		}
-		log.Printf("❌ [HTML注入] 未找到 <head>/<head> 标签，注入失败 (path=%s, body前200字符=%q)", path, bodyPreview)
+		logger.Infof("❌ [HTML注入] 未找到 <head>/<head> 标签，注入失败 (path=%s, body前200字符=%q)", path, bodyPreview)
 	}
 
 	// 写回响应
@@ -373,7 +373,7 @@ func (h *ProxyHandler) patchHtmlPlayerJS(resp *http.Response) error {
 	}
 
 	encoding := resp.Header.Get("Content-Encoding")
-	log.Printf("%s 响应: status=%d, Content-Encoding=%q, Content-Length=%d",
+	logger.Infof("%s 响应: status=%d, Content-Encoding=%q, Content-Length=%d",
 		fileName, resp.StatusCode, encoding, resp.ContentLength)
 
 	// 读取响应体（处理 gzip）
@@ -382,7 +382,7 @@ func (h *ProxyHandler) patchHtmlPlayerJS(resp *http.Response) error {
 	if isGzip {
 		gr, err := gzip.NewReader(resp.Body)
 		if err != nil {
-			log.Printf("%s gzip 解压失败: %v", fileName, err)
+			logger.Infof("%s gzip 解压失败: %v", fileName, err)
 			return nil
 		}
 		defer gr.Close()
@@ -392,7 +392,7 @@ func (h *ProxyHandler) patchHtmlPlayerJS(resp *http.Response) error {
 	body, err := io.ReadAll(bodyReader)
 	resp.Body.Close()
 	if err != nil {
-		log.Printf("%s 读取失败: %v", fileName, err)
+		logger.Infof("%s 读取失败: %v", fileName, err)
 		return nil
 	}
 
@@ -407,16 +407,16 @@ func (h *ProxyHandler) patchHtmlPlayerJS(resp *http.Response) error {
 		matchCount := len(crossOriginValueRe.FindAllString(patched, -1))
 		patched = crossOriginValueRe.ReplaceAllString(patched, `null`)
 		if matchCount > 0 {
-			log.Printf("✅ %s: 精确匹配 %d 处 getCrossOriginValue 三元表达式 → null", fileName, matchCount)
+			logger.Infof("✅ %s: 精确匹配 %d 处 getCrossOriginValue 三元表达式 → null", fileName, matchCount)
 		} else {
 			// 正则没命中，可能 Emby 代码格式变了，用宽松匹配兜底
 			hasCrossOriginValue := strings.Contains(original, "getCrossOriginValue")
 			if hasCrossOriginValue {
-				log.Printf("⚠️ %s: getCrossOriginValue 函数存在但精确正则未命中，尝试宽松替换 \"anonymous\" → null", fileName)
+				logger.Infof("⚠️ %s: getCrossOriginValue 函数存在但精确正则未命中，尝试宽松替换 \"anonymous\" → null", fileName)
 				patched = strings.ReplaceAll(patched, `"anonymous"`, `null`)
 				patched = strings.ReplaceAll(patched, `'anonymous'`, `null`)
 			} else {
-				log.Printf("⚠️ %s: 未找到 getCrossOriginValue 函数 (大小=%d bytes)", fileName, len(body))
+				logger.Infof("⚠️ %s: 未找到 getCrossOriginValue 函数 (大小=%d bytes)", fileName, len(body))
 			}
 		}
 	} else {
@@ -427,22 +427,22 @@ func (h *ProxyHandler) patchHtmlPlayerJS(resp *http.Response) error {
 		matchCount := len(pluginCrossOriginRe.FindAllString(patched, -1))
 		patched = pluginCrossOriginRe.ReplaceAllString(patched, ``)
 		if matchCount > 0 {
-			log.Printf("✅ %s: 移除 %d 处 &&(*.crossOrigin=*) 赋值（参考 issue #236）", fileName, matchCount)
+			logger.Infof("✅ %s: 移除 %d 处 &&(*.crossOrigin=*) 赋值（参考 issue #236）", fileName, matchCount)
 		} else {
 			// 兜底：如果精确正则未命中，尝试替换属性名
 			hasCrossOrigin := strings.Contains(original, ".crossOrigin")
 			if hasCrossOrigin {
 				crossOriginCount := strings.Count(patched, ".crossOrigin")
 				patched = strings.ReplaceAll(patched, ".crossOrigin", ".crossOriginDisabled")
-				log.Printf("⚠️ %s: &&(*.crossOrigin=*) 精确正则未命中，兜底替换 %d 处 .crossOrigin → .crossOriginDisabled", fileName, crossOriginCount)
+				logger.Infof("⚠️ %s: &&(*.crossOrigin=*) 精确正则未命中，兜底替换 %d 处 .crossOrigin → .crossOriginDisabled", fileName, crossOriginCount)
 			} else {
-				log.Printf("⚠️ %s: 未找到 crossOrigin 相关代码 (大小=%d bytes)", fileName, len(body))
+				logger.Infof("⚠️ %s: 未找到 crossOrigin 相关代码 (大小=%d bytes)", fileName, len(body))
 			}
 		}
 	}
 
 	if original != patched {
-		log.Printf("✅ %s crossOrigin patch 完成 (原始=%d bytes, patch后=%d bytes)", fileName, len(original), len(patched))
+		logger.Infof("✅ %s crossOrigin patch 完成 (原始=%d bytes, patch后=%d bytes)", fileName, len(original), len(patched))
 	}
 
 	// ==================== 写回响应 ====================
@@ -551,13 +551,13 @@ func (h *ProxyHandler) isStrmItem(itemID string, apiKey string) bool {
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(itemURL)
 	if err != nil {
-		log.Printf("[PlaybackInfo] 查询 Item %s 失败: %v", itemID, err)
+		logger.Infof("[PlaybackInfo] 查询 Item %s 失败: %v", itemID, err)
 		return false
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("⚠️ [PlaybackInfo] 查询 Item %s API 返回 status=%d (URL=%s)", itemID, resp.StatusCode, itemURL)
+		logger.Infof("⚠️ [PlaybackInfo] 查询 Item %s API 返回 status=%d (URL=%s)", itemID, resp.StatusCode, itemURL)
 		return false
 	}
 
@@ -592,7 +592,7 @@ func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 	// 从原始请求中提取 API Key（支持多种认证方式）
 	apiKey := extractAPIKey(resp.Request)
 	if apiKey == "" {
-		log.Printf("⚠️ [PlaybackInfo] itemId=%s apiKey 提取失败，跳过 STRM 检测 (headers: X-Emby-Token=%q, X-Emby-Authorization=%q, Authorization=%q, api_key=%q)",
+		logger.Infof("⚠️ [PlaybackInfo] itemId=%s apiKey 提取失败，跳过 STRM 检测 (headers: X-Emby-Token=%q, X-Emby-Authorization=%q, Authorization=%q, api_key=%q)",
 			itemID,
 			resp.Request.Header.Get("X-Emby-Token"),
 			resp.Request.Header.Get("X-Emby-Authorization"),
@@ -600,14 +600,14 @@ func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 			resp.Request.URL.Query().Get("api_key"))
 		return nil
 	}
-	log.Printf("[PlaybackInfo] itemId=%s apiKey提取成功 (长度=%d)", itemID, len(apiKey))
+	logger.Infof("[PlaybackInfo] itemId=%s apiKey提取成功 (长度=%d)", itemID, len(apiKey))
 
 	// 查 Item.Path 判断是否 STRM
 	if !h.isStrmItem(itemID, apiKey) {
-		log.Printf("[PlaybackInfo] itemId=%s 非 STRM 文件，保持原始行为", itemID)
+		logger.Infof("[PlaybackInfo] itemId=%s 非 STRM 文件，保持原始行为", itemID)
 		return nil
 	}
-	log.Printf("[PlaybackInfo] itemId=%s 确认为 STRM 文件，开始强制 DirectPlay", itemID)
+	logger.Infof("[PlaybackInfo] itemId=%s 确认为 STRM 文件，开始强制 DirectPlay", itemID)
 
 	// ---- 以下只对 STRM 文件执行 ----
 
@@ -662,7 +662,7 @@ func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 		return nil
 	}
 
-	log.Printf("✅ PlaybackInfo: STRM(itemId=%s) 强制 DirectPlay (MediaSources=%d 个)", itemID, len(mediaSources))
+	logger.Infof("✅ PlaybackInfo: STRM(itemId=%s) 强制 DirectPlay (MediaSources=%d 个)", itemID, len(mediaSources))
 
 	resp.Body = io.NopCloser(bytes.NewReader(newBody))
 	resp.ContentLength = int64(len(newBody))

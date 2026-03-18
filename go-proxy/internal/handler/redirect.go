@@ -10,7 +10,6 @@ package handler
 import (
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/mediaflow/go-proxy/internal/config"
+	"github.com/mediaflow/go-proxy/internal/logger"
 	"github.com/mediaflow/go-proxy/internal/service"
 )
 
@@ -64,7 +64,7 @@ func (h *RedirectHandler) HandleVideoStream(c *gin.Context) {
 	userAgent := c.GetHeader("User-Agent")
 	result, err := h.pyClient.ResolveLink(itemID, 0, apiKeyStr, userID, userAgent)
 	if err != nil || result.URL == "" {
-		log.Printf("直链解析失败: %s, err=%v", itemID, err)
+		logger.Infof("直链解析失败: %s, err=%v", itemID, err)
 		h.proxyFallback(c)
 		return
 	}
@@ -73,7 +73,7 @@ func (h *RedirectHandler) HandleVideoStream(c *gin.Context) {
 	if len(urlSnippet) > 80 {
 		urlSnippet = urlSnippet[:80] + "..."
 	}
-	log.Printf("302 重定向: %s → %s (source=%s)", itemID, urlSnippet, result.Source)
+	logger.Infof("302 重定向: %s → %s (source=%s)", itemID, urlSnippet, result.Source)
 
 	// 让浏览器缓存此 302，后续 Range 请求直接跳转到 CDN，不再回 go-proxy
 	age := redirectCacheDefaultSec
@@ -88,7 +88,7 @@ func (h *RedirectHandler) HandleVideoStream(c *gin.Context) {
 	if (c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https") &&
 		strings.HasPrefix(cdnURL, "http://") {
 		cdnURL = "https://" + cdnURL[7:]
-		log.Printf("302 升级 HTTPS: %s → https://...", itemID)
+		logger.Infof("302 升级 HTTPS: %s → https://...", itemID)
 	}
 
 	c.Redirect(http.StatusFound, cdnURL)
@@ -100,7 +100,7 @@ func (h *RedirectHandler) proxyFallback(c *gin.Context) {
 
 	req, err := http.NewRequestWithContext(c.Request.Context(), c.Request.Method, targetURL, c.Request.Body)
 	if err != nil {
-		log.Printf("proxyFallback 创建请求失败: %v", err)
+		logger.Infof("proxyFallback 创建请求失败: %v", err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to create proxy request"})
 		return
 	}
@@ -113,7 +113,7 @@ func (h *RedirectHandler) proxyFallback(c *gin.Context) {
 
 	resp, err := h.proxyClient.Do(req)
 	if err != nil {
-		log.Printf("proxyFallback 请求失败: %v", err)
+		logger.Infof("proxyFallback 请求失败: %v", err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "proxy request failed"})
 		return
 	}

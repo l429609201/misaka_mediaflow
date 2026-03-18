@@ -11,12 +11,13 @@
 package middleware
 
 import (
-	"log"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/mediaflow/go-proxy/internal/logger"
 )
 
 // ── 配置常量（后续可改为从 config 读取）─────────────────────────────
@@ -143,7 +144,7 @@ func (t *RedirectThrottler) cleanupLoop() {
 			return true
 		})
 		if count > 0 {
-			log.Printf("[throttle] 清理 %d 个过期令牌桶", count)
+			logger.Infof("[throttle] 清理 %d 个过期令牌桶", count)
 		}
 	}
 }
@@ -163,7 +164,7 @@ func (t *RedirectThrottler) Throttle(keyExtractor func(*gin.Context) string) gin
 
 		if waitTime < 0 {
 			// 超过最大等待时间，返回 429
-			log.Printf("[throttle] 请求被限流: key=%s, 超过最大等待 %v", key, t.maxWait)
+			logger.Infof("[throttle] 请求被限流: key=%s, 超过最大等待 %v", key, t.maxWait)
 			c.Header("Retry-After", "2")
 			c.JSON(http.StatusTooManyRequests, gin.H{
 				"error": "too many requests, please slow down",
@@ -173,7 +174,7 @@ func (t *RedirectThrottler) Throttle(keyExtractor func(*gin.Context) string) gin
 		}
 
 		if waitTime > 0 {
-			log.Printf("[throttle] 请求排队: key=%s, 等待 %v", key, waitTime)
+			logger.Infof("[throttle] 请求排队: key=%s, 等待 %v", key, waitTime)
 			time.Sleep(waitTime)
 		}
 
