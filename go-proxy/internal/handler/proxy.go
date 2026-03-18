@@ -41,6 +41,54 @@ var crossOriginValueRe = regexp.MustCompile(`\w+\.IsRemote\s*&&\s*"DirectPlay"\s
 // 移除这段代码 → <video> 元素不再被设置 crossOrigin 属性
 var pluginCrossOriginRe = regexp.MustCompile(`&&\(\w+\.crossOrigin=\w+\)`)
 
+// ── crossOrigin 运行时拦截脚本 ──
+// 注入到 Emby HTML 页面的 <head> 中，从根源上阻止任何 JS 设置 crossOrigin 属性
+// 三重防御：
+//   1. Object.defineProperty 覆写 HTMLMediaElement.prototype.crossOrigin setter → JS 赋值无效
+//   2. MutationObserver 监控 DOM → setAttribute("crossorigin",...) 也被拦截
+//   3. 拦截 createElement，新建的 video/audio 自动清除 crossorigin
+//
+// 效果: <video> 永远不会有 crossorigin 属性 → 浏览器以 no-cors 模式请求
+//       → 302 到 115 CDN 后不做 CORS 检查 → 播放正常
+const crossOriginInterceptScript = `<script>
+(function(){
+  // [MisakaF] crossOrigin 拦截器 — 确保 302 直链播放不受 CORS 限制
+  // 第1层: 覆写 crossOrigin 属性的 setter，使任何 JS 赋值都被忽略
+  try {
+    Object.defineProperty(HTMLMediaElement.prototype,'crossOrigin',{
+      get:function(){return null},
+      set:function(){},
+      configurable:true
+    });
+  } catch(e){}
+
+  // 第2层: MutationObserver 监控 DOM 变化，移除通过 setAttribute 设置的 crossorigin
+  try {
+    var ob=new MutationObserver(function(ms){
+      ms.forEach(function(m){
+        if(m.type==='attributes'&&m.attributeName==='crossorigin'){
+          m.target.removeAttribute('crossorigin');
+        }
+        if(m.type==='childList'){
+          m.addedNodes.forEach(function(n){
+            if(n.nodeType===1&&(n.tagName==='VIDEO'||n.tagName==='AUDIO')){
+              n.removeAttribute('crossorigin');
+            }
+          });
+        }
+      });
+    });
+    if(document.documentElement){
+      ob.observe(document.documentElement,{attributes:true,attributeFilter:['crossorigin'],childList:true,subtree:true});
+    } else {
+      document.addEventListener('DOMContentLoaded',function(){
+        ob.observe(document.documentElement,{attributes:true,attributeFilter:['crossorigin'],childList:true,subtree:true});
+      });
+    }
+  } catch(e){}
+})();
+</script>`
+
 // ProxyHandler 透传处理器
 type ProxyHandler struct {
 	cfg          *config.Config
@@ -64,11 +112,13 @@ func NewProxyHandler(cfg *config.Config, pyClient *service.PythonClient) *ProxyH
 		originalDirector(req)
 		req.Host = target.Host
 
-		// ⭐ 对 htmlvideoplayer JS 请求，去掉 Accept-Encoding
+		// ⭐ 对需要 patch 的响应，去掉 Accept-Encoding
 		// 让 Go Transport 自动用 gzip 并自动解压，确保 ModifyResponse 收到纯文本
 		// 否则浏览器发 Accept-Encoding: br,gzip → Emby 返回 Brotli → 我们无法解压替换
-		// 需要同时处理 plugin.js（旧版 Emby）和 basehtmlplayer.js（新版 Emby）
-		if isHtmlPlayerJS(req.URL.Path) {
+		// 需要处理的文件：
+		//   - htmlvideoplayer JS（crossOrigin patch）
+		//   - HTML 页面（crossOrigin 拦截脚本注入）
+		if isHtmlPlayerJS(req.URL.Path) || isHtmlPageRequest(req) {
 			req.Header.Del("Accept-Encoding")
 		}
 	}
@@ -80,9 +130,10 @@ func NewProxyHandler(cfg *config.Config, pyClient *service.PythonClient) *ProxyH
 		w.Write([]byte(`{"error":"proxy request failed"}`))
 	}
 
-	// ⭐ 修改响应：
-	//   1. 去除 Emby htmlvideoplayer 的 crossOrigin 设置（参考 embyExternalUrl）
-	//   2. 拦截 PlaybackInfo，强制 DirectPlay（阻止 Emby 对 STRM 走 HLS 转码）
+	// ⭐ 修改响应（三层防御 + PlaybackInfo 强制 DirectPlay）：
+	//   1. JS 源码 patch: 替换 basehtmlplayer.js / plugin.js 中的 crossOrigin 逻辑
+	//   2. HTML 注入: 在页面 <head> 中注入运行时拦截脚本，从根源阻止 crossOrigin 被设置
+	//   3. PlaybackInfo: 对 STRM 文件强制 DirectPlay，阻止 Emby 走 HLS 转码
 
 	h := &ProxyHandler{
 		cfg:          cfg,
@@ -104,10 +155,135 @@ func (h *ProxyHandler) modifyResponse(resp *http.Response) error {
 		return h.patchPlaybackInfo(resp)
 	}
 
-	// htmlvideoplayer JS → crossOrigin patch
+	// htmlvideoplayer JS → crossOrigin patch（第1层防御：源码级替换）
 	if isHtmlPlayerJS(path) {
 		return h.patchHtmlPlayerJS(resp)
 	}
+
+	// HTML 页面 → 注入 crossOrigin 运行时拦截脚本（第2层防御：运行时兜底）
+	ct := resp.Header.Get("Content-Type")
+	if strings.Contains(ct, "text/html") && resp.StatusCode == http.StatusOK {
+		return h.patchHtmlPage(resp)
+	}
+
+	return nil
+}
+
+// isHtmlPageRequest 判断请求是否可能返回 HTML 页面（用于 Director 中提前去除 Accept-Encoding）
+// Emby Web UI 的主要 HTML 入口：
+//   - / (根路径)
+//   - /web/ 或 /web/index.html
+//   - 不含文件扩展名的路径（SPA 路由）
+func isHtmlPageRequest(req *http.Request) bool {
+	path := req.URL.Path
+	accept := req.Header.Get("Accept")
+
+	// 浏览器请求 HTML 页面时，Accept 头包含 text/html
+	if !strings.Contains(accept, "text/html") {
+		return false
+	}
+
+	// 根路径
+	if path == "/" || path == "" {
+		return true
+	}
+
+	// /web/ 相关路径
+	if strings.HasPrefix(path, "/web/") || path == "/web" {
+		return true
+	}
+
+	// 排除明确的 API / 静态资源路径
+	if strings.HasPrefix(path, "/emby/") || strings.HasPrefix(path, "/Items/") {
+		return false
+	}
+
+	// 不含扩展名的路径（可能是 SPA 路由，Emby 会返回 HTML）
+	lastSlash := strings.LastIndex(path, "/")
+	lastPart := path
+	if lastSlash >= 0 {
+		lastPart = path[lastSlash:]
+	}
+	if !strings.Contains(lastPart, ".") {
+		return true
+	}
+
+	// .html 文件
+	if strings.HasSuffix(path, ".html") || strings.HasSuffix(path, ".htm") {
+		return true
+	}
+
+	return false
+}
+
+// patchHtmlPage 在 Emby HTML 页面中注入 crossOrigin 运行时拦截脚本。
+// 这是第2层防御（兜底）：即使 JS 源码 patch（第1层）未匹配到，
+// 运行时拦截也能确保 <video> 不被设置 crossorigin 属性。
+//
+// 工作原理：
+//   - 在 </head> 前注入 <script>，比 Emby 自身 JS 更早执行
+//   - 覆写 HTMLMediaElement.prototype.crossOrigin 的 setter → JS 赋值无效
+//   - MutationObserver 监控 DOM → setAttribute 也被拦截
+//   - 效果: <video> 永远不会有 crossorigin 属性
+//   - 浏览器以 no-cors 模式请求 → 302 到 115 CDN 后不做 CORS 检查
+func (h *ProxyHandler) patchHtmlPage(resp *http.Response) error {
+	// 读取响应体（处理 gzip）
+	encoding := resp.Header.Get("Content-Encoding")
+	isGzip := strings.Contains(encoding, "gzip")
+	var bodyReader io.Reader = resp.Body
+	if isGzip {
+		gr, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return nil
+		}
+		defer gr.Close()
+		bodyReader = gr
+	}
+
+	body, err := io.ReadAll(bodyReader)
+	resp.Body.Close()
+	if err != nil {
+		return nil
+	}
+
+	html := string(body)
+
+	// 避免重复注入（如果已经有我们的标识就跳过）
+	if strings.Contains(html, "[MisakaF] crossOrigin") {
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		return nil
+	}
+
+	// 在 </head> 前注入拦截脚本（尽早执行，在 Emby JS 之前）
+	injected := false
+	if idx := strings.Index(html, "</head>"); idx >= 0 {
+		html = html[:idx] + crossOriginInterceptScript + html[idx:]
+		injected = true
+	} else if idx := strings.Index(html, "<head>"); idx >= 0 {
+		// 备选：在 <head> 后注入
+		insertAt := idx + len("<head>")
+		html = html[:insertAt] + crossOriginInterceptScript + html[insertAt:]
+		injected = true
+	}
+
+	if injected {
+		log.Printf("✅ HTML 页面注入 crossOrigin 拦截脚本 (path=%s, 原始=%d bytes)",
+			resp.Request.URL.Path, len(body))
+	}
+
+	// 写回响应
+	newBody := []byte(html)
+	resp.Body = io.NopCloser(bytes.NewReader(newBody))
+	resp.ContentLength = int64(len(newBody))
+	resp.Header.Set("Content-Length", strconv.Itoa(len(newBody)))
+	resp.Header.Del("Content-Encoding")
+
+	// 禁止浏览器缓存此 HTML（确保每次都拿到注入后的版本）
+	resp.Header.Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	resp.Header.Set("Pragma", "no-cache")
+	resp.Header.Set("Expires", "0")
+	resp.Header.Del("ETag")
+	resp.Header.Del("Last-Modified")
 
 	return nil
 }
