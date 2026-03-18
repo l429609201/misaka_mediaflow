@@ -624,6 +624,12 @@ func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 		source["SupportsDirectPlay"] = true
 		source["SupportsDirectStream"] = true
 		source["SupportsTranscoding"] = false
+		// 关键：必须删除 TranscodingUrl 等字段
+		// Emby Web 只要发现 TranscodingUrl 存在，就会直接发起 HLS 请求，
+		// 完全忽略 SupportsDirectPlay=true，导致永远走转码分片播放
+		delete(source, "TranscodingUrl")
+		delete(source, "TranscodingContainer")
+		delete(source, "TranscodingSubProtocol")
 	}
 
 	// 重新序列化
