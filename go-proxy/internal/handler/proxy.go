@@ -100,95 +100,104 @@ const seekThrottleTpl = `
 `
 
 // directUrlTpl 注入到 plugin.js 末尾的"直链直出"脚本。
-// 拦截 <video>/<audio> 元素的 src 设置，当检测到 Emby 的 stream URL 时，
-// 先通过 directurl API 获取 CDN 直链，直接设为 src。
-// 效果：后续所有 Range 请求直连 CDN（复用 Keep-Alive），不再每次走 302。
+// 非侵入式：不 hook video.src setter（避免破坏 Emby 的同步播放流程），
+// 而是用 MutationObserver 观察 <video>/<audio> 的 src 变化。
 //
-// 工作流程：
-//   1. Emby 设置 video.src = "/emby/videos/7579/stream?api_key=xxx"
-//   2. 脚本拦截 → fetch /emby/videos/7579/directurl?api_key=xxx → 获取 CDN URL
-//   3. 直接设 video.src = "https://115cdn.com/..." → 浏览器直连 CDN
-//   4. 如果 fetch 失败 → 自动回退到原始 302 URL
+// 工作流程（不打断 Emby 正常播放）：
+//   1. Emby 正常设置 video.src → 302 → CDN → 播放正常启动
+//   2. MutationObserver 检测到 src 变化 → 后台 fetch directurl API 获取 CDN 直链
+//   3. 直链到手后：保存播放位置 → 替换 src 为 CDN URL → 恢复位置 → 继续播放
+//   4. 替换后：后续 Range 请求全部直连 CDN（复用 Keep-Alive），不再走 302
+//   5. 如果 fetch 失败：什么都不做，原来的 302 播放继续
 const directUrlTpl = `
 ;(function(){
   var TAG = '[Misaka]';
-  var proto = HTMLMediaElement.prototype;
-  var srcDesc = Object.getOwnPropertyDescriptor(proto, 'src');
-  if (!srcDesc || !srcDesc.set) { console.warn(TAG + ' src descriptor not found'); return; }
-  var origSrcSet = srcDesc.set;
-  var origSrcGet = srcDesc.get;
-
-  // 匹配 /emby/videos/{id}/stream 或 /Videos/{id}/stream（含可选后缀 .mkv 等）
+  // 匹配 /emby/videos/{id}/stream 或 /Videos/{id}/stream（含可选后缀）
   var streamRe = /\/(?:emby\/)?(?:videos|Videos|audio|Audio)\/(\d+)\/(?:stream|original)(?:\.\w+)?/;
 
-  // 替换 stream/original 为 directurl
-  function toResolveUrl(url) {
+  function toResolveUrl(src) {
     try {
-      var u = new URL(url, location.origin);
+      var u = new URL(src, location.origin);
       u.pathname = u.pathname.replace(/\/(stream|original)(\.\w+)?$/, '/directurl');
       return u.toString();
     } catch(e) { return ''; }
   }
 
-  var origPlay = proto.play;
+  function tryReplace(elem) {
+    var src = elem.getAttribute('src') || elem.src || '';
+    if (!src || !streamRe.test(src)) return;
+    if (elem._mskId) return;  // 已处理过
 
-  // hook play()：如果正在 resolve 直链，等待完成后再 play
-  proto.play = function() {
-    var self = this;
-    if (self._mskResolving) {
-      return new Promise(function(resolve, reject) {
-        var t = setInterval(function() {
-          if (!self._mskResolving) {
-            clearInterval(t);
-            origPlay.call(self).then(resolve, reject);
-          }
-        }, 50);
-        // 超时 5 秒自动放行
-        setTimeout(function() { clearInterval(t); if (self._mskResolving) { self._mskResolving = false; origPlay.call(self).then(resolve, reject); } }, 5000);
-      });
-    }
-    return origPlay.call(self);
-  };
+    var m = streamRe.exec(src);
+    var itemId = m ? m[1] : '?';
+    elem._mskId = itemId;
 
-  Object.defineProperty(proto, 'src', {
-    get: function() { return origSrcGet.call(this); },
-    set: function(url) {
-      var self = this;
-      if (!url || typeof url !== 'string') { origSrcSet.call(self, url); return; }
+    var resolveUrl = toResolveUrl(src);
+    if (!resolveUrl) return;
 
-      var m = streamRe.exec(url);
-      if (!m) { origSrcSet.call(self, url); return; }
+    console.log(TAG + ' 直链解析: itemId=' + itemId);
 
-      var itemId = m[1];
-      var resolveUrl = toResolveUrl(url);
-      if (!resolveUrl) { origSrcSet.call(self, url); return; }
+    fetch(resolveUrl)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (!data || !data.url) {
+          console.warn(TAG + ' 直链为空, 保持302: itemId=' + itemId);
+          return;
+        }
+        // 保存播放状态
+        var pos = elem.currentTime || 0;
+        var wasPlaying = !elem.paused;
+        console.log(TAG + ' 直链直出 ✓ itemId=' + itemId + ' pos=' + pos.toFixed(1) + 's');
 
-      self._mskResolving = true;
-      console.log(TAG + ' 直链解析: itemId=' + itemId);
+        // 标记跳过 observer 对本次 src 变更的监听
+        elem._mskSwap = true;
+        elem.src = data.url;
 
-      fetch(resolveUrl)
-        .then(function(r) { return r.json(); })
-        .then(function(data) {
-          self._mskResolving = false;
-          if (data && data.url) {
-            console.log(TAG + ' 直链直出 ✓ itemId=' + itemId);
-            origSrcSet.call(self, data.url);
-          } else {
-            console.warn(TAG + ' 直链为空, 回退302: itemId=' + itemId);
-            origSrcSet.call(self, url);
-          }
-        })
-        .catch(function(err) {
-          self._mskResolving = false;
-          console.warn(TAG + ' 直链异常, 回退302: ' + err);
-          origSrcSet.call(self, url);
+        // 恢复播放位置
+        elem.addEventListener('loadedmetadata', function onMeta() {
+          elem.removeEventListener('loadedmetadata', onMeta);
+          if (pos > 0.5) elem.currentTime = pos;
+          if (wasPlaying) elem.play().catch(function(){});
         });
-    },
-    configurable: true,
-    enumerable: true
+        // 兜底：如果 loadedmetadata 不触发（已有 metadata），直接恢复
+        if (elem.readyState >= 1) {
+          if (pos > 0.5) elem.currentTime = pos;
+          if (wasPlaying) elem.play().catch(function(){});
+        }
+      })
+      .catch(function(err) {
+        console.warn(TAG + ' 直链异常, 保持302: ' + err);
+      });
+  }
+
+  // 观察 DOM：video/audio 元素新增或 src 属性变更
+  var observer = new MutationObserver(function(mutations) {
+    for (var i = 0; i < mutations.length; i++) {
+      var m = mutations[i];
+      if (m.type === 'childList') {
+        for (var j = 0; j < m.addedNodes.length; j++) {
+          var n = m.addedNodes[j];
+          if (n.nodeType !== 1) continue;
+          if (n.tagName === 'VIDEO' || n.tagName === 'AUDIO') tryReplace(n);
+          var subs = n.querySelectorAll ? n.querySelectorAll('video,audio') : [];
+          for (var k = 0; k < subs.length; k++) tryReplace(subs[k]);
+        }
+      }
+      if (m.type === 'attributes' && m.attributeName === 'src') {
+        var el = m.target;
+        if (el._mskSwap) { el._mskSwap = false; continue; }  // 跳过自己触发的
+        el._mskId = null;  // 新 src，重新处理
+        if (el.tagName === 'VIDEO' || el.tagName === 'AUDIO') tryReplace(el);
+      }
+    }
   });
 
-  console.log(TAG + ' 直链直出: video.src hook 已启用');
+  observer.observe(document.documentElement, {
+    childList: true, subtree: true,
+    attributes: true, attributeFilter: ['src']
+  });
+
+  console.log(TAG + ' 直链直出: MutationObserver 已启用');
 })();
 `
 
