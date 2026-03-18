@@ -6,7 +6,6 @@ package handler
 import (
 	"bytes"
 	"compress/gzip"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -39,167 +38,6 @@ var crossOriginValueRe = regexp.MustCompile(`\w+\.IsRemote\s*&&\s*"DirectPlay"\s
 // 压缩后:   &&(t.crossOrigin=n) 或其他变量名
 // 移除这段代码 → <video> 元素不再被设置 crossOrigin 属性
 var pluginCrossOriginRe = regexp.MustCompile(`&&\(\w+\.crossOrigin=\w+\)`)
-
-// seekThrottleJS 注入到 plugin.js 末尾的 seek 防抖脚本模板。
-// %d 会被替换为实际的 MIN_INTERVAL_MS（从后端 api_interval 配置读取）。
-const seekThrottleTpl = `
-;(function(){
-  var DEBOUNCE_MS = 500;
-  var MIN_INTERVAL_MS = %d;
-  var proto = HTMLMediaElement.prototype;
-  var desc = Object.getOwnPropertyDescriptor(proto, 'currentTime');
-  if (!desc || !desc.set) return;
-  var origSet = desc.set;
-  var origGet = desc.get;
-  var _timer = null;
-  var _lastSeekTime = 0;
-  var _pendingTime = null;
-
-  function doSeek(elem, t) {
-    var now = Date.now();
-    var elapsed = now - _lastSeekTime;
-    if (elapsed < MIN_INTERVAL_MS) {
-      clearTimeout(_timer);
-      _timer = setTimeout(function(){ doSeek(elem, t); }, MIN_INTERVAL_MS - elapsed + 50);
-      return;
-    }
-    _lastSeekTime = now;
-    _pendingTime = null;
-    origSet.call(elem, t);
-  }
-
-  function isInBuffered(elem, t) {
-    var buf = elem.buffered;
-    for (var i = 0; i < buf.length; i++) {
-      if (t >= buf.start(i) && t <= buf.end(i)) return true;
-    }
-    return false;
-  }
-
-  Object.defineProperty(proto, 'currentTime', {
-    get: function() {
-      if (_pendingTime !== null) return _pendingTime;
-      return origGet.call(this);
-    },
-    set: function(v) {
-      if (isInBuffered(this, v)) {
-        clearTimeout(_timer);
-        _pendingTime = null;
-        origSet.call(this, v);
-        return;
-      }
-      _pendingTime = v;
-      var self = this;
-      clearTimeout(_timer);
-      _timer = setTimeout(function(){ doSeek(self, v); }, DEBOUNCE_MS);
-    },
-    configurable: true
-  });
-  console.log('[Misaka] seek throttle: debounce=' + DEBOUNCE_MS + 'ms, minInterval=' + MIN_INTERVAL_MS + 'ms');
-})();
-`
-
-// directUrlTpl 注入到 plugin.js 末尾的"直链直出"脚本。
-// 非侵入式：不 hook video.src setter（避免破坏 Emby 的同步播放流程），
-// 而是用 MutationObserver 观察 <video>/<audio> 的 src 变化。
-//
-// 工作流程（不打断 Emby 正常播放）：
-//   1. Emby 正常设置 video.src → 302 → CDN → 播放正常启动
-//   2. MutationObserver 检测到 src 变化 → 后台 fetch directurl API 获取 CDN 直链
-//   3. 直链到手后：保存播放位置 → 替换 src 为 CDN URL → 恢复位置 → 继续播放
-//   4. 替换后：后续 Range 请求全部直连 CDN（复用 Keep-Alive），不再走 302
-//   5. 如果 fetch 失败：什么都不做，原来的 302 播放继续
-const directUrlTpl = `
-;(function(){
-  var TAG = '[Misaka]';
-  // 匹配 /emby/videos/{id}/stream 或 /Videos/{id}/stream（含可选后缀）
-  var streamRe = /\/(?:emby\/)?(?:videos|Videos|audio|Audio)\/(\d+)\/(?:stream|original)(?:\.\w+)?/;
-
-  function toResolveUrl(src) {
-    try {
-      var u = new URL(src, location.origin);
-      u.pathname = u.pathname.replace(/\/(stream|original)(\.\w+)?$/, '/directurl');
-      return u.toString();
-    } catch(e) { return ''; }
-  }
-
-  function tryReplace(elem) {
-    var src = elem.getAttribute('src') || elem.src || '';
-    if (!src || !streamRe.test(src)) return;
-    if (elem._mskId) return;  // 已处理过
-
-    var m = streamRe.exec(src);
-    var itemId = m ? m[1] : '?';
-    elem._mskId = itemId;
-
-    var resolveUrl = toResolveUrl(src);
-    if (!resolveUrl) return;
-
-    console.log(TAG + ' 直链解析: itemId=' + itemId);
-
-    fetch(resolveUrl)
-      .then(function(r) { return r.json(); })
-      .then(function(data) {
-        if (!data || !data.url) {
-          console.warn(TAG + ' 直链为空, 保持302: itemId=' + itemId);
-          return;
-        }
-        // 保存播放状态
-        var pos = elem.currentTime || 0;
-        var wasPlaying = !elem.paused;
-        console.log(TAG + ' 直链直出 ✓ itemId=' + itemId + ' pos=' + pos.toFixed(1) + 's');
-
-        // 标记跳过 observer 对本次 src 变更的监听
-        elem._mskSwap = true;
-        elem.src = data.url;
-
-        // 恢复播放位置
-        elem.addEventListener('loadedmetadata', function onMeta() {
-          elem.removeEventListener('loadedmetadata', onMeta);
-          if (pos > 0.5) elem.currentTime = pos;
-          if (wasPlaying) elem.play().catch(function(){});
-        });
-        // 兜底：如果 loadedmetadata 不触发（已有 metadata），直接恢复
-        if (elem.readyState >= 1) {
-          if (pos > 0.5) elem.currentTime = pos;
-          if (wasPlaying) elem.play().catch(function(){});
-        }
-      })
-      .catch(function(err) {
-        console.warn(TAG + ' 直链异常, 保持302: ' + err);
-      });
-  }
-
-  // 观察 DOM：video/audio 元素新增或 src 属性变更
-  var observer = new MutationObserver(function(mutations) {
-    for (var i = 0; i < mutations.length; i++) {
-      var m = mutations[i];
-      if (m.type === 'childList') {
-        for (var j = 0; j < m.addedNodes.length; j++) {
-          var n = m.addedNodes[j];
-          if (n.nodeType !== 1) continue;
-          if (n.tagName === 'VIDEO' || n.tagName === 'AUDIO') tryReplace(n);
-          var subs = n.querySelectorAll ? n.querySelectorAll('video,audio') : [];
-          for (var k = 0; k < subs.length; k++) tryReplace(subs[k]);
-        }
-      }
-      if (m.type === 'attributes' && m.attributeName === 'src') {
-        var el = m.target;
-        if (el._mskSwap) { el._mskSwap = false; continue; }  // 跳过自己触发的
-        el._mskId = null;  // 新 src，重新处理
-        if (el.tagName === 'VIDEO' || el.tagName === 'AUDIO') tryReplace(el);
-      }
-    }
-  });
-
-  observer.observe(document.documentElement, {
-    childList: true, subtree: true,
-    attributes: true, attributeFilter: ['src']
-  });
-
-  console.log(TAG + ' 直链直出: MutationObserver 已启用');
-})();
-`
 
 // ProxyHandler 透传处理器
 type ProxyHandler struct {
@@ -241,7 +79,6 @@ func NewProxyHandler(cfg *config.Config, pyClient *service.PythonClient) *ProxyH
 	}
 
 	// ⭐ 修改响应：自动去除 Emby htmlvideoplayer 的 crossOrigin 设置
-	// + 注入 seek 防抖脚本（防止 115 CDN 403）
 	// 参考: https://github.com/bpking1/embyExternalUrl/issues/236
 
 	h := &ProxyHandler{
@@ -265,7 +102,7 @@ func isHtmlPlayerJS(path string) bool {
 }
 
 // patchHtmlPlayerJS 统一拦截 Emby htmlvideoplayer 的 JS 响应，
-// 去除 crossOrigin 设置 + 注入 seek 防抖脚本。
+// 去除 crossOrigin 设置。
 //
 // 解决两类 CORS 问题（115 CDN 不返回 Access-Control-Allow-Origin）：
 //   - 旧版 Emby plugin.js: &&(elem.crossOrigin=xxx) 直接赋值
@@ -362,20 +199,6 @@ func (h *ProxyHandler) patchHtmlPlayerJS(resp *http.Response) error {
 
 	if original != patched {
 		log.Printf("✅ %s crossOrigin patch 完成 (原始=%d bytes, patch后=%d bytes)", fileName, len(original), len(patched))
-	}
-
-	// ==================== seek 防抖 + 直链直出脚本（只在 plugin.js 中注入） ====================
-	// basehtmlplayer.js 不需要注入，只需要一份
-	if !isBasePlayer {
-		intervalSec := h.pyClient.GetAPIInterval()
-		intervalMs := int(intervalSec * 1000)
-		seekJS := fmt.Sprintf(seekThrottleTpl, intervalMs)
-		patched += seekJS
-		log.Printf("✅ %s 已注入 seek 防抖脚本 (minInterval=%dms, 来自 api_interval=%.1fs)", fileName, intervalMs, intervalSec)
-
-		// ⭐ 直链直出：hook video.src，让浏览器直连 CDN 而非每次走 302
-		patched += directUrlTpl
-		log.Printf("✅ %s 已注入直链直出脚本 (video.src hook)", fileName)
 	}
 
 	// ==================== 写回响应 ====================

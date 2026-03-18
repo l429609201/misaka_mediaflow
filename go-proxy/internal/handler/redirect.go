@@ -65,31 +65,6 @@ func (h *RedirectHandler) HandleVideoStream(c *gin.Context) {
 	c.Redirect(http.StatusFound, result.URL)
 }
 
-// HandleResolveURL 返回 JSON 直链（供前端 JS 直链直出使用）
-// 前端 JS hook video.src 后，通过此 API 获取 CDN 直链，
-// 直接设为 video.src，避免每次 Range 请求都走 302。
-func (h *RedirectHandler) HandleResolveURL(c *gin.Context) {
-	itemID := c.Param("itemId")
-	apiKey, _ := c.Get("api_key")
-	apiKeyStr, _ := apiKey.(string)
-
-	userID := c.Query("UserId")
-	if userID == "" {
-		userID = c.Query("userId")
-	}
-
-	userAgent := c.GetHeader("User-Agent")
-	result, err := h.pyClient.ResolveLink(itemID, 0, apiKeyStr, userID, userAgent)
-	if err != nil || result.URL == "" {
-		log.Printf("[directurl] 直链解析失败: %s, err=%v", itemID, err)
-		c.JSON(http.StatusOK, gin.H{"url": "", "error": "resolve failed"})
-		return
-	}
-
-	log.Printf("[directurl] 直链直出: %s (source=%s)", itemID, result.Source)
-	c.JSON(http.StatusOK, gin.H{"url": result.URL})
-}
-
 // proxyFallback 透传到 Emby
 func (h *RedirectHandler) proxyFallback(c *gin.Context) {
 	targetURL := strings.TrimRight(h.cfg.MediaServer.Host, "/") + c.Request.URL.String()

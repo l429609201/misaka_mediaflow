@@ -69,9 +69,6 @@ func Setup(cfg *config.Config) *gin.Engine {
 			embyGroup.GET(prefix+"/:itemId/original.:format", itemThrottle, redirectHandler.HandleVideoStream)
 			embyGroup.HEAD(prefix+"/:itemId/original", itemThrottle, redirectHandler.HandleVideoStream)
 			embyGroup.HEAD(prefix+"/:itemId/original.:format", itemThrottle, redirectHandler.HandleVideoStream)
-
-			// ⭐ 直链直出 API（供前端 JS 获取 CDN 直链，避免 video 标签反复走 302）
-			embyGroup.GET(prefix+"/:itemId/directurl", redirectHandler.HandleResolveURL)
 		}
 
 		// 音频流
@@ -105,9 +102,6 @@ func Setup(cfg *config.Config) *gin.Engine {
 			jellyGroup.GET(prefix+"/:itemId/original.:format", itemThrottle, redirectHandler.HandleVideoStream)
 			jellyGroup.HEAD(prefix+"/:itemId/original", itemThrottle, redirectHandler.HandleVideoStream)
 			jellyGroup.HEAD(prefix+"/:itemId/original.:format", itemThrottle, redirectHandler.HandleVideoStream)
-
-			// ⭐ 直链直出 API
-			jellyGroup.GET(prefix+"/:itemId/directurl", redirectHandler.HandleResolveURL)
 		}
 
 		// 音频流
