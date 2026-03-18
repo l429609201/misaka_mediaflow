@@ -286,20 +286,26 @@ func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 		return nil
 	}
 
-	// 修改每个 MediaSource：强制 DirectPlay
-	modified := false
+	// 只对 STRM 文件的 MediaSource 强制 DirectPlay，正常媒体文件保持原样
+	// STRM 判断依据：Path 以 .strm 结尾、Container 为 strm、或 Protocol 为 Http
+	modified := 0
 	for _, ms := range mediaSources {
 		source, ok := ms.(map[string]interface{})
 		if !ok {
 			continue
 		}
+
+		if !isStrmSource(source) {
+			continue
+		}
+
 		source["SupportsDirectPlay"] = true
 		source["SupportsDirectStream"] = true
 		source["SupportsTranscoding"] = false
-		modified = true
+		modified++
 	}
 
-	if !modified {
+	if modified == 0 {
 		resp.Body = io.NopCloser(bytes.NewReader(body))
 		return nil
 	}
@@ -311,7 +317,7 @@ func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 		return nil
 	}
 
-	log.Printf("✅ PlaybackInfo: 已强制 DirectPlay (MediaSources=%d 个)", len(mediaSources))
+	log.Printf("✅ PlaybackInfo: STRM 强制 DirectPlay (%d/%d 个 MediaSource)", modified, len(mediaSources))
 
 	resp.Body = io.NopCloser(bytes.NewReader(newBody))
 	resp.ContentLength = int64(len(newBody))
@@ -321,3 +327,29 @@ func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 	return nil
 }
 
+
+// isStrmSource 判断 MediaSource 是否为 STRM 文件
+// 参考 embyExternalUrl util.checkIsStrmByMediaSource
+func isStrmSource(source map[string]interface{}) bool {
+	// 1. Path 以 .strm 结尾
+	if path, ok := source["Path"].(string); ok {
+		if strings.HasSuffix(strings.ToLower(path), ".strm") {
+			return true
+		}
+	}
+	// 2. Container 为 "strm"
+	if container, ok := source["Container"].(string); ok {
+		if strings.EqualFold(container, "strm") {
+			return true
+		}
+	}
+	// 3. Protocol 为 "Http"（STRM 指向 HTTP 链接时）且 IsRemote 为 true
+	if protocol, ok := source["Protocol"].(string); ok {
+		if strings.EqualFold(protocol, "Http") {
+			if isRemote, ok := source["IsRemote"].(bool); ok && isRemote {
+				return true
+			}
+		}
+	}
+	return false
+}
