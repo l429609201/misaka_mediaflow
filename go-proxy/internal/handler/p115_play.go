@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -63,6 +64,15 @@ func (h *P115PlayHandler) HandlePlay(c *gin.Context) {
 		age = result.ExpiresIn
 	}
 	c.Header("Cache-Control", fmt.Sprintf("public, max-age=%d", age))
-	c.Redirect(http.StatusFound, result.URL)
+
+	// ⭐ HTTPS 升级：避免 Mixed Content
+	cdnURL := result.URL
+	if (c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https") &&
+		strings.HasPrefix(cdnURL, "http://") {
+		cdnURL = "https://" + cdnURL[7:]
+		log.Printf("[115] 302 升级 HTTPS: %s", pickCode)
+	}
+
+	c.Redirect(http.StatusFound, cdnURL)
 }
 

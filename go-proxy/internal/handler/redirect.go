@@ -81,7 +81,17 @@ func (h *RedirectHandler) HandleVideoStream(c *gin.Context) {
 		age = result.ExpiresIn
 	}
 	c.Header("Cache-Control", fmt.Sprintf("public, max-age=%d", age))
-	c.Redirect(http.StatusFound, result.URL)
+
+	// ⭐ 如果客户端通过 HTTPS 访问，将 CDN 链接也升级为 HTTPS
+	// 避免 Mixed Content 问题：HTTPS 页面中加载 HTTP 资源会被浏览器阻止
+	cdnURL := result.URL
+	if (c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https") &&
+		strings.HasPrefix(cdnURL, "http://") {
+		cdnURL = "https://" + cdnURL[7:]
+		log.Printf("302 升级 HTTPS: %s → https://...", itemID)
+	}
+
+	c.Redirect(http.StatusFound, cdnURL)
 }
 
 // proxyFallback 透传到 Emby
