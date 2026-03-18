@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -239,19 +240,80 @@ func (h *ProxyHandler) HandleProxy(c *gin.Context) {
 	h.reverseProxy.ServeHTTP(c.Writer, c.Request)
 }
 
-// patchPlaybackInfo 拦截 PlaybackInfo API 响应，强制 DirectPlay。
+// itemIdFromPath 从 PlaybackInfo URL 路径中提取 itemId
+// 路径格式: /emby/Items/44998/PlaybackInfo 或 /Items/44998/PlaybackInfo
+var playbackInfoRe = regexp.MustCompile(`/Items/(\d+)/PlaybackInfo`)
+
+func itemIdFromPath(path string) string {
+	m := playbackInfoRe.FindStringSubmatch(path)
+	if len(m) >= 2 {
+		return m[1]
+	}
+	return ""
+}
+
+// isStrmItem 通过 Emby API 查询 Item.Path，判断是否为 STRM 文件
+// PlaybackInfo 的 MediaSource 中看不出是否为 STRM（刮削后 Container/Path 都是实际文件），
+// 只有 Item 顶层的 Path 才有 .strm 后缀
+func (h *ProxyHandler) isStrmItem(itemID string, apiKey string) bool {
+	if itemID == "" {
+		return false
+	}
+
+	itemURL := strings.TrimRight(h.cfg.MediaServer.Host, "/") +
+		"/emby/Items/" + itemID + "?Fields=Path&api_key=" + apiKey
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(itemURL)
+	if err != nil {
+		log.Printf("[PlaybackInfo] 查询 Item %s 失败: %v", itemID, err)
+		return false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+
+	var item struct {
+		Path string `json:"Path"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&item); err != nil {
+		return false
+	}
+
+	return strings.HasSuffix(strings.ToLower(item.Path), ".strm")
+}
+
+// patchPlaybackInfo 拦截 PlaybackInfo API 响应，对 STRM 文件强制 DirectPlay。
 // 参考 embyExternalUrl emby.js transferPlaybackInfo + modifyDirectPlaySupports
 //
 // 问题: Emby 对浏览器不支持的编码（如 HEVC/x265）返回 SupportsDirectPlay=false，
 //       导致前端走 HLS 转码（/videos/:id/hls1/），302 重定向完全无法生效。
 //
-// 方案: 修改 MediaSources 中的 DirectPlay 标志，强制前端走 DirectPlay 模式，
-//       请求 /videos/:id/stream → 触发 302 → CDN 直链。
-//       浏览器虽然不原生支持 HEVC，但很多浏览器（Edge、Safari、带扩展的 Chrome）可以播放。
+// 方案: 先通过 Emby API 查询 Item.Path 判断是否为 STRM 文件，
+//       如果是 STRM，修改 MediaSources 中的 DirectPlay 标志，
+//       强制前端走 DirectPlay → 请求 /videos/:id/stream → 触发 302 → CDN 直链。
+//       非 STRM 文件保持 Emby 原始行为，该转码就转码。
 func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 	if resp.StatusCode != http.StatusOK {
 		return nil
 	}
+
+	path := resp.Request.URL.Path
+	itemID := itemIdFromPath(path)
+
+	// 从原始请求中提取 api_key
+	apiKey := resp.Request.URL.Query().Get("api_key")
+	if apiKey == "" {
+		apiKey = resp.Request.Header.Get("X-Emby-Token")
+	}
+
+	// 查 Item.Path 判断是否 STRM
+	if !h.isStrmItem(itemID, apiKey) {
+		return nil
+	}
+
+	// ---- 以下只对 STRM 文件执行 ----
 
 	// 读取响应体（处理 gzip）
 	encoding := resp.Header.Get("Content-Encoding")
@@ -286,28 +348,15 @@ func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 		return nil
 	}
 
-	// 只对 STRM 文件的 MediaSource 强制 DirectPlay，正常媒体文件保持原样
-	// STRM 判断依据：Path 以 .strm 结尾、Container 为 strm、或 Protocol 为 Http
-	modified := 0
+	// 已确认是 STRM 文件，对所有 MediaSource 强制 DirectPlay
 	for _, ms := range mediaSources {
 		source, ok := ms.(map[string]interface{})
 		if !ok {
 			continue
 		}
-
-		if !isStrmSource(source) {
-			continue
-		}
-
 		source["SupportsDirectPlay"] = true
 		source["SupportsDirectStream"] = true
 		source["SupportsTranscoding"] = false
-		modified++
-	}
-
-	if modified == 0 {
-		resp.Body = io.NopCloser(bytes.NewReader(body))
-		return nil
 	}
 
 	// 重新序列化
@@ -317,7 +366,7 @@ func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 		return nil
 	}
 
-	log.Printf("✅ PlaybackInfo: STRM 强制 DirectPlay (%d/%d 个 MediaSource)", modified, len(mediaSources))
+	log.Printf("✅ PlaybackInfo: STRM(itemId=%s) 强制 DirectPlay (MediaSources=%d 个)", itemID, len(mediaSources))
 
 	resp.Body = io.NopCloser(bytes.NewReader(newBody))
 	resp.ContentLength = int64(len(newBody))
@@ -325,31 +374,4 @@ func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 	resp.Header.Del("Content-Encoding")
 
 	return nil
-}
-
-
-// isStrmSource 判断 MediaSource 是否为 STRM 文件
-// 参考 embyExternalUrl util.checkIsStrmByMediaSource
-func isStrmSource(source map[string]interface{}) bool {
-	// 1. Path 以 .strm 结尾
-	if path, ok := source["Path"].(string); ok {
-		if strings.HasSuffix(strings.ToLower(path), ".strm") {
-			return true
-		}
-	}
-	// 2. Container 为 "strm"
-	if container, ok := source["Container"].(string); ok {
-		if strings.EqualFold(container, "strm") {
-			return true
-		}
-	}
-	// 3. Protocol 为 "Http"（STRM 指向 HTTP 链接时）且 IsRemote 为 true
-	if protocol, ok := source["Protocol"].(string); ok {
-		if strings.EqualFold(protocol, "Http") {
-			if isRemote, ok := source["IsRemote"].(bool); ok && isRemote {
-				return true
-			}
-		}
-	}
-	return false
 }
