@@ -330,15 +330,13 @@ func (h *ProxyHandler) patchHtmlPage(resp *http.Response) error {
 		injected = true
 	}
 
-	if injected {
-		logger.Infof("✅ [HTML注入] 成功! path=%s, 原始=%d bytes, 注入后=%d bytes", path, len(body), len(html))
-	} else {
-		bodyPreview := html
-		if len(bodyPreview) > 200 {
-			bodyPreview = bodyPreview[:200]
-		}
-		logger.Infof("❌ [HTML注入] 未找到 <head>/<head> 标签，注入失败 (path=%s, body前200字符=%q)", path, bodyPreview)
+	if !injected {
+		// 片段 HTML（如对话框、面板等）没有 <head> 标签是正常的，静默跳过
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		return nil
 	}
+
+	logger.Infof("✅ [HTML注入] 成功! path=%s, 原始=%d bytes, 注入后=%d bytes", path, len(body), len(html))
 
 	// 写回响应
 	newBody := []byte(html)
