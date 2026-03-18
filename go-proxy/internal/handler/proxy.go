@@ -22,11 +22,23 @@ import (
 	"github.com/mediaflow/go-proxy/internal/service"
 )
 
-// crossOriginValueRe 精确匹配 Emby basehtmlplayer.js 中 getCrossOriginValue 函数的返回值。
+// ── basehtmlplayer.js patch ──
+// 参考 embyExternalUrl emby.js modifyBaseHtmlPlayer 函数：
+//   body.replace(/mediaSource\.IsRemote\s*&&\s*"DirectPlay"\s*===\s*playMethod\s*\?\s*null\s*:\s*"anonymous"/g, 'null')
+//
 // 原始代码: getCrossOriginValue=function(mediaSource,playMethod){return mediaSource.IsRemote&&"DirectPlay"===playMethod?null:"anonymous"}
 // 压缩后:   getCrossOriginValue=function(n,t){return n.IsRemote&&"DirectPlay"===t?null:"anonymous"}
-// 匹配整个三元表达式，替换为 null — 参考 embyExternalUrl modifyBaseHtmlPlayer
+// 匹配整个三元表达式，替换为 null → 使 getCrossOriginValue() 始终返回 null
 var crossOriginValueRe = regexp.MustCompile(`\w+\.IsRemote\s*&&\s*"DirectPlay"\s*===\s*\w+\s*\?\s*null\s*:\s*"anonymous"`)
+
+// ── plugin.js patch ──
+// 参考 embyExternalUrl issue #236 的 sed 命令：
+//   sed -i 's/&&(elem\.crossOrigin=initialSubtitleStream)//g' plugin.js
+//
+// 原始代码: &&(elem.crossOrigin=initialSubtitleStream)
+// 压缩后:   &&(t.crossOrigin=n) 或其他变量名
+// 移除这段代码 → <video> 元素不再被设置 crossOrigin 属性
+var pluginCrossOriginRe = regexp.MustCompile(`&&\(\w+\.crossOrigin=\w+\)`)
 
 // seekThrottleJS 注入到 plugin.js 末尾的 seek 防抖脚本模板。
 // %d 会被替换为实际的 MIN_INTERVAL_MS（从后端 api_interval 配置读取）。
@@ -206,36 +218,48 @@ func (h *ProxyHandler) patchHtmlPlayerJS(resp *http.Response) error {
 
 	// ==================== crossOrigin patch ====================
 	if isBasePlayer {
-		// 新版 Emby basehtmlplayer.js 的 getCrossOriginValue 函数：
-		// 原始:   getCrossOriginValue=function(mediaSource,playMethod){return mediaSource.IsRemote&&"DirectPlay"===playMethod?null:"anonymous"}
-		// 压缩后: getCrossOriginValue=function(n,t){return n.IsRemote&&"DirectPlay"===t?null:"anonymous"}
-		// → 用精确正则匹配三元表达式，替换为 null（参考 embyExternalUrl modifyBaseHtmlPlayer）
-		hasCrossOriginValue := strings.Contains(original, "getCrossOriginValue")
+		// ── basehtmlplayer.js: 参考 embyExternalUrl modifyBaseHtmlPlayer ──
+		// 精确正则匹配 getCrossOriginValue 中的三元表达式，替换为 null
+		// 效果: getCrossOriginValue() 始终返回 null → <video> 不设置 crossorigin 属性
 		matchCount := len(crossOriginValueRe.FindAllString(patched, -1))
 		patched = crossOriginValueRe.ReplaceAllString(patched, `null`)
 		if matchCount > 0 {
-			log.Printf("✅ %s crossOriginValue: 精确匹配 %d 处三元表达式 → null", fileName, matchCount)
-		} else if hasCrossOriginValue {
-			// 正则没命中但函数存在，说明 Emby 代码格式变了，用宽松匹配兜底
-			log.Printf("⚠️ %s crossOriginValue: 精确正则未命中，尝试宽松替换", fileName)
-			patched = strings.ReplaceAll(patched, `"anonymous"`, `null`)
-			patched = strings.ReplaceAll(patched, `'anonymous'`, `null`)
+			log.Printf("✅ %s: 精确匹配 %d 处 getCrossOriginValue 三元表达式 → null", fileName, matchCount)
+		} else {
+			// 正则没命中，可能 Emby 代码格式变了，用宽松匹配兜底
+			hasCrossOriginValue := strings.Contains(original, "getCrossOriginValue")
+			if hasCrossOriginValue {
+				log.Printf("⚠️ %s: getCrossOriginValue 函数存在但精确正则未命中，尝试宽松替换 \"anonymous\" → null", fileName)
+				patched = strings.ReplaceAll(patched, `"anonymous"`, `null`)
+				patched = strings.ReplaceAll(patched, `'anonymous'`, `null`)
+			} else {
+				log.Printf("⚠️ %s: 未找到 getCrossOriginValue 函数 (大小=%d bytes)", fileName, len(body))
+			}
 		}
-		log.Printf("%s 原始内容: %d bytes, getCrossOriginValue=%v",
-			fileName, len(body), hasCrossOriginValue)
+	} else {
+		// ── plugin.js: 参考 embyExternalUrl issue #236 ──
+		// sed -i 's/&&(elem\.crossOrigin=initialSubtitleStream)//g' plugin.js
+		// 精确正则移除 &&(xxx.crossOrigin=yyy) 赋值语句
+		// 效果: <video> 元素不再被赋值 crossOrigin 属性
+		matchCount := len(pluginCrossOriginRe.FindAllString(patched, -1))
+		patched = pluginCrossOriginRe.ReplaceAllString(patched, ``)
+		if matchCount > 0 {
+			log.Printf("✅ %s: 移除 %d 处 &&(*.crossOrigin=*) 赋值（参考 issue #236）", fileName, matchCount)
+		} else {
+			// 兜底：如果精确正则未命中，尝试替换属性名
+			hasCrossOrigin := strings.Contains(original, ".crossOrigin")
+			if hasCrossOrigin {
+				crossOriginCount := strings.Count(patched, ".crossOrigin")
+				patched = strings.ReplaceAll(patched, ".crossOrigin", ".crossOriginDisabled")
+				log.Printf("⚠️ %s: &&(*.crossOrigin=*) 精确正则未命中，兜底替换 %d 处 .crossOrigin → .crossOriginDisabled", fileName, crossOriginCount)
+			} else {
+				log.Printf("⚠️ %s: 未找到 crossOrigin 相关代码 (大小=%d bytes)", fileName, len(body))
+			}
+		}
 	}
-	// 通用：把所有 .crossOrigin 属性名替换掉（安全网，两个文件都可能有直接赋值）
-	patchCount := strings.Count(patched, ".crossOrigin")
-	patched = strings.ReplaceAll(patched, ".crossOrigin", ".crossOriginDisabled")
 
 	if original != patched {
-		log.Printf("✅ %s 已 patch: 替换 %d 处 .crossOrigin → .crossOriginDisabled", fileName, patchCount)
-	} else {
-		snippet := original
-		if len(snippet) > 200 {
-			snippet = snippet[:200]
-		}
-		log.Printf("⚠️ %s 未找到 crossOrigin (大小=%d bytes, 前200字节=%q)", fileName, len(body), snippet)
+		log.Printf("✅ %s crossOrigin patch 完成 (原始=%d bytes, patch后=%d bytes)", fileName, len(original), len(patched))
 	}
 
 	// ==================== seek 防抖脚本（只在 plugin.js 中注入） ====================
