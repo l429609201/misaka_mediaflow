@@ -23,6 +23,8 @@ var (
 
 func init() {
 	stdLogger = log.Default()
+	// 去掉 Go 默认的日期/时间前缀，避免与外层日志系统（Python）产生双重时间戳
+	stdLogger.SetFlags(0)
 }
 
 // SetLevel 设置日志级别: "debug" 或 "info"
