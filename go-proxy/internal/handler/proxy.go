@@ -6,6 +6,7 @@ package handler
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"io"
 	"log"
 	"net/http"
@@ -78,8 +79,9 @@ func NewProxyHandler(cfg *config.Config, pyClient *service.PythonClient) *ProxyH
 		w.Write([]byte(`{"error":"proxy request failed"}`))
 	}
 
-	// ⭐ 修改响应：自动去除 Emby htmlvideoplayer 的 crossOrigin 设置
-	// 参考: https://github.com/bpking1/embyExternalUrl/issues/236
+	// ⭐ 修改响应：
+	//   1. 去除 Emby htmlvideoplayer 的 crossOrigin 设置（参考 embyExternalUrl）
+	//   2. 拦截 PlaybackInfo，强制 DirectPlay（阻止 Emby 对 STRM 走 HLS 转码）
 
 	h := &ProxyHandler{
 		cfg:          cfg,
@@ -87,9 +89,26 @@ func NewProxyHandler(cfg *config.Config, pyClient *service.PythonClient) *ProxyH
 		targetURL:    target,
 		pyClient:     pyClient,
 	}
-	rp.ModifyResponse = h.patchHtmlPlayerJS
+	rp.ModifyResponse = h.modifyResponse
 
 	return h
+}
+
+// modifyResponse 统一拦截 Emby 响应，根据路径分发到不同的 patch 逻辑
+func (h *ProxyHandler) modifyResponse(resp *http.Response) error {
+	path := resp.Request.URL.Path
+
+	// PlaybackInfo → 强制 DirectPlay（阻止 STRM 文件被转码）
+	if strings.HasSuffix(path, "/PlaybackInfo") {
+		return h.patchPlaybackInfo(resp)
+	}
+
+	// htmlvideoplayer JS → crossOrigin patch
+	if isHtmlPlayerJS(path) {
+		return h.patchHtmlPlayerJS(resp)
+	}
+
+	return nil
 }
 
 // isHtmlPlayerJS 判断是否为 Emby htmlvideoplayer 的 JS 文件
@@ -113,9 +132,6 @@ func isHtmlPlayerJS(path string) bool {
 //   - https://github.com/chen3861229/embyExternalUrl/issues/64
 func (h *ProxyHandler) patchHtmlPlayerJS(resp *http.Response) error {
 	path := resp.Request.URL.Path
-	if !isHtmlPlayerJS(path) {
-		return nil
-	}
 
 	if resp.StatusCode != http.StatusOK {
 		return nil
@@ -221,5 +237,87 @@ func (h *ProxyHandler) patchHtmlPlayerJS(resp *http.Response) error {
 // HandleProxy 透传请求到 Emby/Jellyfin
 func (h *ProxyHandler) HandleProxy(c *gin.Context) {
 	h.reverseProxy.ServeHTTP(c.Writer, c.Request)
+}
+
+// patchPlaybackInfo 拦截 PlaybackInfo API 响应，强制 DirectPlay。
+// 参考 embyExternalUrl emby.js transferPlaybackInfo + modifyDirectPlaySupports
+//
+// 问题: Emby 对浏览器不支持的编码（如 HEVC/x265）返回 SupportsDirectPlay=false，
+//       导致前端走 HLS 转码（/videos/:id/hls1/），302 重定向完全无法生效。
+//
+// 方案: 修改 MediaSources 中的 DirectPlay 标志，强制前端走 DirectPlay 模式，
+//       请求 /videos/:id/stream → 触发 302 → CDN 直链。
+//       浏览器虽然不原生支持 HEVC，但很多浏览器（Edge、Safari、带扩展的 Chrome）可以播放。
+func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+
+	// 读取响应体（处理 gzip）
+	encoding := resp.Header.Get("Content-Encoding")
+	isGzip := strings.Contains(encoding, "gzip")
+	var bodyReader io.Reader = resp.Body
+	if isGzip {
+		gr, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return nil
+		}
+		defer gr.Close()
+		bodyReader = gr
+	}
+
+	body, err := io.ReadAll(bodyReader)
+	resp.Body.Close()
+	if err != nil {
+		return nil
+	}
+
+	// 解析 JSON
+	var data map[string]interface{}
+	if err := json.Unmarshal(body, &data); err != nil {
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		return nil
+	}
+
+	// 获取 MediaSources 数组
+	mediaSources, ok := data["MediaSources"].([]interface{})
+	if !ok || len(mediaSources) == 0 {
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		return nil
+	}
+
+	// 修改每个 MediaSource：强制 DirectPlay
+	modified := false
+	for _, ms := range mediaSources {
+		source, ok := ms.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		source["SupportsDirectPlay"] = true
+		source["SupportsDirectStream"] = true
+		source["SupportsTranscoding"] = false
+		modified = true
+	}
+
+	if !modified {
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		return nil
+	}
+
+	// 重新序列化
+	newBody, err := json.Marshal(data)
+	if err != nil {
+		resp.Body = io.NopCloser(bytes.NewReader(body))
+		return nil
+	}
+
+	log.Printf("✅ PlaybackInfo: 已强制 DirectPlay (MediaSources=%d 个)", len(mediaSources))
+
+	resp.Body = io.NopCloser(bytes.NewReader(newBody))
+	resp.ContentLength = int64(len(newBody))
+	resp.Header.Set("Content-Length", strconv.Itoa(len(newBody)))
+	resp.Header.Del("Content-Encoding")
+
+	return nil
 }
 
