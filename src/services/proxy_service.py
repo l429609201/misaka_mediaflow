@@ -269,6 +269,11 @@ class ProxyService:
             )
 
         # ── 查找匹配的存储源配置 ──────────────────────────────────────────
+        # storage_id=0 表示路径映射未关联存储源，直接走 115 解析
+        if matched_storage_id == 0:
+            logger.debug("路径映射未关联存储源(storage_id=0)，直接走 115 解析: %s", cloud_path)
+            return await self._resolve_115_by_cloud_path(cloud_path, db, user_agent)
+
         result = await db.execute(
             select(StorageConfig).where(StorageConfig.id == matched_storage_id)
         )
