@@ -195,12 +195,24 @@ class RedirectService:
     ) -> dict:
         """
         通过路径解析：
+        0. 传入值本身就是 HTTP URL（PlaybackInfo 直接返回的 STRM 内容）
+           → 先尝试提取 pick_code，提取不到则直接 302
         1. 先尝试从路径中提取 pickcode（STRM 内容场景）
         2. PathMapping 本地路径 → 云端路径
         3. P115FsCache 查 pickcode（精确路径）
         4. P115FsCache 查 pickcode（文件名兜底）
         5. 115 API 搜索（FsCache 无数据时直接调用网盘 API）⭐ 参考 gostrm 逻辑
         """
+        # 0. file_path 本身就是 HTTP(S) URL（来自 PlaybackInfo.MediaSources.Path 的 STRM 内容）
+        if file_path.startswith(("http://", "https://")):
+            pc = _extract_pickcode_from_text(file_path)
+            if pc:
+                logger.info("[redirect] HTTP路径提取pickcode=%s", pc)
+                return await self._resolve_by_pickcode(pc, source=f"{source}_http_pickcode")
+            # 没有 pick_code → URL 本身即直链，直接 302
+            logger.info("[redirect] HTTP路径为直链，直接302: %s", file_path[:100])
+            return {"url": file_path, "expires_in": 0, "source": f"{source}_http_direct", "error": ""}
+
         # 1. 路径本身就是 STRM 文件 → 读取内容提取 pickcode
         if file_path.lower().endswith(".strm"):
             content = self._read_strm_file(file_path)
@@ -209,11 +221,10 @@ class RedirectService:
                 if pc:
                     logger.info("[redirect] STRM文件提取pickcode=%s path=%s", pc, file_path)
                     return await self._resolve_by_pickcode(pc, source=f"{source}_strm")
-                # STRM 内容本身是个 URL → 递归解析
-                if content.startswith("http"):
-                    pc2 = _extract_pickcode_from_text(content)
-                    if pc2:
-                        return await self._resolve_by_pickcode(pc2, source=f"{source}_strm_url")
+                # STRM 内容本身是个 HTTP 直链（不含 pick_code）→ 直接 302
+                if content.startswith(("http://", "https://")):
+                    logger.info("[redirect] STRM内容为HTTP直链，直接302: %s", content[:100])
+                    return {"url": content, "expires_in": 0, "source": f"{source}_strm_direct", "error": ""}
 
         # 2. PathMapping：本地挂载路径 → 云端路径
         cloud_path = await self._apply_path_mapping(db, file_path)

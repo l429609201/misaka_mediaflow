@@ -542,7 +542,8 @@ class ProxyService:
 
         # ── 路径处理 ──────────────────────────────────────────────────────────────
         # 情况A: 拿到的就是 http/https URL（PlaybackInfo 返回的 STRM 内容）
-        #         直接提取 pick_code → 获取直链
+        #         先尝试提取 pick_code → 获取 115 直链
+        #         提取不到时，说明这个 URL 本身就是直链，直接作为 302 目标返回
         if file_path.startswith(("http://", "https://")):
             pick_code = self._extract_pick_code(file_path)
             if pick_code:
@@ -554,9 +555,9 @@ class ProxyService:
                         db, item_id, item_info or {}, pick_code, file_path
                     )
                 return result
-            # URL 但没提取到 pick_code（可能是其他存储的直链？透传失败）
-            logger.warning("PlaybackInfo返回URL但无pick_code: %s", file_path[:100])
-            return {"url": "", "expires_in": 0, "error": "no pick_code in strm url"}
+            # URL 中没有 pick_code → STRM 内容本身就是 HTTP 直链，直接 302
+            logger.info("STRM内容为HTTP直链(无pick_code)，直接302: item_id=%s url=%s", item_id, file_path[:100])
+            return {"url": file_path, "expires_in": 0, "error": ""}
 
         # 情况B: 本地 .strm 文件路径 → 读文件内容 → 提取 pick_code
         if file_path.lower().endswith(".strm"):
