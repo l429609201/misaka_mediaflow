@@ -1,6 +1,5 @@
-// src/components/LiveLogDrawer.jsx
-// 实时日志抽屉 — 对标弹幕库 Logs.jsx 样式
-// SSE实时推送 + 左色条卡片行 + 多开关级别过滤 + 搜索 + 自动滚动 + 单行复制
+// src/components/LiveLogDrawer.jsx — 对标弹幕库 RealtimeLogModal
+// 卡片行 + marginBottom间距 + 级别Switch(颜色联动主题色) + 左边框 + 搜索高亮 + 单行复制
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Drawer, Input, Space, Switch, Tag, Tooltip, Typography, message } from 'antd'
@@ -12,21 +11,19 @@ const { Text } = Typography
 const MAX_LINES = 1000
 const ALL_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
 
-// 左边框 / 级别文字颜色（亮/暗双套）
-const LEVEL_BORDER = {
+const LEVEL_COLOR = {
   dark:  { CRITICAL: '#ff1744', ERROR: '#ff4d4f', WARNING: '#faad14', INFO: '#52c41a', DEBUG: '#1677ff' },
   light: { CRITICAL: '#c62828', ERROR: '#d32f2f', WARNING: '#e65100', INFO: '#2e7d32', DEBUG: '#1565c0' },
 }
-// 行背景底色（极淡色调，级别可视化）
-const LEVEL_ROW_BG = {
+const LEVEL_BG = {
   dark:  { CRITICAL: 'rgba(255,23,68,0.08)',  ERROR: 'rgba(255,77,79,0.07)',  WARNING: 'rgba(250,173,20,0.07)', INFO: 'rgba(82,196,26,0.05)',  DEBUG: 'rgba(22,119,255,0.05)' },
   light: { CRITICAL: 'rgba(198,40,40,0.06)',  ERROR: 'rgba(211,47,47,0.05)', WARNING: 'rgba(230,81,0,0.06)',   INFO: 'rgba(46,125,50,0.04)',  DEBUG: 'rgba(21,101,192,0.04)' },
 }
 
-const getBorderColor = (level, isDark) =>
-  ((isDark ? LEVEL_BORDER.dark : LEVEL_BORDER.light)[level]) ?? (isDark ? '#555' : '#bbb')
-const getRowBg = (level, isDark) =>
-  ((isDark ? LEVEL_ROW_BG.dark : LEVEL_ROW_BG.light)[level]) ?? 'transparent'
+const getLevelColor = (level, isDark) =>
+  ((isDark ? LEVEL_COLOR.dark : LEVEL_COLOR.light)[level]) ?? (isDark ? '#888' : '#666')
+const getLevelBg = (level, isDark) =>
+  ((isDark ? LEVEL_BG.dark : LEVEL_BG.light)[level]) ?? 'transparent'
 
 const parseLevel = (line) => {
   if (line.includes('[CRITICAL]')) return 'CRITICAL'
@@ -37,12 +34,10 @@ const parseLevel = (line) => {
   return 'INFO'
 }
 
-// 搜索关键词高亮（纯 inline style，不依赖 Tailwind）
 const highlight = (text, kw, isDark) => {
   if (!kw) return text
-  const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const parts = text.split(new RegExp(`(${escaped})`, 'gi'))
-  return parts.map((p, i) =>
+  const esc = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return text.split(new RegExp(`(${esc})`, 'gi')).map((p, i) =>
     p.toLowerCase() === kw.toLowerCase()
       ? <mark key={i} style={{ background: isDark ? '#b5861a' : '#ffe58f', color: 'inherit', borderRadius: 2, padding: '0 1px' }}>{p}</mark>
       : p
@@ -51,7 +46,7 @@ const highlight = (text, kw, isDark) => {
 
 export default function LiveLogDrawer({ open, onClose }) {
   const { t } = useTranslation()
-  const { isDark } = useThemeContext()
+  const { isDark, colorPrimary } = useThemeContext()
 
   const [logs, setLogs]             = useState([])
   const [connected, setConnected]   = useState(false)
@@ -63,11 +58,10 @@ export default function LiveLogDrawer({ open, onClose }) {
   const esRef        = useRef(null)
   const [messageApi, ctxHolder] = message.useMessage()
 
-  // 主题色
-  const logBg      = isDark ? '#141414' : '#f9f9f9'
-  const labelClr   = isDark ? '#888'    : '#666'
-  const textClr    = isDark ? 'rgba(255,255,255,0.82)' : '#333'
-  const hoverRowBg = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.025)'
+  const logBg    = isDark ? '#141414' : '#f5f5f5'
+  const cardBg   = isDark ? '#1f1f1f' : '#ffffff'
+  const textClr  = isDark ? 'rgba(255,255,255,0.82)' : '#333'
+  const labelClr = isDark ? '#888' : '#666'
 
   // SSE 连接
   useEffect(() => {
@@ -121,21 +115,25 @@ export default function LiveLogDrawer({ open, onClose }) {
     >
       {ctxHolder}
 
-      {/* 工具栏第一行：各级别独立开关 */}
-      <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <Text style={{ color: labelClr, fontSize: 12, whiteSpace: 'nowrap' }}>{t('logs.levelFilter', '日志级别')}：</Text>
+      {/* 级别 Switch 工具栏 — 弹幕库同款，级别颜色做Switch背景色 */}
+      <div style={{
+        marginBottom: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+        padding: '8px 12px', borderRadius: 8,
+        background: isDark ? '#1a1a1a' : '#fafafa',
+        border: `1px solid ${isDark ? '#2a2a2a' : '#e8e8e8'}`,
+      }}>
+        <Text style={{ color: labelClr, fontSize: 12, whiteSpace: 'nowrap', marginRight: 4 }}>
+          {t('logs.levelFilter', '级别过滤')}：
+        </Text>
         {ALL_LEVELS.map(lv => {
-          const clr = getBorderColor(lv, isDark)
+          const clr = getLevelColor(lv, isDark)
+          const on  = levelOn[lv]
           return (
-            <Space key={lv} size={4} style={{ alignItems: 'center' }}>
-              <Switch
-                size="small" checked={levelOn[lv]} onChange={() => toggleLevel(lv)}
-                style={levelOn[lv] ? { backgroundColor: clr } : {}}
-              />
-              <Text style={{
-                fontSize: 12, fontWeight: levelOn[lv] ? 700 : 400, userSelect: 'none',
-                color: levelOn[lv] ? clr : (isDark ? '#444' : '#ccc'),
-              }}>
+            <Space key={lv} size={5} style={{ alignItems: 'center' }}>
+              <Switch size="small" checked={on} onChange={() => toggleLevel(lv)}
+                style={on ? { backgroundColor: clr } : {}} />
+              <Text style={{ fontSize: 12, fontWeight: on ? 700 : 400, userSelect: 'none',
+                color: on ? clr : (isDark ? '#3a3a3a' : '#ccc'), transition: 'color 0.2s' }}>
                 {lv}
               </Text>
             </Space>
@@ -143,16 +141,15 @@ export default function LiveLogDrawer({ open, onClose }) {
         })}
       </div>
 
-      {/* 工具栏第二行：搜索 + 操作按钮 */}
+      {/* 搜索 + 操作按钮行 */}
       <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-        <Input
-          size="small" placeholder={t('logs.searchPlaceholder', '搜索日志...')}
-          prefix={<SearchOutlined />} value={searchText}
-          onChange={e => setSearchText(e.target.value)} allowClear style={{ width: 220 }}
-        />
+        <Input size="small" placeholder={t('logs.searchPlaceholder', '搜索日志...')}
+          prefix={<SearchOutlined style={{ color: colorPrimary }} />}
+          value={searchText} onChange={e => setSearchText(e.target.value)} allowClear style={{ width: 220 }} />
         <Space>
           <Text style={{ color: labelClr, fontSize: 12 }}>{t('logs.autoScroll', '自动滚动')}</Text>
-          <Switch size="small" checked={autoScroll} onChange={setAutoScroll} />
+          <Switch size="small" checked={autoScroll} onChange={setAutoScroll}
+            style={autoScroll ? { backgroundColor: colorPrimary } : {}} />
           <Tooltip title={t('logs.scrollToBottom', '滚到底部')}>
             <Button size="small" icon={<VerticalAlignBottomOutlined />}
               onClick={() => containerRef.current && (containerRef.current.scrollTop = containerRef.current.scrollHeight)} />
@@ -166,56 +163,51 @@ export default function LiveLogDrawer({ open, onClose }) {
         </Space>
       </div>
 
-      {/* 日志内容区 — 弹幕库风格：左色条 + 行背景 + hover显示复制 */}
+      {/* 日志内容区 — 弹幕库风格：每条独立卡片 + marginBottom间距 + 级别颜色左边框 */}
       <div ref={containerRef} style={{
-        height: 'calc(100% - 108px)', overflowY: 'auto',
-        background: logBg, borderRadius: 8, padding: '6px 0',
+        height: 'calc(100% - 130px)', overflowY: 'auto',
+        background: logBg, borderRadius: 8, padding: '8px',
         fontFamily: "'JetBrains Mono','Fira Code','Consolas',monospace",
-        fontSize: 12, lineHeight: 1.75,
+        fontSize: 12, lineHeight: 1.7,
       }}>
         {filteredLogs.length === 0 && (
-          <div style={{ padding: '16px 20px', color: isDark ? '#555' : '#bbb' }}>
+          <div style={{ padding: '24px', textAlign: 'center', color: isDark ? '#555' : '#bbb' }}>
             {t('logs.waitingLogs', '等待日志...')}
           </div>
         )}
         {filteredLogs.map((line, i) => {
-          const level  = parseLevel(line)
-          const border = getBorderColor(level, isDark)
-          const rowBg  = hoveredIdx === i ? hoverRowBg : getRowBg(level, isDark)
+          const level   = parseLevel(line)
+          const clr     = getLevelColor(level, isDark)
+          const bg      = getLevelBg(level, isDark)
+          const isHover = hoveredIdx === i
           return (
-            <div
-              key={i}
+            <div key={i}
               onMouseEnter={() => setHoveredIdx(i)}
               onMouseLeave={() => setHoveredIdx(null)}
               style={{
                 display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
-                padding: '3px 12px',
-                background: rowBg,
-                borderLeft: `4px solid ${border}`,
+                marginBottom: 4,
+                padding: '5px 8px 5px 10px',
+                borderRadius: 6,
+                background: isHover ? (isDark ? '#252525' : '#ebebeb') : (bg || cardBg),
+                borderLeft: `3px solid ${clr}`,
+                boxShadow: isDark ? 'none' : '0 1px 2px rgba(0,0,0,0.04)',
                 transition: 'background 0.15s',
                 cursor: 'default',
               }}
             >
-              {/* 日志文字：级别标签单独着色，搜索词高亮 */}
-              <span style={{ color: textClr, whiteSpace: 'pre-wrap', wordBreak: 'break-all', flex: 1, lineHeight: 1.75 }}>
+              <span style={{ color: textClr, whiteSpace: 'pre-wrap', wordBreak: 'break-all', flex: 1 }}>
                 {line.split(new RegExp(`(\\[${level}\\]|\\[WARN\\])`, 'g')).map((part, pi) =>
                   (part === `[${level}]` || part === '[WARN]')
-                    ? <span key={pi} style={{ color: border, fontWeight: 700 }}>{part}</span>
+                    ? <span key={pi} style={{ color: clr, fontWeight: 700 }}>{part}</span>
                     : (searchText ? highlight(part, searchText, isDark) : part)
                 )}
               </span>
-              {/* 单行复制按钮：hover 才显示 */}
               <Tooltip title={t('common.copy', '复制')}>
-                <Button
-                  type="text" size="small" icon={<CopyOutlined />}
+                <Button type="text" size="small" icon={<CopyOutlined />}
                   onClick={() => copyLine(line)}
-                  style={{
-                    opacity: hoveredIdx === i ? 1 : 0,
-                    transition: 'opacity 0.15s',
-                    color: isDark ? '#888' : '#999',
-                    flexShrink: 0, marginLeft: 8, padding: '0 4px', height: 20,
-                  }}
-                />
+                  style={{ opacity: isHover ? 1 : 0, transition: 'opacity 0.15s',
+                    color: isDark ? '#888' : '#999', flexShrink: 0, marginLeft: 6, padding: '0 4px', height: 20 }} />
               </Tooltip>
             </div>
           )
