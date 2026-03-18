@@ -6,11 +6,16 @@ from typing import Optional
 
 
 class MediaServerAdapter(ABC):
-    """Emby / Jellyfin 抽象基类"""
+    """Emby 抽象基类"""
 
     @abstractmethod
     async def get_libraries(self) -> list[dict]:
         """获取媒体库列表"""
+        ...
+
+    @abstractmethod
+    async def get_users(self) -> list[dict]:
+        """获取用户列表，返回 [{"id": ..., "name": ...}, ...]"""
         ...
 
     @abstractmethod

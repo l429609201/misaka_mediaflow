@@ -46,6 +46,9 @@ export const P115 = () => {
   const [mediaLibraries, setMediaLibraries] = useState([])
   const [selectedLibIds, setSelectedLibIds] = useState([])
   const [libLoading, setLibLoading] = useState(false)
+  // 用户列表
+  const [embyUsers, setEmbyUsers] = useState([])
+  const [usersLoading, setUsersLoading] = useState(false)
 
   // ===================================================================
   //                          数据加载
@@ -69,7 +72,29 @@ export const P115 = () => {
     try {
       const { data } = await systemApi.getMediaServer()
       msForm.setFieldsValue(data)
+      // 若已保存 host+api_key，自动拉取用户列表以填充下拉
+      if (data.host && data.api_key) {
+        fetchEmbyUsers(data.host, data.api_key)
+      }
     } catch { /* ignore */ }
+  }, [msForm]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 查询 Emby 用户列表（用传入的 host+api_key，或从表单实时取）
+  const fetchEmbyUsers = useCallback(async (host, apiKey) => {
+    const h = host ?? msForm.getFieldValue('host')
+    const k = apiKey ?? msForm.getFieldValue('api_key')
+    if (!h || !k) { message.warning('请先填写服务器地址和 API Key'); return }
+    setUsersLoading(true)
+    try {
+      const { data } = await systemApi.getMediaServerUsers({ host: h, api_key: k })
+      if (data.success) {
+        setEmbyUsers(data.users || [])
+        if (!data.users?.length) message.info('未找到任何用户')
+      } else {
+        message.error(data.message || '获取用户失败')
+      }
+    } catch { message.error('获取用户失败') }
+    finally { setUsersLoading(false) }
   }, [msForm])
 
   const fetchSelectedLibraries = useCallback(async () => {
@@ -136,7 +161,8 @@ export const P115 = () => {
     setMsLoading(true)
     try {
       const values = await msForm.validateFields()
-      await systemApi.updateMediaServer(values)
+      // type 固定 emby，user_id 从表单取（Form.Item name="user_id"）
+      await systemApi.updateMediaServer({ ...values, type: 'emby' })
       await systemApi.saveSelectedLibraries(selectedLibIds)
       message.success(t('common.success'))
     } catch { message.error(t('common.failed')) }
@@ -148,11 +174,13 @@ export const P115 = () => {
     setMsTestResult(null)
     try {
       const values = await msForm.validateFields()
-      const { data } = await systemApi.testMediaServer(values)
+      const { data } = await systemApi.testMediaServer({ ...values, type: 'emby' })
       setMsTestResult(data)
       if (data.success) {
         setMediaLibraries(data.libraries || [])
         message.success(data.message)
+        // 测试连接成功后自动拉取用户列表
+        fetchEmbyUsers(values.host, values.api_key)
       } else {
         message.error(data.message)
       }
@@ -208,18 +236,32 @@ export const P115 = () => {
         {/* 左: 媒体服务器配置 */}
         <Col xs={24} lg={12}>
           <Card title={<Space><VideoCameraOutlined />{t('p115.mediaServerTitle')}</Space>}>
-            <Form form={msForm} layout="vertical" initialValues={{ type: 'emby' }}>
-              <Form.Item name="type" label={t('p115.mediaServerType')} rules={[{ required: true }]}>
-                <Select options={[
-                  { value: 'emby', label: 'Emby' },
-                  { value: 'jellyfin', label: 'Jellyfin' },
-                ]} />
-              </Form.Item>
+            <Form form={msForm} layout="vertical">
               <Form.Item name="host" label={t('p115.mediaServerHost')} rules={[{ required: true }]}>
                 <Input placeholder="http://192.168.1.100:8096" />
               </Form.Item>
               <Form.Item name="api_key" label={t('p115.mediaServerApiKey')} rules={[{ required: true }]}>
                 <Input.Password placeholder="API Key" visibilityToggle />
+              </Form.Item>
+              {/* 用户选择 */}
+              <Form.Item label="播放用户">
+                <Space.Compact style={{ width: '100%' }}>
+                  <Form.Item name="user_id" noStyle>
+                    <Select
+                      placeholder="请先点击「检索用户」"
+                      allowClear
+                      style={{ width: '100%' }}
+                      loading={usersLoading}
+                      options={embyUsers.map(u => ({ value: u.id, label: u.name }))}
+                    />
+                  </Form.Item>
+                  <Button
+                    loading={usersLoading}
+                    onClick={() => fetchEmbyUsers()}
+                  >
+                    检索用户
+                  </Button>
+                </Space.Compact>
               </Form.Item>
             </Form>
 

@@ -28,6 +28,7 @@ export const systemApi = {
   getMediaServer: () => api.get('/system/media-server'),
   updateMediaServer: (payload) => api.post('/system/media-server', payload),
   testMediaServer: (payload) => api.post('/system/media-server/test', payload),
+  getMediaServerUsers: (payload) => api.post('/system/media-server/users', payload),
   getMediaLibraries: () => api.get('/system/media-server/libraries'),
   getSelectedLibraries: () => api.get('/system/media-server/selected-libraries'),
   saveSelectedLibraries: (library_ids) => api.post('/system/media-server/selected-libraries', { library_ids }),

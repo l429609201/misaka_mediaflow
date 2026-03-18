@@ -529,7 +529,8 @@ func extractTokenFromMediaBrowser(auth string) string {
 
 // itemIdFromPath 从 PlaybackInfo URL 路径中提取 itemId
 // 路径格式: /emby/Items/44998/PlaybackInfo 或 /Items/44998/PlaybackInfo
-var playbackInfoRe = regexp.MustCompile(`/Items/(\d+)/PlaybackInfo`)
+// [^/]+ 兼容纯数字 ID 和 GUID 格式
+var playbackInfoRe = regexp.MustCompile(`/Items/([^/]+)/PlaybackInfo`)
 
 func itemIdFromPath(path string) string {
 	m := playbackInfoRe.FindStringSubmatch(path)
@@ -539,49 +540,18 @@ func itemIdFromPath(path string) string {
 	return ""
 }
 
-// isStrmItem 通过 Emby API 查询 Item.Path，判断是否为 STRM 文件
-// PlaybackInfo 的 MediaSource 中看不出是否为 STRM（刮削后 Container/Path 都是实际文件），
-// 只有 Item 顶层的 Path 才有 .strm 后缀
-func (h *ProxyHandler) isStrmItem(itemID string, apiKey string) bool {
-	if itemID == "" {
-		return false
-	}
-
-	itemURL := strings.TrimRight(h.cfg.MediaServer.Host, "/") +
-		"/emby/Items/" + itemID + "?Fields=Path&api_key=" + apiKey
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(itemURL)
-	if err != nil {
-		logger.Infof("[PlaybackInfo] 查询 Item %s 失败: %v", itemID, err)
-		return false
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		logger.Infof("⚠️ [PlaybackInfo] 查询 Item %s API 返回 status=%d (URL=%s)", itemID, resp.StatusCode, itemURL)
-		return false
-	}
-
-	var item struct {
-		Path string `json:"Path"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&item); err != nil {
-		return false
-	}
-
-	return strings.HasSuffix(strings.ToLower(item.Path), ".strm")
-}
-
 // patchPlaybackInfo 拦截 PlaybackInfo API 响应，对 STRM 文件强制 DirectPlay。
 // 参考 embyExternalUrl emby.js transferPlaybackInfo + modifyDirectPlaySupports
 //
 // 问题: Emby 对浏览器不支持的编码（如 HEVC/x265）返回 SupportsDirectPlay=false，
-//       导致前端走 HLS 转码（/videos/:id/hls1/），302 重定向完全无法生效。
 //
-// 方案: 先通过 Emby API 查询 Item.Path 判断是否为 STRM 文件，
-//       如果是 STRM，修改 MediaSources 中的 DirectPlay 标志，
-//       强制前端走 DirectPlay → 请求 /videos/:id/stream → 触发 302 → CDN 直链。
-//       非 STRM 文件保持 Emby 原始行为，该转码就转码。
+//	导致前端走 HLS 转码（/videos/:id/hls1/），302 重定向完全无法生效。
+//
+// 方案: 调用 Python 内部接口 /internal/emby/check-strm 判断是否为 STRM 文件，
+//
+//	Python 用数据库中保存的 user_id 拼接正确的 Emby 查询路径，
+//	确认是 STRM 后强制 DirectPlay → 触发 302 → CDN 直链。
+//	非 STRM 文件保持 Emby 原始行为。
 func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 	if resp.StatusCode != http.StatusOK {
 		return nil
@@ -589,26 +559,27 @@ func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 
 	path := resp.Request.URL.Path
 	itemID := itemIdFromPath(path)
-
-	// 从原始请求中提取 API Key（支持多种认证方式）
-	apiKey := extractAPIKey(resp.Request)
-	if apiKey == "" {
-		logger.Infof("⚠️ [PlaybackInfo] itemId=%s apiKey 提取失败，跳过 STRM 检测 (headers: X-Emby-Token=%q, X-Emby-Authorization=%q, Authorization=%q, api_key=%q)",
-			itemID,
-			resp.Request.Header.Get("X-Emby-Token"),
-			resp.Request.Header.Get("X-Emby-Authorization"),
-			resp.Request.Header.Get("Authorization"),
-			resp.Request.URL.Query().Get("api_key"))
+	if itemID == "" {
+		logger.Infof("⚠️ [PlaybackInfo] 无法从路径提取 itemId: path=%s", path)
 		return nil
 	}
-	logger.Infof("[PlaybackInfo] itemId=%s apiKey提取成功 (长度=%d)", itemID, len(apiKey))
 
-	// 查 Item.Path 判断是否 STRM
-	if !h.isStrmItem(itemID, apiKey) {
+	// 从原始请求中提取 API Key，透传给 Python 作为优先 token
+	apiKey := extractAPIKey(resp.Request)
+	logger.Infof("[PlaybackInfo] itemId=%s apiKey长度=%d", itemID, len(apiKey))
+
+	// 调 Python 内部接口判断是否 STRM，Python 自己用保存的 user_id 拼路径
+	isStrm, err := h.pyClient.CheckStrm(itemID, apiKey)
+	if err != nil {
+		logger.Infof("⚠️ [PlaybackInfo] CheckStrm 调用失败: %v，跳过 patch", err)
+		return nil
+	}
+	if !isStrm {
 		logger.Infof("[PlaybackInfo] itemId=%s 非 STRM 文件，保持原始行为", itemID)
 		return nil
 	}
 	logger.Infof("[PlaybackInfo] itemId=%s 确认为 STRM 文件，开始强制 DirectPlay", itemID)
+
 
 	// ---- 以下只对 STRM 文件执行 ----
 

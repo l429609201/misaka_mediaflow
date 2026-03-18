@@ -115,6 +115,41 @@ func (pc *PythonClient) doGet(reqURL string) (*ResolveResult, error) {
 	return &result, nil
 }
 
+// CheckStrmResult Python check-strm 返回结果
+type CheckStrmResult struct {
+	IsStrm bool `json:"is_strm"`
+}
+
+// CheckStrm 调用 Python 内部接口，判断 itemId 对应的 Emby 条目是否为 STRM 文件。
+// Python 端会自动使用数据库中保存的 user_id / host / api_key 拼接正确查询路径。
+// apiKey 为 Go 从 PlaybackInfo 请求里提取的 token，Python 优先用此值，兜底用数据库值。
+func (pc *PythonClient) CheckStrm(itemID, apiKey string) (bool, error) {
+	q := url.Values{}
+	q.Set("item_id", itemID)
+	if apiKey != "" {
+		q.Set("api_key", apiKey)
+	}
+	reqURL := fmt.Sprintf("%s/internal/emby/check-strm?%s", pc.baseURL, q.Encode())
+
+	resp, err := pc.client.Get(reqURL)
+	if err != nil {
+		log.Printf("[go] CheckStrm 请求失败: %v url=%s", err, reqURL)
+		return false, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return false, err
+	}
+
+	var result CheckStrmResult
+	if err := json.Unmarshal(body, &result); err != nil {
+		return false, fmt.Errorf("CheckStrm 解析响应失败: %w body=%s", err, string(body))
+	}
+	return result.IsStrm, nil
+}
+
 // GetAPIInterval 从 Python 获取 115 的 API 请求间隔（秒）
 func (pc *PythonClient) GetAPIInterval() float64 {
 	reqURL := fmt.Sprintf("%s/internal/p115/api-interval", pc.baseURL)
