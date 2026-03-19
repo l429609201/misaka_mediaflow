@@ -42,6 +42,9 @@ export const systemApi = {
   getLogFiles: () => api.get('/system/logs/files'),
   getLogFileContent: (filename, tail = 500) =>
     api.get(`/system/logs/files/${encodeURIComponent(filename)}`, { params: { tail } }),
+  // 搜索源
+  discoverSources: () => api.get('/search-source/discover'),
+  saveSource: (payload) => api.post('/search-source/save', payload),
 }
 
 // ==================== Storage ====================
