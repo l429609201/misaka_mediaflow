@@ -9,6 +9,7 @@ export const RoutePaths = {
   STRM: '/strm',
   DRIVE115: '/115',
   MEDIA_PROXY: '/media-proxy',
+  SEARCH_SOURCE: '/search-source',
   LOGS: '/logs',
   SETTING: '/setting',
 }
