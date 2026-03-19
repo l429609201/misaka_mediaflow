@@ -1,79 +1,76 @@
 // src/pages/search-source/index.jsx
-// 元信息搜索源配置
+// 搜索源配置 — 顶部 Tabs，当前仅含「元信息搜索源」
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
-  Card, Table, Button, Form, Input, Select, Switch, Space,
-  Tag, Modal, message, Alert, Tooltip,
+  Card, Tabs, Table, Button, Form, Input, Switch, Space,
+  Tag, Modal, Spin, Alert, Tooltip, Typography,
 } from 'antd'
-import {
-  PlusOutlined, DeleteOutlined, EditOutlined, SearchOutlined,
-} from '@ant-design/icons'
+import { EditOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons'
 
-const SOURCE_TYPES = [
-  { value: 'tmdb', label: 'TMDB' },
-  { value: 'tvdb', label: 'TVDB' },
-  { value: 'douban', label: '豆瓣' },
-  { value: 'bangumi', label: 'Bangumi' },
-  { value: 'custom', label: '自定义' },
-]
+const { Text } = Typography
 
-export const SearchSource = () => {
-  const [sources, setSources] = useState([
-    { key: '1', name: 'TMDB（默认）', type: 'tmdb', api_key: '', base_url: 'https://api.themoviedb.org', enabled: true },
-  ])
-  const [modalOpen, setModalOpen] = useState(false)
-  const [editingKey, setEditingKey] = useState(null)
+// ─── 模拟本地发现（后续接后端接口替换） ───────────────────────
+const mockDiscover = () =>
+  new Promise((resolve) =>
+    setTimeout(() =>
+      resolve([
+        { key: 'tmdb',    name: 'TMDB',    base_url: 'https://api.themoviedb.org', api_key: '', enabled: true,  status: 'ok' },
+        { key: 'tvdb',    name: 'TVDB',    base_url: 'https://api4.thetvdb.com',   api_key: '', enabled: false, status: 'ok' },
+        { key: 'bangumi', name: 'Bangumi', base_url: 'https://api.bgm.tv',         api_key: '', enabled: false, status: 'ok' },
+      ]),
+    300,
+    ),
+  )
+
+// ─── 元信息搜索源 Tab 内容 ──────────────────────────────────
+const MetaSourceTab = () => {
+  const [loading, setLoading] = useState(false)
+  const [sources, setSources] = useState([])
+  const [editOpen, setEditOpen] = useState(false)
+  const [editingRecord, setEditingRecord] = useState(null)
   const [form] = Form.useForm()
 
-  const openAdd = () => {
-    setEditingKey(null)
-    form.resetFields()
-    form.setFieldsValue({ type: 'tmdb', enabled: true })
-    setModalOpen(true)
+  const discover = async () => {
+    setLoading(true)
+    try {
+      const data = await mockDiscover()
+      setSources(data)
+    } finally {
+      setLoading(false)
+    }
   }
 
-  const openEdit = (record) => {
-    setEditingKey(record.key)
-    form.setFieldsValue(record)
-    setModalOpen(true)
-  }
-
-  const handleOk = () => {
-    form.validateFields().then(values => {
-      if (editingKey) {
-        setSources(prev => prev.map(s => s.key === editingKey ? { ...s, ...values } : s))
-        message.success('已更新')
-      } else {
-        setSources(prev => [...prev, { key: Date.now().toString(), ...values }])
-        message.success('已添加')
-      }
-      setModalOpen(false)
-    })
-  }
-
-  const handleDelete = (key) => {
-    Modal.confirm({
-      title: '确认删除该搜索源？',
-      onOk: () => {
-        setSources(prev => prev.filter(s => s.key !== key))
-        message.success('已删除')
-      },
-    })
-  }
+  useEffect(() => { discover() }, [])
 
   const handleToggle = (key) => {
     setSources(prev => prev.map(s => s.key === key ? { ...s, enabled: !s.enabled } : s))
   }
 
+  const openEdit = (record) => {
+    setEditingRecord(record)
+    form.setFieldsValue({ base_url: record.base_url, api_key: record.api_key })
+    setEditOpen(true)
+  }
+
+  const handleEditOk = () => {
+    form.validateFields().then(values => {
+      setSources(prev => prev.map(s => s.key === editingRecord.key ? { ...s, ...values } : s))
+      setEditOpen(false)
+    })
+  }
+
   const columns = [
-    { title: '名称', dataIndex: 'name', key: 'name' },
     {
-      title: '类型', dataIndex: 'type', key: 'type',
-      render: (v) => {
-        const found = SOURCE_TYPES.find(t => t.value === v)
-        return <Tag color="blue">{found?.label || v}</Tag>
-      },
+      title: '名称', dataIndex: 'name', key: 'name',
+      render: (v, record) => (
+        <Space>
+          <Text strong>{v}</Text>
+          {record.status === 'ok'
+            ? <Tag color="success">已发现</Tag>
+            : <Tag color="error">不可用</Tag>}
+        </Space>
+      ),
     },
     { title: '接口地址', dataIndex: 'base_url', key: 'base_url', ellipsis: true },
     {
@@ -87,62 +84,80 @@ export const SearchSource = () => {
       ),
     },
     {
-      title: '操作', key: 'action', width: 100,
+      title: '操作', key: 'action', width: 70,
       render: (_, record) => (
-        <Space size="small">
-          <Tooltip title="编辑">
-            <Button type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
-          </Tooltip>
-          <Tooltip title="删除">
-            <Button danger type="text" size="small" icon={<DeleteOutlined />} onClick={() => handleDelete(record.key)} />
-          </Tooltip>
-        </Space>
+        <Tooltip title="编辑配置">
+          <Button type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+        </Tooltip>
       ),
     },
   ]
 
   return (
-    <Card
-      title={<Space><SearchOutlined />搜索源配置</Space>}
-      extra={<Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加搜索源</Button>}
-    >
+    <>
       <Alert
         type="info" showIcon style={{ marginBottom: 16 }}
-        message="搜索源用于元信息刮削，Emby 刮削时将按顺序依次查询已启用的搜索源。"
+        message="以下搜索源由系统本地发现，启用后将按顺序用于元信息刮削。可编辑接口地址与 API Key 以覆盖默认值。"
       />
-      <Table
-        size="small"
-        dataSource={sources}
-        columns={columns}
-        pagination={false}
-        locale={{ emptyText: '暂无搜索源，点击右上角「添加」按钮新增' }}
-      />
+      <Spin spinning={loading}>
+        <Table
+          size="small"
+          dataSource={sources}
+          columns={columns}
+          rowKey="key"
+          pagination={false}
+          locale={{ emptyText: '未发现可用搜索源，请点击右上角「重新发现」' }}
+        />
+      </Spin>
 
       <Modal
-        title={editingKey ? '编辑搜索源' : '添加搜索源'}
-        open={modalOpen}
-        onOk={handleOk}
-        onCancel={() => setModalOpen(false)}
+        title={`编辑 ${editingRecord?.name} 配置`}
+        open={editOpen}
+        onOk={handleEditOk}
+        onCancel={() => setEditOpen(false)}
         destroyOnClose
       >
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}>
-            <Input placeholder="例如：TMDB（代理）" />
-          </Form.Item>
-          <Form.Item name="type" label="类型" rules={[{ required: true }]}>
-            <Select options={SOURCE_TYPES} />
-          </Form.Item>
           <Form.Item name="base_url" label="接口地址">
-            <Input placeholder="https://api.themoviedb.org" />
+            <Input placeholder="留空则使用默认地址" />
           </Form.Item>
           <Form.Item name="api_key" label="API Key">
             <Input.Password placeholder="留空则使用系统默认" visibilityToggle />
           </Form.Item>
-          <Form.Item name="enabled" label="启用" valuePropName="checked">
-            <Switch />
-          </Form.Item>
         </Form>
       </Modal>
+    </>
+  )
+}
+
+// ─── 页面主体 ────────────────────────────────────────────────
+export const SearchSource = () => {
+  const [discovering, setDiscovering] = useState(false)
+  const [refreshKey, setRefreshKey] = useState(0)
+
+  const handleDiscover = () => {
+    setDiscovering(true)
+    setTimeout(() => { setRefreshKey(k => k + 1); setDiscovering(false) }, 400)
+  }
+
+  const tabItems = [
+    {
+      key: 'meta',
+      label: <Space><SearchOutlined />元信息搜索源</Space>,
+      children: <MetaSourceTab key={refreshKey} />,
+    },
+  ]
+
+  return (
+    <Card
+      title="搜索源配置"
+      extra={
+        <Button icon={<ReloadOutlined />} loading={discovering} onClick={handleDiscover}>
+          重新发现
+        </Button>
+      }
+    >
+      <Tabs items={tabItems} />
     </Card>
   )
 }
