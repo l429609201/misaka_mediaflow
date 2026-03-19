@@ -96,10 +96,14 @@ async def lifespan(app: FastAPI):
     # 3. 初始化管理员密码
     initialize_admin_password()
 
-    # 4. 启动定时调度器
+    # 4. 从数据库加载 HTTP 代理配置，注入 core 层
+    from src.services.proxy_config_service import init_proxy_config
+    await init_proxy_config()
+
+    # 5. 启动定时调度器
     start_scheduler()
 
-    # 5. Go 反代随主程序自动启动
+    # 6. Go 反代随主程序自动启动
     go_result = await go_proxy_service.start()
     if go_result.get("success"):
         logger.info("Go 反代自动启动成功: pid=%s port=%s", go_result.get("pid"), go_result.get("port"))
