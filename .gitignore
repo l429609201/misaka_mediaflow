@@ -8,6 +8,10 @@ venv/
 *.egg
 .pytest_cache/
 .mypy_cache/
+
+# IDE 内部记忆 / 对话备份
+.cunzhi-memory/
+*播放变TS*.json
 .coverage
 htmlcov/
 
