@@ -24,6 +24,7 @@ import {
   BulbFilled,
   NodeIndexOutlined,
   SearchOutlined,
+  FontSizeOutlined,
 } from '@ant-design/icons'
 import { useTranslation } from 'react-i18next'
 import LanguageSwitch from '@/components/LanguageSwitch'
@@ -49,15 +50,16 @@ export const Layout = () => {
   const themeCtx = useThemeContext()
 
   const menuItems = [
-    { key: RoutePaths.HOME,          icon: <DashboardOutlined />,    label: t('menu.dashboard') },
-    { key: RoutePaths.STORAGE,       icon: <DatabaseOutlined />,     label: t('menu.storage') },
-    { key: RoutePaths.MAPPINGS,      icon: <NodeIndexOutlined />,    label: t('menu.mappings') },
-    { key: RoutePaths.STRM,          icon: <FileTextOutlined />,     label: t('menu.strm') },
-    { key: RoutePaths.DRIVE115,      icon: <CloudOutlined />,        label: t('menu.drive115') },
-    { key: RoutePaths.MEDIA_PROXY,   icon: <CloudServerOutlined />,  label: t('menu.mediaProxy') },
-    { key: RoutePaths.SEARCH_SOURCE, icon: <SearchOutlined />,       label: t('menu.searchSource') },
-    { key: RoutePaths.LOGS,          icon: <UnorderedListOutlined />, label: t('menu.logs') },
-    { key: RoutePaths.SETTING,       icon: <SettingOutlined />,      label: t('menu.settings') },
+    { key: RoutePaths.HOME,              icon: <DashboardOutlined />,    label: t('menu.dashboard') },
+    { key: RoutePaths.STORAGE,           icon: <DatabaseOutlined />,     label: t('menu.storage') },
+    { key: RoutePaths.MAPPINGS,          icon: <NodeIndexOutlined />,    label: t('menu.mappings') },
+    { key: RoutePaths.STRM,              icon: <FileTextOutlined />,     label: t('menu.strm') },
+    { key: RoutePaths.DRIVE115,          icon: <CloudOutlined />,        label: t('menu.drive115') },
+    { key: RoutePaths.SEARCH_SOURCE,     icon: <SearchOutlined />,       label: t('menu.searchSource') },
+    { key: RoutePaths.REALTIME_SUBTITLE, icon: <FontSizeOutlined />,     label: t('menu.realtimeSubtitle') },
+    { key: RoutePaths.MEDIA_PROXY,       icon: <CloudServerOutlined />,  label: t('menu.mediaProxy') },
+    { key: RoutePaths.LOGS,              icon: <UnorderedListOutlined />, label: t('menu.logs') },
+    { key: RoutePaths.SETTING,           icon: <SettingOutlined />,      label: t('menu.settings') },
   ]
 
   const handleLogout = () => {
