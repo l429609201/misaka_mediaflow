@@ -30,17 +30,38 @@ async def subtitle_proxy(request: Request):
     Go 反代拦截到 /emby/videos/:id/Subtitles/:subId/Stream.ass 等请求后，
     调用此接口。Python 决定是转发给 fontInAss 还是直接让 Go 透传 Emby。
 
+    处理优先级：
+      1. 检查内封字幕缓存（embedded_sub），命中则直接返回缓存内容送给 fontInAss 处理
+      2. 转发给 fontInAss（font_in_ass_enabled=true 时）
+      3. 以上都不满足 → 告诉 Go 透传 Emby
+
     Query params（由 Go 透传）:
       path      : 原始请求路径（如 /emby/videos/123/Subtitles/1/0/Stream.ass）
       qs        : 原始 query string（如 api_key=xxx&...）
     """
+    import re as _re
     original_path = request.query_params.get("path", "")
     query_string  = request.query_params.get("qs", "")
 
     if not original_path:
         return JSONResponse({"error": "missing path param"}, status_code=400)
 
-    # 尝试转发给 fontInAss
+    # ── 优先级1：内封字幕缓存命中 ────────────────────────────────────────────
+    # 从路径中提取 itemId：/emby/videos/{itemId}/Subtitles/...
+    m = _re.search(r"/videos/(\d+)/Subtitles", original_path, _re.IGNORECASE)
+    if m:
+        item_id = m.group(1)
+        embedded_data = get_cached_embedded_sub(item_id)
+        if embedded_data is not None:
+            logger.info("[subtitle] 内封字幕缓存命中，直接返回给播放器: item_id=%s size=%d", item_id, len(embedded_data))
+            return Response(
+                content=embedded_data,
+                status_code=200,
+                media_type="text/plain; charset=utf-8",
+                headers={"X-Subtitle-Source": "embedded-cache"},
+            )
+
+    # ── 优先级2：转发给 fontInAss ─────────────────────────────────────────────
     result = await proxy_to_font_in_ass(
         original_path=original_path,
         query_string=query_string,

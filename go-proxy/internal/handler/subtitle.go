@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -23,6 +24,9 @@ import (
 	"github.com/mediaflow/go-proxy/internal/logger"
 	"github.com/mediaflow/go-proxy/internal/service"
 )
+
+// subtitleHTTPClient 字幕请求专用 HTTP 客户端（含超时，避免播放器卡住）
+var subtitleHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 // 需要子集化处理的字幕扩展名（ASS/SSA/SRT）
 var subsettableExts = map[string]bool{
@@ -101,7 +105,7 @@ func (h *SubtitleHandler) HandleSubtitle(c *gin.Context) {
 		}
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := subtitleHTTPClient.Do(req)
 	if err != nil {
 		logger.Infof("[subtitle] Python 字幕服务请求失败: %v，降级透传", err)
 		h.proxyH.HandleProxy(c)
