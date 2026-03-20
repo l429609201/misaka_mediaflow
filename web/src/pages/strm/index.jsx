@@ -1,4 +1,4 @@
-// src/pages/strm/index.jsx
+﻿// src/pages/strm/index.jsx
 // STRM 管理
 
 import { useEffect, useRef, useState } from 'react'
@@ -16,18 +16,16 @@ const statusColorMap = {
   failed: 'error',
 }
 
-// 默认模板（与后端 _DEFAULT_TEMPLATE 一致）
 const DEFAULT_TEMPLATE =
   '{{ base_url }}?pickcode={{ pickcode }}{% if file_name %}&file_name={{ file_name | urlencode }}{% endif %}'
 
-// 可选参数列表：每项 { label, insert, desc }
 const PARAMS = [
-  { label: '{{ base_url }}',             insert: '{{ base_url }}',                         desc: '反代服务根地址' },
-  { label: '{{ pickcode }}',             insert: '{{ pickcode }}',                         desc: '115 pickcode' },
-  { label: '{{ file_name }}',            insert: '{{ file_name }}',                        desc: '文件名（原始）' },
-  { label: 'urlencode',                  insert: '{{ file_name | urlencode }}',            desc: '文件名 URL 编码' },
-  { label: '{{ sha1 }}',                 insert: '{{ sha1 }}',                             desc: '文件 SHA1' },
-  { label: '{% if file_name %}…{% endif %}', insert: '{% if file_name %}{% endif %}',      desc: '条件块（含文件名时输出）' },
+  { label: '{{ base_url }}',                 insert: '{{ base_url }}',                    desc: '反代服务根地址' },
+  { label: '{{ pickcode }}',                 insert: '{{ pickcode }}',                    desc: '115 pickcode' },
+  { label: '{{ file_name }}',                insert: '{{ file_name }}',                   desc: '文件名（原始）' },
+  { label: 'file_name | urlencode',          insert: '{{ file_name | urlencode }}',       desc: '文件名 URL 编码' },
+  { label: '{{ sha1 }}',                     insert: '{{ sha1 }}',                        desc: '文件 SHA1' },
+  { label: '{% if file_name %}…{% endif %}', insert: '{% if file_name %}{% endif %}',     desc: '条件块（含文件名时输出）' },
 ]
 
 // ─── STRM URL 模板 Tab ──────────────────────────────────────
@@ -42,16 +40,13 @@ const UrlTemplateTab = () => {
       .catch(() => setTemplate(DEFAULT_TEMPLATE))
   }, [])
 
-  // 在光标处插入片段
   const insertAtCursor = (snippet) => {
-    const el = textareaRef.current?.resizableTextArea?.textArea
-      ?? textareaRef.current
+    const el = textareaRef.current
     if (!el) { setTemplate(t => t + snippet); return }
     const start = el.selectionStart ?? template.length
     const end   = el.selectionEnd   ?? template.length
     const next  = template.slice(0, start) + snippet + template.slice(end)
     setTemplate(next)
-    // 还原光标位置
     requestAnimationFrame(() => {
       el.focus()
       el.setSelectionRange(start + snippet.length, start + snippet.length)
@@ -67,14 +62,11 @@ const UrlTemplateTab = () => {
     finally { setSaving(false) }
   }
 
-  const handleReset = () => { setTemplate(DEFAULT_TEMPLATE) }
-
   return (
     <div style={{ maxWidth: 820 }}>
       <Alert type="info" showIcon style={{ marginBottom: 16 }}
         message="使用 Jinja2 语法拼接 STRM 文件内容。点击下方参数按钮可将其插入至光标所在位置。" />
 
-      {/* 可选参数按钮组 */}
       <div style={{ marginBottom: 12 }}>
         <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
           <CodeOutlined style={{ marginRight: 4 }} />可选参数（点击插入）
@@ -82,15 +74,12 @@ const UrlTemplateTab = () => {
         <Space wrap>
           {PARAMS.map(p => (
             <Tooltip key={p.label} title={p.desc}>
-              <Button size="small" onClick={() => insertAtCursor(p.insert)}>
-                {p.label}
-              </Button>
+              <Button size="small" onClick={() => insertAtCursor(p.insert)}>{p.label}</Button>
             </Tooltip>
           ))}
         </Space>
       </div>
 
-      {/* 模板输入框 — 原生 textarea 以便精确控制光标 */}
       <textarea
         ref={textareaRef}
         value={template}
@@ -110,11 +99,12 @@ const UrlTemplateTab = () => {
         <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave}>
           保存模板
         </Button>
-        <Button onClick={handleReset}>恢复默认</Button>
+        <Button onClick={() => setTemplate(DEFAULT_TEMPLATE)}>恢复默认</Button>
       </Space>
     </div>
   )
 }
+
 
 // ─── 页面主体 ────────────────────────────────────────────────
 export const Strm = () => {
@@ -182,17 +172,23 @@ export const Strm = () => {
       children: <UrlTemplateTab />,
     },
     {
-      key: 'tasks', label: t('strm.taskList'),
+      key: 'tasks',
+      label: t('strm.taskList'),
       children: (
         <Table rowKey="id" columns={taskColumns} dataSource={tasks} loading={loading}
-          scroll={{ x: 1000 }} pagination={{ ...taskPagination, onChange: (p, s) => fetchTasks(p, s), showTotal: (total) => `${t('common.total')} ${total}` }} />
+          scroll={{ x: 1000 }}
+          pagination={{ ...taskPagination, onChange: (p, s) => fetchTasks(p, s), showTotal: (total) => `共 ${total} 条` }}
+        />
       ),
     },
     {
-      key: 'files', label: t('strm.fileList'),
+      key: 'files',
+      label: t('strm.fileList'),
       children: (
         <Table rowKey="id" columns={fileColumns} dataSource={files} loading={fileLoading}
-          scroll={{ x: 800 }} pagination={{ ...filePagination, onChange: (p, s) => fetchFiles(p, s), showTotal: (total) => `${t('common.total')} ${total}` }} />
+          scroll={{ x: 800 }}
+          pagination={{ ...filePagination, onChange: (p, s) => fetchFiles(p, s), showTotal: (total) => `共 ${total} 条` }}
+        />
       ),
     },
   ]
@@ -213,114 +209,5 @@ export const Strm = () => {
     </Card>
   )
 }
-
-export default Strm
-
-
-const statusColorMap = {
-  pending: 'default',
-  running: 'processing',
-  completed: 'success',
-  failed: 'error',
-}
-
-export const Strm = () => {
-  const { t } = useTranslation()
-  const [tasks, setTasks] = useState([])
-  const [files, setFiles] = useState([])
-  const [loading, setLoading] = useState(false)
-  const [fileLoading, setFileLoading] = useState(false)
-  const [taskPagination, setTaskPagination] = useState({ current: 1, pageSize: 20, total: 0 })
-  const [filePagination, setFilePagination] = useState({ current: 1, pageSize: 20, total: 0 })
-
-  const fetchTasks = async (page = 1, size = 20) => {
-    setLoading(true)
-    try {
-      const { data } = await strmApi.listTasks({ page, size })
-      setTasks(data.items || [])
-      setTaskPagination({ current: data.page, pageSize: data.size, total: data.total })
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const fetchFiles = async (page = 1, size = 20) => {
-    setFileLoading(true)
-    try {
-      const { data } = await strmApi.listFiles({ page, size })
-      setFiles(data.items || [])
-      setFilePagination({ current: data.page, pageSize: data.size, total: data.total })
-    } finally {
-      setFileLoading(false)
-    }
-  }
-
-  useEffect(() => { fetchTasks() }, [])
-
-  const handleCreateTask = async () => {
-    try {
-      await strmApi.createTask('manual')
-      message.success(t('common.success'))
-      fetchTasks()
-    } catch {
-      message.error(t('common.failed'))
-    }
-  }
-
-  const taskColumns = [
-    { title: 'ID', dataIndex: 'id', width: 60 },
-    { title: t('strm.taskType'), dataIndex: 'task_type', width: 100, render: (v) => t(`strm.${v}`) || v },
-    { title: t('strm.taskStatus'), dataIndex: 'status', width: 100, render: (v) => <Tag color={statusColorMap[v]}>{t(`strm.${v}`) || v}</Tag> },
-    { title: t('strm.totalItems'), dataIndex: 'total_items', width: 80 },
-    { title: t('strm.processed'), dataIndex: 'processed', width: 80 },
-    { title: t('strm.created'), dataIndex: 'created_count', width: 80 },
-    { title: t('strm.skipped'), dataIndex: 'skipped_count', width: 80 },
-    { title: t('strm.errors'), dataIndex: 'error_count', width: 80 },
-    { title: t('strm.startTime'), dataIndex: 'started_at', width: 160 },
-    { title: t('strm.endTime'), dataIndex: 'finished_at', width: 160 },
-  ]
-
-  const fileColumns = [
-    { title: 'ID', dataIndex: 'id', width: 60 },
-    { title: t('strm.strmPath'), dataIndex: 'strm_path', ellipsis: true },
-    { title: t('strm.strmContent'), dataIndex: 'strm_content', ellipsis: true },
-    { title: t('strm.strmMode'), dataIndex: 'strm_mode', width: 100 },
-    { title: t('common.time'), dataIndex: 'created_at', width: 160 },
-  ]
-
-  const tabItems = [
-    {
-      key: 'tasks', label: t('strm.taskList'),
-      children: (
-        <Table rowKey="id" columns={taskColumns} dataSource={tasks} loading={loading}
-          scroll={{ x: 1000 }} pagination={{ ...taskPagination, onChange: (p, s) => fetchTasks(p, s), showTotal: (total) => `${t('common.total')} ${total}` }} />
-      ),
-    },
-    {
-      key: 'files', label: t('strm.fileList'),
-      children: (
-        <Table rowKey="id" columns={fileColumns} dataSource={files} loading={fileLoading}
-          scroll={{ x: 800 }} pagination={{ ...filePagination, onChange: (p, s) => fetchFiles(p, s), showTotal: (total) => `${t('common.total')} ${total}` }} />
-      ),
-    },
-  ]
-
-  return (
-    <Card
-      title={t('strm.title')}
-      extra={
-        <Space>
-          <Button icon={<ReloadOutlined />} onClick={() => fetchTasks()}>{t('common.refresh')}</Button>
-          <Button type="primary" icon={<PlayCircleOutlined />} onClick={handleCreateTask}>
-            {t('strm.createTask')}
-          </Button>
-        </Space>
-      }
-    >
-      <Tabs items={tabItems} onChange={(k) => k === 'files' && fetchFiles()} />
-    </Card>
-  )
-}
-
 
 export default Strm
