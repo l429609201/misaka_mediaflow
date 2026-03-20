@@ -262,14 +262,31 @@ async def _extract_embedded_sub(
             _sub_no_track[item_id] = time.monotonic() + _SUB_NO_TRACK_TTL
             return
 
-        # ── Step2: 选择字幕轨道 ──────────────────────────────────────────────
+        # ── Step2: 过滤图形字幕（PGS/VOBSUB/DVBSUB 等），只保留文本字幕 ────────
+        # ffmpeg 无法将 bitmap 字幕转为 ASS，会报 "bitmap to bitmap" 错误
+        BITMAP_CODECS = {"hdmv_pgs_subtitle", "pgssub", "dvd_subtitle", "dvbsub",
+                         "dvb_subtitle", "xsub", "vobsub", "mov_text"}
+        text_streams = [
+            s for s in streams
+            if s.get("codec_name", "").lower() not in BITMAP_CODECS
+        ]
+        if not text_streams:
+            logger.info(
+                "[subtitle] 内封字幕均为图形格式(PGS/VOBSUB等)，无法提取为ASS: item_id=%s codecs=%s",
+                item_id,
+                [s.get("codec_name") for s in streams],
+            )
+            # 写入负缓存，图形字幕永远无法提取，不必重试
+            _sub_no_track[item_id] = time.monotonic() + _SUB_NO_TRACK_TTL
+            return
+
         chosen_index: Optional[int] = None  # ffmpeg stream index (0:s:N)
         chosen_lang = ""
 
         if track_prefs:
             for pref in track_prefs:
                 pref_lower = pref.lower()
-                for s in streams:
+                for s in text_streams:
                     lang = (s.get("tags", {}).get("language") or "").lower()
                     title = (s.get("tags", {}).get("title") or "").lower()
                     if pref_lower in (lang, title) or pref_lower in lang or pref_lower in title:
@@ -280,8 +297,8 @@ async def _extract_embedded_sub(
                     break
 
         if chosen_index is None:
-            # 无匹配偏好 → 取第一条字幕轨道
-            s0 = streams[0]
+            # 无匹配偏好 → 取第一条文本字幕轨道
+            s0 = text_streams[0]
             chosen_index = s0.get("index")
             chosen_lang = (s0.get("tags", {}).get("language") or "unknown")
 
@@ -320,6 +337,10 @@ async def _extract_embedded_sub(
                         "[subtitle] ffmpeg 提取失败(rc=%d): %s item_id=%s",
                         ext_proc.returncode, err_msg, item_id,
                     )
+                    # 图形字幕导致的失败写入负缓存，避免反复重试
+                    if "bitmap to bitmap" in err_msg or "Invalid argument" in err_msg:
+                        _sub_no_track[item_id] = time.monotonic() + _SUB_NO_TRACK_TTL
+                        logger.info("[subtitle] 图形字幕提取失败，写入负缓存: item_id=%s", item_id)
                     return
             except asyncio.TimeoutError:
                 logger.warning("[subtitle] ffmpeg 提取超时(300s): item_id=%s", item_id)
