@@ -74,6 +74,8 @@ export const strmApi = {
   createTask: (task_type) => api.post('/strm/tasks', null, { params: { task_type } }),
   getTask: (id) => api.get(`/strm/tasks/${id}`),
   listFiles: (params) => api.get('/strm/files', { params }),
+  getUrlTemplate: () => api.get('/strm/url-template'),
+  saveUrlTemplate: (template) => api.post('/strm/url-template', { template }),
 }
 
 // ==================== 115 ====================
