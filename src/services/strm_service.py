@@ -147,15 +147,35 @@ class StrmService:
             return item.file_path
 
         elif mode == "p115" and item.pick_code:
-            # ⭐ 115 直链模式 — STRM 直接指向 Go 代理 /p115/play/<pick_code>/<filename>
-            # Go 代理收到后: 查缓存 → 未命中调 Python 获取直链 → 302 到 115 CDN
+            # ⭐ 115 直链模式 — 优先使用用户配置的 Jinja2 模板渲染
             link_host = self._get_strm_link_host() or external_url
             if not link_host:
                 link_host = f"http://127.0.0.1:{settings.server.go_port}"
             link_host = link_host.rstrip("/")
-            # 用文件名（不含路径）作为 URL 尾部，便于播放器识别格式
+
             from pathlib import Path as _Path
             filename = _Path(item.file_path).name if item.file_path else f"{item.item_id}.mkv"
+
+            # 尝试读取用户模板并用 Jinja2 渲染
+            tmpl_str = self._get_url_template()
+            if tmpl_str:
+                try:
+                    from jinja2 import Environment
+                    from urllib.parse import quote as _quote
+                    env = Environment()
+                    env.filters["urlencode"] = lambda s: _quote(str(s), safe="")
+                    rendered = env.from_string(tmpl_str).render(
+                        base_url=link_host,
+                        pickcode=item.pick_code,
+                        file_name=filename,
+                        file_path=item.file_path or "",
+                        sha1=item.file_sha1 or "",
+                    )
+                    return rendered
+                except Exception as e:
+                    logger.warning("[strm] 模板渲染失败，使用默认格式: %s", e)
+
+            # 兜底：默认 /p115/play/<pick_code>/<filename>
             return f"{link_host}/p115/play/{item.pick_code}/{filename}"
 
         elif mode == "p115_path":
@@ -196,6 +216,35 @@ class StrmService:
             if loop.is_running():
                 # 异步上下文中用 run_coroutine_threadsafe 或直接返回空（由调用方处理）
                 # 此处退化：返回空，让调用方使用 external_url / go_port 兜底
+                return ""
+            return loop.run_until_complete(_fetch())
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _get_url_template() -> str:
+        """从数据库读取用户配置的 STRM URL 模板（strm_url_template）"""
+        import asyncio, json as _json
+
+        async def _fetch() -> str:
+            from sqlalchemy import select as _select
+            from src.db import get_async_session_local as _get_sess
+            from src.db.models.system import SystemConfig as _SC
+            try:
+                async with _get_sess() as db:
+                    row = await db.execute(
+                        _select(_SC).where(_SC.key == "strm_url_template")
+                    )
+                    cfg = row.scalars().first()
+                    if cfg and cfg.value:
+                        return _json.loads(cfg.value)
+            except Exception:
+                pass
+            return ""
+
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
                 return ""
             return loop.run_until_complete(_fetch())
         except Exception:

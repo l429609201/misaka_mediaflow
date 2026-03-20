@@ -24,6 +24,8 @@ const PARAMS = [
   { label: '{{ pickcode }}',                 insert: '{{ pickcode }}',                    desc: '115 pickcode' },
   { label: '{{ file_name }}',                insert: '{{ file_name }}',                   desc: '文件名（原始）' },
   { label: 'file_name | urlencode',          insert: '{{ file_name | urlencode }}',       desc: '文件名 URL 编码' },
+  { label: '{{ file_path }}',                insert: '{{ file_path }}',                   desc: '网盘内文件完整路径' },
+  { label: 'file_path | urlencode',          insert: '{{ file_path | urlencode }}',       desc: '网盘路径 URL 编码' },
   { label: '{{ sha1 }}',                     insert: '{{ sha1 }}',                        desc: '文件 SHA1' },
   { label: '{% if file_name %}…{% endif %}', insert: '{% if file_name %}{% endif %}',     desc: '条件块（含文件名时输出）' },
 ]
