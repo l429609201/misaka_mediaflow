@@ -410,11 +410,24 @@ async def _extract_embedded_sub(
                 return
 
         elapsed = time.monotonic() - t0
-        _set_cached_embedded_sub(item_id, sub_data)
         logger.info(
             "[subtitle] ✅ 内封字幕提取完成: item_id=%s lang=%s size=%d bytes 耗时=%.1fs",
             item_id, chosen_lang, len(sub_data), elapsed,
         )
+
+        # ── Step4: 尝试立即送 fontInAss 子集化，缓存处理后的结果 ────────────────
+        # 内封字幕播放时播放器直接从视频流读取，不走 HTTP 字幕接口，
+        # 所以无法在字幕请求时实时子集化，必须在提取阶段就预处理好。
+        subsetted = await process_embedded_sub_with_font_in_ass(item_id, sub_data)
+        if subsetted is not None:
+            _set_cached_embedded_sub(item_id, subsetted)
+            logger.info(
+                "[subtitle] ✅ 内封字幕已子集化并缓存: item_id=%s %d bytes → %d bytes",
+                item_id, len(sub_data), len(subsetted),
+            )
+        else:
+            # fontInAss 未启用或失败，缓存原始 ASS（万一 Emby 发字幕请求也能命中）
+            _set_cached_embedded_sub(item_id, sub_data)
 
     except Exception as e:
         logger.error("[subtitle] 内封字幕提取异常: %s item_id=%s", e, item_id)
