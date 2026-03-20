@@ -50,10 +50,10 @@ func NewSubtitleHandler(cfg *config.Config, pc *service.PythonClient) *SubtitleH
 }
 
 // HandleSubtitle 处理字幕请求
-// 路由：/emby/videos/:itemId/Subtitles/:subId/:rest
-// 示例：/emby/videos/123/Subtitles/1/0/Stream.ass
+// 路由：/emby/videos/:itemId/Subtitles/:subId/*rest
+// 示例：/emby/videos/123/Subtitles/1/0/Stream.ass  → rest="/0/Stream.ass"
 func (h *SubtitleHandler) HandleSubtitle(c *gin.Context) {
-	rest := c.Param("rest") // 例如 "0/Stream.ass"
+	rest := strings.TrimPrefix(c.Param("rest"), "/") // Gin 通配符带前导 /，去掉
 
 	// 判断是否需要子集化的字幕格式
 	needsProcessing := false
@@ -64,6 +64,9 @@ func (h *SubtitleHandler) HandleSubtitle(c *gin.Context) {
 			break
 		}
 	}
+
+	logger.Infof("[subtitle] 字幕请求命中路由: itemId=%s subId=%s rest=%s needsProcessing=%v",
+		c.Param("itemId"), c.Param("subId"), rest, needsProcessing)
 
 	if !needsProcessing {
 		// 非 ASS/SSA/SRT 格式（如 VTT）→ 直接透传 Emby

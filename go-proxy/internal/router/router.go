@@ -72,7 +72,8 @@ func Setup(cfg *config.Config) *gin.Engine {
 			embyGroup.HEAD(prefix+"/:itemId/original.:format", itemThrottle, redirectHandler.HandleVideoStream)
 
 			// ⭐ 字幕路由（ASS/SSA/SRT → 转发 Python 字幕服务；其他格式透传 Emby）
-			embyGroup.GET(prefix+"/:itemId/Subtitles/:subId/:rest", subtitleHandler.HandleSubtitle)
+			// 注意：Emby 字幕路径格式为 /Subtitles/:subId/0/Stream.ass，需要用 *rest 匹配多段
+			embyGroup.GET(prefix+"/:itemId/Subtitles/:subId/*rest", subtitleHandler.HandleSubtitle)
 		}
 
 		// 音频流
