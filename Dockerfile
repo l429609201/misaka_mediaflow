@@ -91,10 +91,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # 运行时系统依赖 (只装 .so 运行库, 不装 -dev 头文件)
+# ffmpeg: 供内封字幕提取功能使用 (embedded_sub_enabled=true 时需要)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tzdata \
     libpq5 \
     libmariadb3 \
+    ffmpeg \
     && addgroup --gid 1000 mediaflow \
     && adduser --shell /bin/sh --disabled-password --uid 1000 --gid 1000 mediaflow \
     && apt-get clean \
