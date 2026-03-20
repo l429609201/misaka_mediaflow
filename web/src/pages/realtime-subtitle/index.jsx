@@ -56,21 +56,30 @@ export const RealtimeSubtitle = () => {
   }, [fetchConfigs])
 
   const saveOne = async (key, value) => {
-    await systemApi.setConfig({ key, value, description: CONFIG_META[key] || key })
+    const res = await systemApi.setConfig({ key, value: String(value), description: CONFIG_META[key] || key })
+    if (!res?.data?.success && res?.data?.success !== undefined) {
+      throw new Error(`保存 ${key} 失败`)
+    }
   }
 
   const handleSave = async () => {
+    let values
+    try {
+      values = await form.validateFields()
+    } catch {
+      // form 校验失败，antd 会自动高亮错误字段，无需额外提示
+      return
+    }
     setSaving(true)
     try {
-      const values = await form.validateFields()
       await saveOne('font_in_ass_enabled', String(!!values.font_in_ass_enabled))
       await saveOne('font_in_ass_url', (values.font_in_ass_url || '').trim())
       await saveOne('embedded_sub_enabled', String(!!values.embedded_sub_enabled))
       await saveOne('embedded_sub_tracks', JSON.stringify(values.embedded_sub_tracks || []))
       message.success('实时字幕子集化配置已保存')
       fetchConfigs()
-    } catch {
-      message.error('保存实时字幕子集化配置失败')
+    } catch (err) {
+      message.error(`保存实时字幕子集化配置失败：${err?.response?.data?.detail || err?.message || '请检查服务是否正常'}`)
     } finally {
       setSaving(false)
     }
