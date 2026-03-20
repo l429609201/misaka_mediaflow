@@ -136,7 +136,7 @@ async def process_embedded_sub_with_font_in_ass(
         return None
 
 
-# ── 公开接口：fontInAss 转发 ──────────────────────────────────────────────────
+# ── 公开接口：fontInAss 转发（nginx 模式）─────────────────────────────────────
 
 async def proxy_to_font_in_ass(
     original_path: str,
@@ -144,7 +144,13 @@ async def proxy_to_font_in_ass(
     request_headers: dict,
 ) -> Optional[tuple[int, bytes, dict]]:
     """
-    将字幕请求转发给外置 fontInAss 服务。
+    模拟 fontInAss nginx 模式：
+      1. 自己从 Emby 拉取原始字幕内容
+      2. 把字幕字节 POST 给 fontInAss /fontinass/process_bytes 处理
+      3. 返回子集化后的内容给播放器
+
+    fontInAss README 原理说明：
+      拦截 /videos/(.*)/Subtitles 请求，将内容发送到程序处理后，替换原本的内容返回给客户端
 
     Args:
         original_path:   原始请求路径，如 /emby/videos/123/Subtitles/1/0/Stream.ass
@@ -163,9 +169,16 @@ async def proxy_to_font_in_ass(
         logger.warning("[subtitle] fontInAss 已启用但未配置地址")
         return None
 
-    target = f"{base_url}{original_path}"
+    # ── Step1: 获取 Emby 地址 ────────────────────────────────────────────────
+    emby_host = await _get_emby_host()
+    if not emby_host:
+        logger.warning("[subtitle] 无法获取 Emby 地址，fontInAss 无法工作")
+        return None
+
+    # ── Step2: 从 Emby 拉取原始字幕内容 ─────────────────────────────────────
+    emby_url = f"{emby_host}{original_path}"
     if query_string:
-        target = f"{target}?{query_string}"
+        emby_url = f"{emby_url}?{query_string}"
 
     # 只透传必要头，避免 Host 冲突
     forward_headers = {}
@@ -176,19 +189,90 @@ async def proxy_to_font_in_ass(
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(target, headers=forward_headers)
-            resp_headers = {
-                k: v for k, v in resp.headers.items()
-                if k.lower() in ("content-type", "content-encoding", "content-length")
-            }
+            emby_resp = await client.get(emby_url, headers=forward_headers, follow_redirects=True)
+            if emby_resp.status_code != 200:
+                logger.warning(
+                    "[subtitle] 从 Emby 拉取字幕失败: status=%d url=%s",
+                    emby_resp.status_code, emby_url,
+                )
+                return None
+            sub_bytes = emby_resp.content
+            if not sub_bytes:
+                logger.warning("[subtitle] Emby 返回空字幕内容: url=%s", emby_url)
+                return None
             logger.info(
-                "[subtitle] fontInAss 转发成功: path=%s status=%d size=%d",
-                original_path, resp.status_code, len(resp.content),
+                "[subtitle] 从 Emby 拉取字幕成功: path=%s size=%d bytes",
+                original_path, len(sub_bytes),
             )
-            return resp.status_code, resp.content, resp_headers
     except Exception as e:
-        logger.warning("[subtitle] fontInAss 转发失败: %s (url=%s)", e, target)
+        logger.warning("[subtitle] 从 Emby 拉取字幕异常: %s (url=%s)", e, emby_url)
         return None
+
+    # ── Step3: POST 字幕字节给 fontInAss process_bytes 处理 ──────────────────
+    process_url = f"{base_url}/fontinass/process_bytes"
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            fa_resp = await client.post(
+                process_url,
+                content=sub_bytes,
+                headers={"Content-Type": "application/octet-stream"},
+            )
+            x_code = fa_resp.headers.get("X-Code", "0")
+            if x_code != "0":
+                import base64
+                msg = fa_resp.headers.get("X-Message", "")
+                try:
+                    msg = base64.b64decode(msg).decode("utf-8", errors="replace")
+                except Exception:
+                    pass
+                logger.warning(
+                    "[subtitle] fontInAss process_bytes 错误: code=%s msg=%s path=%s",
+                    x_code, msg, original_path,
+                )
+                # fontInAss 返回错误时降级返回原始字幕，保证播放器不卡住
+                return 200, sub_bytes, {"content-type": "text/plain; charset=utf-8"}
+
+            result_bytes = fa_resp.content
+            logger.info(
+                "[subtitle] ✅ fontInAss 子集化成功: path=%s %d bytes → %d bytes",
+                original_path, len(sub_bytes), len(result_bytes),
+            )
+            resp_headers = {
+                k: v for k, v in fa_resp.headers.items()
+                if k.lower() in ("content-type", "content-encoding")
+            }
+            if "content-type" not in {k.lower() for k in resp_headers}:
+                resp_headers["content-type"] = "text/x-ssa; charset=utf-8"
+            return 200, result_bytes, resp_headers
+    except Exception as e:
+        logger.warning("[subtitle] fontInAss process_bytes 异常: %s path=%s", e, original_path)
+        # 降级返回原始字幕
+        return 200, sub_bytes, {"content-type": "text/plain; charset=utf-8"}
+
+
+async def _get_emby_host() -> str:
+    """从 SystemConfig 或 settings 获取 Emby 服务地址"""
+    try:
+        from src.db import get_async_session_local
+        from src.db.models import SystemConfig
+        from sqlalchemy import select
+
+        async with get_async_session_local() as db:
+            row = await db.execute(
+                select(SystemConfig).where(SystemConfig.key == "media_server_host")
+            )
+            cfg = row.scalars().first()
+            if cfg and cfg.value:
+                return cfg.value.rstrip("/")
+    except Exception as e:
+        logger.debug("[subtitle] 从 DB 获取 Emby 地址失败: %s", e)
+
+    # 降级读 settings
+    try:
+        from src.core.config import settings
+        return (settings.media_server.host or "").rstrip("/")
+    except Exception:
+        return ""
 
 
 # ── 公开接口：内封字幕缓存查询 ────────────────────────────────────────────────
