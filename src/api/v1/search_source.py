@@ -45,10 +45,10 @@ async def _save_json(db, key: str, data: dict) -> None:
 @router.get("/discover", dependencies=[Depends(verify_token)])
 async def discover_sources():
     """
-    扫描本地已注册的 MetadataProvider，结合数据库中保存的启用状态和覆盖配置，
-    返回可用搜索源列表。
+    扫描本地已注册的 MetadataProvider，结合数据库中保存的启用状态和字段覆盖值，
+    返回可用搜索源列表（含每个 provider 的字段规格 fields）。
     """
-    providers = MetadataFactory.list_providers()   # 只返回本地实际存在的
+    providers = MetadataFactory.list_providers()
 
     async with get_async_session_local() as db:
         enabled_map = await _load_json(db, _ENABLED_KEY)
@@ -57,15 +57,16 @@ async def discover_sources():
     result = []
     for p in providers:
         name = p["name"]
-        override = override_map.get(name, {})
+        saved = override_map.get(name, {})
+        # 把 fields 默认值和已保存值合并，返回给前端当作表单初始值
+        field_values = {f["key"]: saved.get(f["key"], f.get("default", "")) for f in p["fields"]}
         result.append({
             "key": name,
             "name": p["label"],
-            "base_url": override.get("base_url", ""),
-            "api_key": override.get("api_key", ""),
-            # 默认启用，除非用户显式关闭
             "enabled": enabled_map.get(name, True),
             "status": "ok",
+            "fields": p["fields"],         # 字段规格（前端据此动态渲染）
+            "values": field_values,        # 当前已保存的字段值
         })
     return {"sources": result}
 
@@ -76,24 +77,20 @@ class SourceOverride(BaseModel):
 
 
 class SavePayload(BaseModel):
-    # 保存单条 provider 的配置：启用状态 + 覆盖值
     name: str
     enabled: bool = True
-    override: SourceOverride = SourceOverride()
+    values: dict = {}          # 通用字段值，key 对应 MetaFieldSpec.key
 
 
 @router.post("/save", dependencies=[Depends(verify_token)])
 async def save_source(payload: SavePayload):
-    """保存单个搜索源的启用状态和覆盖配置"""
+    """保存单个搜索源的启用状态和字段值"""
     async with get_async_session_local() as db:
         enabled_map = await _load_json(db, _ENABLED_KEY)
         override_map = await _load_json(db, _OVERRIDE_KEY)
 
         enabled_map[payload.name] = payload.enabled
-        override_map[payload.name] = {
-            "base_url": payload.override.base_url,
-            "api_key": payload.override.api_key,
-        }
+        override_map[payload.name] = payload.values
 
         await _save_json(db, _ENABLED_KEY, enabled_map)
         await _save_json(db, _OVERRIDE_KEY, override_map)

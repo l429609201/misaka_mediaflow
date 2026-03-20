@@ -72,13 +72,14 @@ class MetadataFactory:
 
     @staticmethod
     def list_providers() -> list[dict]:
-        """列出所有已注册的元数据源（供前端显示）"""
+        """列出所有已注册的元数据源（供前端显示，含字段规格）"""
         _scan_providers()
         return [
             {
                 "name": cls.PROVIDER_NAME,
                 "label": cls.DISPLAY_NAME or cls.PROVIDER_NAME,
                 "config_key": cls.CONFIG_KEY,
+                "fields": [f.to_dict() for f in cls.CONFIG_FIELDS],
             }
             for cls in _REGISTRY.values()
         ]

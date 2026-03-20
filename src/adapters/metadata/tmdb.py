@@ -15,7 +15,7 @@
 import logging
 from typing import Any
 
-from src.adapters.metadata.base import MetadataProvider, MetadataResult
+from src.adapters.metadata.base import MetadataProvider, MetadataResult, MetaFieldSpec
 from src.core.http_proxy import proxy_client
 
 logger = logging.getLogger(__name__)
@@ -41,6 +41,33 @@ class TMDBProvider(MetadataProvider):
     PROVIDER_NAME = "tmdb"
     DISPLAY_NAME  = "TMDB"
     CONFIG_KEY    = "metadata_tmdb"
+
+    CONFIG_FIELDS = [
+        MetaFieldSpec(
+            key="api_url",
+            label="API 地址",
+            type="text",
+            placeholder="https://api.themoviedb.org",
+            hint="TMDB API 接口地址，留空使用默认值",
+            default="https://api.themoviedb.org",
+        ),
+        MetaFieldSpec(
+            key="image_url",
+            label="图片地址",
+            type="text",
+            placeholder="https://image.tmdb.org",
+            hint="TMDB 图片 CDN 地址，留空使用默认值",
+            default="https://image.tmdb.org",
+        ),
+        MetaFieldSpec(
+            key="api_key",
+            label="API Key",
+            type="password",
+            secret=True,
+            placeholder="留空则使用系统默认",
+            hint="TMDB API Key（Bearer Token 或 v3 key）",
+        ),
+    ]
 
     def __init__(
         self,

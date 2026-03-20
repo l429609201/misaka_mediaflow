@@ -10,6 +10,36 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import Literal
+
+
+@dataclass
+class MetaFieldSpec:
+    """
+    元数据 Provider 配置字段规格。
+    与 storage.FieldSpec 对齐，Provider 通过类属性 CONFIG_FIELDS 声明字段，
+    /search-source/discover 接口把 fields 返回给前端，前端动态渲染，无需硬编码。
+    """
+    key: str                                              # 配置 JSON 中的键名
+    label: str                                            # 前端显示标签
+    type: Literal['text', 'password', 'textarea'] = 'text'
+    required: bool = False
+    secret: bool = False
+    placeholder: str = ""
+    hint: str = ""
+    default: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "key": self.key,
+            "label": self.label,
+            "type": self.type,
+            "required": self.required,
+            "secret": self.secret,
+            "placeholder": self.placeholder,
+            "hint": self.hint,
+            "default": self.default,
+        }
 
 
 @dataclass
@@ -38,6 +68,9 @@ class MetadataProvider(ABC):
     PROVIDER_NAME: str = ""
     DISPLAY_NAME: str = ""
     CONFIG_KEY: str = ""            # SystemConfig 表中的 key
+
+    # 子类覆盖此属性声明自己的配置字段，discover 接口将其返回给前端动态渲染
+    CONFIG_FIELDS: list[MetaFieldSpec] = []
 
     @abstractmethod
     async def search(self, query: str, media_type: str = "movie", year: int = 0) -> list[MetadataResult]:
