@@ -48,11 +48,6 @@ export const Drive115 = () => {
   const [settingsLoading, setSettingsLoading] = useState(true)
   const [settingsSaving, setSettingsSaving] = useState(false)
   const [settingsForm] = Form.useForm()
-  // 当前浏览器访问的 origin，作为 strm_link_host 的默认 placeholder
-  const defaultStrmHost = window.location.origin
-  // 实时监听 strm_link_host 字段值，用于预览拼接
-  const strmLinkHostValue = Form.useWatch('strm_link_host', settingsForm)
-
   // ==================== 路径映射 ====================
   const [mappingLoading, setMappingLoading] = useState(true)
   const [mappingSaving, setMappingSaving] = useState(false)
@@ -383,33 +378,7 @@ export const Drive115 = () => {
                   <Input placeholder={defaultStrmHost} />
                 </Form.Item>
 
-                {/* STRM 播放地址预览 */}
-                {(() => {
-                  const host = (strmLinkHostValue || defaultStrmHost).replace(/\/$/, '')
-                  const previewUrl = `${host}/p115/play/<pick_code>/示例电影.mkv`
-                  return (
-                    <Form.Item label={t('p115.strmPreviewLabel')} tooltip={t('p115.strmPreviewHint')}>
-                      <Input
-                        readOnly
-                        value={previewUrl}
-                        style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--ant-color-text-secondary)' }}
-                        suffix={
-                          <Button
-                            type="link"
-                            size="small"
-                            style={{ padding: 0, fontSize: 12 }}
-                            onClick={() => {
-                              navigator.clipboard.writeText(previewUrl)
-                              message.success(t('common.copied'))
-                            }}
-                          >
-                            {t('common.copy')}
-                          </Button>
-                        }
-                      />
-                    </Form.Item>
-                  )
-                })()}
+
 
                 <Form.Item name="file_extensions" label={t('p115.fileExtensions')} tooltip={t('p115.fileExtensionsHint')}>
                   <Input placeholder="mp4,mkv,avi,ts,iso,mov,m2ts" />
