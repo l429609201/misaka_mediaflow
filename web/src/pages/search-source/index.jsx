@@ -82,12 +82,7 @@ const MetaSourceTab = ({ refreshKey }) => {
   const columns = [
     {
       title: '名称', dataIndex: 'name', key: 'name', width: 120,
-      render: (v, record) => (
-        <Space>
-          <Text strong>{v}</Text>
-          <Tag color="success">已发现</Tag>
-        </Space>
-      ),
+      render: (v) => <Text strong>{v}</Text>,
     },
     {
       title: '配置', key: 'summary',
