@@ -22,6 +22,12 @@ import StorageDirPickerModal from '@/components/StorageDirPickerModal'
 const { TextArea } = Input
 const { Text } = Typography
 
+
+const getDefaultStrmHost = () => {
+  if (typeof window === 'undefined' || !window.location) return ''
+  return window.location.origin || ''
+}
+
 export const Drive115 = () => {
   const { t } = useTranslation()
 
@@ -54,6 +60,8 @@ export const Drive115 = () => {
   const [mappingForm] = Form.useForm()
   const [dirPickerOpen, setDirPickerOpen] = useState(false)
   const [dirPickerTarget, setDirPickerTarget] = useState(null)
+  const defaultStrmHost = getDefaultStrmHost()
+
   const [localDirPickerOpen, setLocalDirPickerOpen] = useState(false)
   const [localDirPickerTarget, setLocalDirPickerTarget] = useState(null)
 
