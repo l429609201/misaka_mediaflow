@@ -100,6 +100,10 @@ async def lifespan(app: FastAPI):
     from src.services.proxy_config_service import init_proxy_config
     await init_proxy_config()
 
+    # 4.5 预热 P115Client（提前完成 RSA 初始化，消除首播冷启动延迟）
+    from src.services.p115_warmup_service import warmup_p115_client
+    await warmup_p115_client()
+
     # 5. 启动定时调度器
     start_scheduler()
 

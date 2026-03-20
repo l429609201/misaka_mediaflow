@@ -38,6 +38,7 @@ func Setup(cfg *config.Config) *gin.Engine {
 	proxyHandler := handler.NewProxyHandler(cfg, pyClient)
 	wsHandler := handler.NewWSHandler(cfg)
 	p115Handler := handler.NewP115PlayHandler(cfg, pyClient)
+	subtitleHandler := handler.NewSubtitleHandler(cfg, pyClient)
 
 	// ⭐ 302 请求节流器（防止 Web UI 并行 Range 请求导致 115 CDN 限流）
 	throttler := middleware.NewRedirectThrottler()
@@ -69,6 +70,9 @@ func Setup(cfg *config.Config) *gin.Engine {
 			embyGroup.GET(prefix+"/:itemId/original.:format", itemThrottle, redirectHandler.HandleVideoStream)
 			embyGroup.HEAD(prefix+"/:itemId/original", itemThrottle, redirectHandler.HandleVideoStream)
 			embyGroup.HEAD(prefix+"/:itemId/original.:format", itemThrottle, redirectHandler.HandleVideoStream)
+
+			// ⭐ 字幕路由（ASS/SSA/SRT → 转发 Python 字幕服务；其他格式透传 Emby）
+			embyGroup.GET(prefix+"/:itemId/Subtitles/:subId/:rest", subtitleHandler.HandleSubtitle)
 		}
 
 		// 音频流

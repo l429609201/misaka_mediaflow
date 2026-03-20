@@ -8,6 +8,8 @@
 package handler
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -92,6 +94,46 @@ func (h *RedirectHandler) HandleVideoStream(c *gin.Context) {
 	}
 
 	c.Redirect(http.StatusFound, cdnURL)
+
+	// ⭐ 302 成功后，fire-and-forget 通知 Python 触发内封字幕提取
+	// 只在 MKV/MKS 文件时触发（字幕通常在 MKV 容器中）
+	go h.triggerEmbeddedSubExtraction(itemID, result.URL, userAgent)
+}
+
+// triggerEmbeddedSubExtraction 异步通知 Python 触发内封字幕提取
+// 在独立 goroutine 中执行，302 响应不等待此结果
+func (h *RedirectHandler) triggerEmbeddedSubExtraction(itemID, cdnURL, userAgent string) {
+	// 只对 MKV/MKS 格式触发（这些格式才有内封字幕）
+	lower := strings.ToLower(cdnURL)
+	isMKV := strings.Contains(lower, ".mkv") || strings.Contains(lower, ".mks")
+	if !isMKV {
+		return
+	}
+
+	pyBase := strings.TrimRight(h.pyClient.BaseURL(), "/")
+	pyURL := pyBase + "/internal/subtitle/trigger"
+
+	payload := map[string]string{
+		"item_id":    itemID,
+		"cdn_url":    cdnURL,
+		"user_agent": userAgent,
+	}
+	body, _ := json.Marshal(payload)
+
+	req, err := http.NewRequest(http.MethodPost, pyURL, bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		logger.Debugf("[subtitle] 触发内封字幕提取失败: %v", err)
+		return
+	}
+	resp.Body.Close()
+	logger.Debugf("[subtitle] 触发内封字幕提取: item_id=%s status=%d", itemID, resp.StatusCode)
 }
 
 // proxyFallback 透传到 Emby

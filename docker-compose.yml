@@ -27,3 +27,31 @@ services:
     restart: unless-stopped
     volumes:
       - ./config:/app/config
+
+  # ── 字幕字体子集化服务（可选，需在 WebUI 中启用）──────────────────────────
+  # 说明：
+  #   使用 noproxy 标签版本，不含内置 nginx（由 misaka-mediaflow 的 Go 反代负责路由）
+  #   EMBY_SERVER_URL 指向 Emby 服务地址，fontInAss 内部会向此地址拉取原始字幕
+  #   fonts 目录挂载本地字体（可选，fontInAss 也支持在线字体库）
+  #   不需要对外暴露端口，仅容器内网通信
+  #
+  # 启用步骤：
+  #   1. 取消以下注释
+  #   2. 修改 EMBY_SERVER_URL 为实际 Emby 地址
+  #   3. 在 WebUI → 系统设置 → 字幕设置 中：
+  #      - 启用字幕字体子集化: ON
+  #      - fontInAss 地址: http://fontinass:8011
+  #
+  # fontinass:
+  #   image: riderlty/fontinass:noproxy
+  #   container_name: fontinass
+  #   environment:
+  #     - EMBY_SERVER_URL=http://emby:8096    # ← 修改为你的 Emby 地址
+  #     # - FONT_DIRS=/app/fonts              # 自定义字体目录（可选）
+  #     # - SUB_CACHE_SIZE=50                 # 字幕缓存条数（默认 50）
+  #     # - SUB_CACHE_TTL=60                  # 字幕缓存分钟数（默认 60）
+  #   volumes:
+  #     - ./fonts:/app/Fonts                  # 本地字体目录（可选）
+  #   restart: unless-stopped
+  #   # 不暴露端口，仅容器内网访问
+

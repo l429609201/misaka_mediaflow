@@ -39,6 +39,11 @@ func NewPythonClient(cfg *config.Config) *PythonClient {
 	}
 }
 
+// BaseURL 返回 Python 内部 API 基础地址（供其他 handler 拼接路径使用）
+func (pc *PythonClient) BaseURL() string {
+	return pc.baseURL
+}
+
 // ResolveLink 通过 item_id 解析直链
 func (pc *PythonClient) ResolveLink(itemID string, storageID int, apiKey string, userID string, userAgent string) (*ResolveResult, error) {
 	q := url.Values{}

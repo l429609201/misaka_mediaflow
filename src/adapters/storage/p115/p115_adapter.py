@@ -94,6 +94,19 @@ class P115StorageAdapter(StorageAdapter):
 
         return self._p115_client
 
+    def warmup(self) -> bool:
+        """
+        预热：提前创建 P115Client 实例，避免首次 302 请求时产生冷启动延迟。
+        在应用启动时由 p115_warmup_service 调用（异步线程池内执行）。
+        返回 True 表示预热成功，False 表示 Cookie 未就绪或创建失败。
+        """
+        client = self._get_p115_client()
+        if client is not None:
+            logger.info("[预热] P115Client 预热完成 (cookie len=%d)", len(self._auth.cookie))
+            return True
+        logger.warning("[预热] P115Client 预热跳过：Cookie 未就绪或库未安装")
+        return False
+
     def _sync_download_url(self, pick_code: str, user_agent: str) -> str | None:
         """
         同步方法：调用 P115Client.download_url() 获取直链。
