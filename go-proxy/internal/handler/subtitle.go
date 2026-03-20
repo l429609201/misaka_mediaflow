@@ -87,7 +87,7 @@ func (h *SubtitleHandler) HandleSubtitle(c *gin.Context) {
 
 	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, pyURL, nil)
 	if err != nil {
-		logger.Warnf("[subtitle] 构造 Python 请求失败: %v，降级透传", err)
+		logger.Infof("[subtitle] 构造 Python 请求失败: %v，降级透传", err)
 		h.proxyH.HandleProxy(c)
 		return
 	}
@@ -100,7 +100,7 @@ func (h *SubtitleHandler) HandleSubtitle(c *gin.Context) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		logger.Warnf("[subtitle] Python 字幕服务请求失败: %v，降级透传", err)
+		logger.Infof("[subtitle] Python 字幕服务请求失败: %v，降级透传", err)
 		h.proxyH.HandleProxy(c)
 		return
 	}
@@ -131,7 +131,7 @@ func (h *SubtitleHandler) HandleSubtitle(c *gin.Context) {
 	}
 
 	// 其他情况降级透传
-	logger.Warnf("[subtitle] Python 返回异常 status=%d，降级透传", resp.StatusCode)
+	logger.Infof("[subtitle] Python 返回异常 status=%d，降级透传", resp.StatusCode)
 	h.proxyH.HandleProxy(c)
 }
 
