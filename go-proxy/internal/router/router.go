@@ -74,6 +74,7 @@ func Setup(cfg *config.Config) *gin.Engine {
 			// ⭐ 字幕路由（ASS/SSA/SRT → 转发 Python 字幕服务；其他格式透传 Emby）
 			// 注意：Emby 字幕路径格式为 /Subtitles/:subId/0/Stream.ass，需要用 *rest 匹配多段
 			embyGroup.GET(prefix+"/:itemId/Subtitles/:subId/*rest", subtitleHandler.HandleSubtitle)
+			embyGroup.GET(prefix+"/:itemId/subtitles/:subId/*rest", subtitleHandler.HandleSubtitle)
 		}
 
 		// 音频流
@@ -107,6 +108,10 @@ func Setup(cfg *config.Config) *gin.Engine {
 			jellyGroup.GET(prefix+"/:itemId/original.:format", itemThrottle, redirectHandler.HandleVideoStream)
 			jellyGroup.HEAD(prefix+"/:itemId/original", itemThrottle, redirectHandler.HandleVideoStream)
 			jellyGroup.HEAD(prefix+"/:itemId/original.:format", itemThrottle, redirectHandler.HandleVideoStream)
+
+			// ⭐ 字幕路由（同 embyGroup，覆盖无 /emby/ 前缀的请求）
+			jellyGroup.GET(prefix+"/:itemId/Subtitles/:subId/*rest", subtitleHandler.HandleSubtitle)
+			jellyGroup.GET(prefix+"/:itemId/subtitles/:subId/*rest", subtitleHandler.HandleSubtitle)
 		}
 
 		// 音频流
