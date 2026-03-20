@@ -37,6 +37,11 @@ _sub_cache: dict[str, tuple[bytes, float]] = {}  # {item_id: (data, expire_ts)}
 _SUB_CACHE_TTL = 3600 * 6  # 6 小时
 _sub_extracting: set[str] = set()  # 正在提取中的 item_id
 
+# ── 无字幕负缓存（item_id → expire_ts）────────────────────────────────────────
+# 对确认没有内封字幕的文件记录 TTL，避免每次播放都重跑 ffprobe
+_sub_no_track: dict[str, float] = {}  # {item_id: expire_ts}
+_SUB_NO_TRACK_TTL = 3600 * 2  # 2 小时（比字幕缓存短，允许用户重新挂字幕后重试）
+
 
 # ── 配置读取 ──────────────────────────────────────────────────────────────────
 
@@ -164,7 +169,7 @@ async def trigger_embedded_sub_extraction(
     """
     302 成功后异步触发内封字幕提取，不阻塞主流程。
     - 若开关未开启，直接返回
-    - 若该 item_id 已有缓存或正在提取中，跳过
+    - 若该 item_id 已有缓存、正在提取中、或已确认无字幕轨道，跳过
     """
     cfg = await _load_config()
     if cfg.get("embedded_sub_enabled", "").lower() != "true":
@@ -176,6 +181,12 @@ async def trigger_embedded_sub_extraction(
 
     if get_cached_embedded_sub(item_id) is not None:
         logger.debug("[subtitle] 缓存已存在，跳过提取: item_id=%s", item_id)
+        return
+
+    # 检查负缓存：已确认此文件无内封字幕
+    no_track_expire = _sub_no_track.get(item_id)
+    if no_track_expire and time.monotonic() < no_track_expire:
+        logger.debug("[subtitle] 已确认无内封字幕，跳过: item_id=%s", item_id)
         return
 
     track_prefs_raw = cfg.get("embedded_sub_tracks", "")
@@ -247,6 +258,8 @@ async def _extract_embedded_sub(
         streams = probe_data.get("streams", [])
         if not streams:
             logger.info("[subtitle] 未发现内封字幕轨道: item_id=%s", item_id)
+            # 写入负缓存，避免该文件每次播放都重跑 ffprobe
+            _sub_no_track[item_id] = time.monotonic() + _SUB_NO_TRACK_TTL
             return
 
         # ── Step2: 选择字幕轨道 ──────────────────────────────────────────────
