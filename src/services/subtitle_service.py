@@ -84,6 +84,58 @@ def invalidate_config_cache() -> None:
     _cfg_cache_at = 0.0
 
 
+# ── 公开接口：内封字幕 → fontInAss 子集化 ────────────────────────────────────
+
+async def process_embedded_sub_with_font_in_ass(
+    item_id: str,
+    sub_bytes: bytes,
+) -> Optional[bytes]:
+    """
+    将已提取的内封字幕字节直接 POST 给 fontInAss /fontinass/process_bytes 接口做子集化。
+
+    fontInAss 的 /fontinass/process_bytes 接口：
+      - 请求：POST，body 为原始 ASS/SRT 字节
+      - 响应：body 为子集化后的字节，header X-Code=0 表示成功
+
+    Returns:
+        子集化后的字节，或 None（未启用 / 失败时降级返回原始内容）
+    """
+    cfg = await _load_config()
+    if cfg.get("font_in_ass_enabled", "").lower() != "true":
+        return None
+
+    base_url = (cfg.get("font_in_ass_url") or "").rstrip("/")
+    if not base_url:
+        return None
+
+    target = f"{base_url}/fontinass/process_bytes"
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                target,
+                content=sub_bytes,
+                headers={"Content-Type": "application/octet-stream"},
+            )
+            x_code = resp.headers.get("X-Code", "0")
+            if x_code != "0":
+                import base64
+                msg = resp.headers.get("X-Message", "")
+                try:
+                    msg = base64.b64decode(msg).decode("utf-8", errors="replace")
+                except Exception:
+                    pass
+                logger.warning("[subtitle] fontInAss process_bytes 返回错误: code=%s msg=%s item_id=%s", x_code, msg, item_id)
+                return None
+            logger.info(
+                "[subtitle] 内封字幕 fontInAss 子集化完成: item_id=%s %d bytes → %d bytes",
+                item_id, len(sub_bytes), len(resp.content),
+            )
+            return resp.content
+    except Exception as e:
+        logger.warning("[subtitle] fontInAss process_bytes 失败: %s item_id=%s", e, item_id)
+        return None
+
+
 # ── 公开接口：fontInAss 转发 ──────────────────────────────────────────────────
 
 async def proxy_to_font_in_ass(

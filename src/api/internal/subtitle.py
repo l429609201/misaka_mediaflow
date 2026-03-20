@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 
 from src.services.subtitle_service import (
     proxy_to_font_in_ass,
+    process_embedded_sub_with_font_in_ass,
     get_cached_embedded_sub,
     trigger_embedded_sub_extraction,
     _load_config,
@@ -46,14 +47,25 @@ async def subtitle_proxy(request: Request):
     if not original_path:
         return JSONResponse({"error": "missing path param"}, status_code=400)
 
-    # ── 优先级1：内封字幕缓存命中 ────────────────────────────────────────────
+    # ── 优先级1：内封字幕缓存命中 → 送 fontInAss 子集化 ──────────────────────
     # 从路径中提取 itemId：/emby/videos/{itemId}/Subtitles/...
     m = _re.search(r"/videos/(\d+)/Subtitles", original_path, _re.IGNORECASE)
     if m:
         item_id = m.group(1)
         embedded_data = get_cached_embedded_sub(item_id)
         if embedded_data is not None:
-            logger.info("[subtitle] 内封字幕缓存命中，直接返回给播放器: item_id=%s size=%d", item_id, len(embedded_data))
+            # 尝试送 fontInAss 做子集化，失败则直接返回原始内封字幕
+            subsetted = await process_embedded_sub_with_font_in_ass(item_id, embedded_data)
+            if subsetted is not None:
+                logger.info("[subtitle] 内封字幕 fontInAss 子集化成功: item_id=%s", item_id)
+                return Response(
+                    content=subsetted,
+                    status_code=200,
+                    media_type="text/x-ssa",
+                    headers={"X-Subtitle-Source": "embedded-fontinass"},
+                )
+            # fontInAss 未启用或失败 → 直接返回原始内封字幕（不降级到 Emby）
+            logger.info("[subtitle] 内封字幕直接返回(无fontInAss): item_id=%s size=%d", item_id, len(embedded_data))
             return Response(
                 content=embedded_data,
                 status_code=200,
