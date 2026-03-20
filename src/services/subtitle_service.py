@@ -116,20 +116,30 @@ async def process_embedded_sub_with_font_in_ass(
                 content=sub_bytes,
                 headers={"Content-Type": "application/octet-stream"},
             )
-            x_code = resp.headers.get("X-Code", "0")
-            if x_code != "0":
-                import base64
-                msg = resp.headers.get("X-Message", "")
-                try:
-                    msg = base64.b64decode(msg).decode("utf-8", errors="replace")
-                except Exception:
-                    pass
-                logger.warning("[subtitle] fontInAss process_bytes 返回错误: code=%s msg=%s item_id=%s", x_code, msg, item_id)
+            import base64 as _b64
+            all_headers = dict(resp.headers)
+            logger.info(
+                "[subtitle] fontInAss process_bytes(内封) 响应: status=%d headers=%s input=%d bytes",
+                resp.status_code, all_headers, len(sub_bytes),
+            )
+            x_code = resp.headers.get("X-Code", "")
+            msg = resp.headers.get("X-Message", "")
+            try:
+                msg = _b64.b64decode(msg).decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            if x_code not in ("", "0"):
+                logger.warning("[subtitle] fontInAss 内封字幕处理失败: X-Code=%s X-Message=%s item_id=%s", x_code, msg, item_id)
+                return None
+            if len(resp.content) == 0:
+                logger.warning("[subtitle] fontInAss 内封字幕返回空内容(X-Code=%s) item_id=%s", x_code, item_id)
                 return None
             logger.info(
-                "[subtitle] 内封字幕 fontInAss 子集化完成: item_id=%s %d bytes → %d bytes",
-                item_id, len(sub_bytes), len(resp.content),
+                "[subtitle] 内封字幕 fontInAss 子集化完成: item_id=%s X-Code=%s %d bytes → %d bytes",
+                item_id, x_code, len(sub_bytes), len(resp.content),
             )
+            if msg:
+                logger.info("[subtitle] fontInAss 提示: %s item_id=%s", msg, item_id)
             return resp.content
     except Exception as e:
         logger.warning("[subtitle] fontInAss process_bytes 失败: %s item_id=%s", e, item_id)
@@ -217,26 +227,47 @@ async def proxy_to_font_in_ass(
                 content=sub_bytes,
                 headers={"Content-Type": "application/octet-stream"},
             )
-            x_code = fa_resp.headers.get("X-Code", "0")
-            if x_code != "0":
-                import base64
-                msg = fa_resp.headers.get("X-Message", "")
-                try:
-                    msg = base64.b64decode(msg).decode("utf-8", errors="replace")
-                except Exception:
-                    pass
+
+            # ── 完整打印 fontInAss 响应头（诊断用）────────────────────────────
+            import base64 as _b64
+            all_headers = dict(fa_resp.headers)
+            logger.info(
+                "[subtitle] fontInAss process_bytes 响应: status=%d headers=%s input=%d bytes",
+                fa_resp.status_code, all_headers, len(sub_bytes),
+            )
+
+            x_code = fa_resp.headers.get("X-Code", "")
+            x_message_raw = fa_resp.headers.get("X-Message", "")
+            x_message = x_message_raw
+            try:
+                x_message = _b64.b64decode(x_message_raw).decode("utf-8", errors="replace")
+            except Exception:
+                pass
+
+            # fontInAss X-Code: 空 或 "0" 表示成功，其他值为错误码
+            if x_code not in ("", "0"):
                 logger.warning(
-                    "[subtitle] fontInAss process_bytes 错误: code=%s msg=%s path=%s",
-                    x_code, msg, original_path,
+                    "[subtitle] fontInAss 处理失败: X-Code=%s X-Message=%s path=%s",
+                    x_code, x_message, original_path,
                 )
-                # fontInAss 返回错误时降级返回原始字幕，保证播放器不卡住
+                # 降级返回原始字幕，保证播放器不卡住
                 return 200, sub_bytes, {"content-type": "text/plain; charset=utf-8"}
 
             result_bytes = fa_resp.content
+            if len(result_bytes) == 0:
+                logger.warning(
+                    "[subtitle] fontInAss 返回空内容(X-Code=%s)，降级返回原始字幕: path=%s",
+                    x_code, original_path,
+                )
+                return 200, sub_bytes, {"content-type": "text/plain; charset=utf-8"}
+
             logger.info(
-                "[subtitle] ✅ fontInAss 子集化成功: path=%s %d bytes → %d bytes",
-                original_path, len(sub_bytes), len(result_bytes),
+                "[subtitle] ✅ fontInAss 子集化成功: path=%s X-Code=%s %d bytes → %d bytes",
+                original_path, x_code, len(sub_bytes), len(result_bytes),
             )
+            if x_message:
+                logger.info("[subtitle] fontInAss 提示信息: %s", x_message)
+
             resp_headers = {
                 k: v for k, v in fa_resp.headers.items()
                 if k.lower() in ("content-type", "content-encoding")
