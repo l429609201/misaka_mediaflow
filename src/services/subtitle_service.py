@@ -231,7 +231,7 @@ async def _process_with_builtin(
         if missing:
             logger.warning("[subtitle] 内置引擎字体缺失: path=%s 缺失=%s",
                            original_path, missing)
-        logger.info("[subtitle] ✅ 内置引擎完成: %d bytes → %d bytes path=%s",
+        logger.info("[subtitle] 内置引擎完成: %d bytes -> %d bytes path=%s",
                     len(sub_bytes), len(result_bytes), original_path)
         return 200, result_bytes, {"content-type": content_type}
     except Exception as e:
@@ -278,7 +278,7 @@ async def _process_with_external(
         if error_msg:
             logger.warning("[subtitle] fontInAss 字体缺失: path=%s\n%s", original_path, error_msg)
 
-        logger.info("[subtitle] ✅ 外置引擎完成: %d bytes → %d bytes path=%s",
+        logger.info("[subtitle] 外置引擎完成: %d bytes -> %d bytes path=%s",
                     len(sub_bytes), len(result_bytes), original_path)
         resp_headers = {k: v for k, v in fa_resp.headers.items()
                         if k.lower() in ("content-type", "content-encoding")}

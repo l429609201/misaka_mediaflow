@@ -728,7 +728,7 @@ async def _process_ass_content(ass_text: str, raw_bytes: bytes) -> tuple:
 
     ass_out = _insert_fonts_section(ass_text, font_entries)
     logger.info(
-        "[builtin] ✅ 完成: 嵌入 %d/%d key，%d 个字体文件，缺失=%s",
+        "[builtin] 完成: 嵌入 %d/%d key，%d 个字体文件，缺失=%s",
         len(font_entries), len(font_chars), len(re_map), missing or "无",
     )
     return ass_out.encode("utf-8"), missing, "text/x-ssa; charset=utf-8"
