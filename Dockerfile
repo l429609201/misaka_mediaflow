@@ -1,19 +1,23 @@
 # =============================================================
-# Misaka MediaFlow — 四阶段 Docker 构建
+# Misaka MediaFlow — 五阶段 Docker 构建
 #
-#   1. Node    → 编译前端 (React + Vite)  [$BUILDPLATFORM 原生编译]
-#   2. Go      → 编译反代 (Gin, CGO=0 静态链接)
-#   3. Python  → 编译 C 扩展 (build-essential + dev headers)
-#   4. Runtime → 纯运行时 (无编译器, su-exec 降权)
+#   1. Node      → 编译前端 (React + Vite)  [$BUILDPLATFORM 原生编译]
+#   2. Go        → 编译反代 (Gin, CGO=0 静态链接)
+#   3. ffmpeg    → 最小化静态 ffmpeg/ffprobe
+#                  只编译字幕提取所需模块，体积 ~8MB（vs apt 的 ~350MB）
+#                  支持格式: MKV/MP4/MOV 封装 + ASS/SRT/SRT/PGS/VOBSUB 字幕
+#   4. Python    → 编译 C 扩展 (build-essential + dev headers)
+#   5. Runtime   → 纯运行时 (无编译器, su-exec 降权)
 #
 # 基底: l429609201/su-exec:3.12 (Debian slim + Python 3.12 + su-exec)
 # 安全: su-exec 降权至 UID=1000 非 root 用户
-# 体积: ~120MB (无 gcc/dev headers/curl, 依赖深度清理)
+# 体积: ~220MB (含最小化 ffmpeg ~8MB)
 # =============================================================
 
 ARG GO_VERSION=1.22
 ARG BUILD_DATE
 ARG VERSION=dev
+ARG FFMPEG_VERSION=7.1
 
 # ==================== 阶段 1: 前端构建 ====================
 # $BUILDPLATFORM 确保在原生架构执行, 前端产物是平台无关的
@@ -45,7 +49,109 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
     ./cmd/proxy/
 
 
-# ==================== 阶段 3: Python 依赖编译 ====================
+# ==================== 阶段 3: 最小化 ffmpeg 静态编译 ====================
+# 目标：只编译字幕提取所需的最小模块集，静态链接，无运行时依赖
+#
+# 启用的封装格式 demuxer（读取容器）:
+#   matroska  — MKV / MKA（最常见内封字幕载体）
+#   mov,mp4   — MP4 / MOV / M4V（也可能内封字幕）
+#
+# 启用的字幕 decoder（文本字幕，可提取为 ASS/SRT）:
+#   ass / ssa          — ASS/SSA 软字幕（最常见）
+#   subrip / srt       — SRT 软字幕
+#   webvtt             — WebVTT 字幕
+#   mov_text           — MP4 内嵌文本字幕（tx3g）
+#   hdmv_pgs_subtitle  — PGS 蓝光图形字幕（ffprobe 探测用，提取为 sup）
+#   dvd_subtitle       — VOBSUB DVD 图形字幕（ffprobe 探测用，提取为 sub/idx）
+#
+# 启用的 muxer（输出格式）:
+#   ass / srt / webvtt / sup / matroska
+#
+# 启用的 protocol（网络访问）:
+#   http / https / tcp / file / pipe
+#
+# 完全禁用: 所有视频/音频 codec、硬件加速、滤镜、文档、示例
+FROM debian:bookworm-slim AS ffmpeg-builder
+
+ARG FFMPEG_VERSION
+ARG TARGETARCH
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # 编译工具
+    build-essential \
+    pkg-config \
+    nasm \
+    # ffmpeg 依赖（最小集）
+    zlib1g-dev \
+    wget \
+    xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# 下载 ffmpeg 源码
+RUN wget -q "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" \
+    && tar xf "ffmpeg-${FFMPEG_VERSION}.tar.xz" \
+    && rm "ffmpeg-${FFMPEG_VERSION}.tar.xz"
+
+RUN cd "ffmpeg-${FFMPEG_VERSION}" && ./configure \
+    # 静态链接，输出独立二进制，无 .so 运行时依赖
+    --enable-static \
+    --disable-shared \
+    --prefix=/ffmpeg-out \
+    # 禁用所有模块，然后只开启需要的
+    --disable-everything \
+    --disable-doc \
+    --disable-debug \
+    --disable-htmlpages \
+    --disable-manpages \
+    --disable-podpages \
+    --disable-txtpages \
+    --disable-avdevice \
+    --disable-postproc \
+    --disable-network \
+    # 重新启用 network（http/https 拉取 CDN 直链需要）
+    --enable-network \
+    # ── 封装格式 demuxer（读取容器）──────────────────────────
+    --enable-demuxer=matroska \
+    --enable-demuxer=mov \
+    --enable-demuxer=mp4 \
+    --enable-demuxer=avi \
+    # ── 字幕 codec ────────────────────────────────────────────
+    --enable-decoder=ass \
+    --enable-decoder=ssa \
+    --enable-decoder=subrip \
+    --enable-decoder=srt \
+    --enable-decoder=webvtt \
+    --enable-decoder=mov_text \
+    --enable-decoder=hdmv_pgs_subtitle \
+    --enable-decoder=dvd_subtitle \
+    --enable-decoder=dvbsub \
+    --enable-encoder=ass \
+    --enable-encoder=subrip \
+    --enable-encoder=webvtt \
+    --enable-muxer=ass \
+    --enable-muxer=srt \
+    --enable-muxer=webvtt \
+    --enable-muxer=matroska \
+    --enable-muxer=sup \
+    # ── 网络协议 ──────────────────────────────────────────────
+    --enable-protocol=http \
+    --enable-protocol=https \
+    --enable-protocol=tcp \
+    --enable-protocol=file \
+    --enable-protocol=pipe \
+    # ── 优化体积 ──────────────────────────────────────────────
+    --enable-small \
+    --extra-cflags="-Os -ffunction-sections -fdata-sections" \
+    --extra-ldflags="-Wl,--gc-sections" \
+    && make -j$(nproc) \
+    && make install \
+    # 只保留 ffmpeg + ffprobe 两个二进制
+    && strip /ffmpeg-out/bin/ffmpeg /ffmpeg-out/bin/ffprobe
+
+
+# ==================== 阶段 4: Python 依赖编译 ====================
 FROM l429609201/su-exec:3.12 AS py-builder
 
 # 编译时依赖 (不会进入最终镜像)
@@ -61,7 +167,6 @@ COPY requirements.txt .
 
 # --target: 平铺安装到 /install
 # --no-compile: 不生成 .pyc (运行时 PYTHONDONTWRITEBYTECODE=1)
-# 注意: pip install 必须单独一条 RUN，失败时立刻报错停止构建
 RUN pip install --no-cache-dir --no-compile -r requirements.txt --target .
 
 # 清理：删除测试/文档/类型桩/缓存，压缩体积
@@ -77,7 +182,7 @@ RUN find . -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null; \
     true
 
 
-# ==================== 阶段 4: 最终运行时镜像 ====================
+# ==================== 阶段 5: 最终运行时镜像 ====================
 FROM l429609201/su-exec:3.12
 
 # 环境变量
@@ -91,9 +196,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # 运行时系统依赖 (只装 .so 运行库, 不装 -dev 头文件)
-# 注意: ffmpeg 体积约 300MB，默认不内置
-#   若需内封字幕提取功能(embedded_sub_enabled=true)，请在宿主机或 docker-compose
-#   中通过 command 安装，或使用带 ffmpeg 的自定义基础镜像
+# ffmpeg 已通过静态编译独立引入，此处无需安装
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tzdata \
     libpq5 \
@@ -108,6 +211,14 @@ COPY --from=py-builder /install /usr/local/lib/python3.12/site-packages
 
 # 验证关键依赖能正常 import（构建时就发现问题，而不是运行时才报错）
 RUN python -c "import uvicorn; import fastapi; import p115client; print('All imports OK')"
+
+# 最小化静态 ffmpeg/ffprobe（仅含字幕提取所需模块，约 8MB）
+COPY --from=ffmpeg-builder /ffmpeg-out/bin/ffmpeg  /usr/local/bin/ffmpeg
+COPY --from=ffmpeg-builder /ffmpeg-out/bin/ffprobe /usr/local/bin/ffprobe
+RUN chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe \
+    # 验证二进制可用，并输出支持的格式确认（构建时可见）
+    && ffmpeg -version 2>&1 | head -3 \
+    && ffprobe -version 2>&1 | head -1
 
 # 应用代码
 COPY src/ ./src/
@@ -147,4 +258,3 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:7789/')" || exit 1
 
 CMD ["/exec.sh"]
-
