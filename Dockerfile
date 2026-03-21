@@ -3,21 +3,20 @@
 #
 #   1. Node      → 编译前端 (React + Vite)  [$BUILDPLATFORM 原生编译]
 #   2. Go        → 编译反代 (Gin, CGO=0 静态链接)
-#   3. ffmpeg    → 最小化静态 ffmpeg/ffprobe
-#                  只编译字幕提取所需模块，体积 ~8MB（vs apt 的 ~350MB）
-#                  支持格式: MKV/MP4/MOV 封装 + ASS/SRT/SRT/PGS/VOBSUB 字幕
+#   3. ffmpeg    → 下载 John Van Sickle 静态构建，无需编译，秒完成
+#                  静态二进制 ~40MB（vs apt 动态链接 ~350MB）
+#                  支持格式: MKV/MP4/MOV 封装 + ASS/SRT/PGS/VOBSUB 全部字幕
 #   4. Python    → 编译 C 扩展 (build-essential + dev headers)
 #   5. Runtime   → 纯运行时 (无编译器, su-exec 降权)
 #
 # 基底: l429609201/su-exec:3.12 (Debian slim + Python 3.12 + su-exec)
 # 安全: su-exec 降权至 UID=1000 非 root 用户
-# 体积: ~220MB (含最小化 ffmpeg ~8MB)
+# 体积: ~250MB (含静态 ffmpeg ~40MB，无任何运行时 .so 依赖)
 # =============================================================
 
 ARG GO_VERSION=1.22
 ARG BUILD_DATE
 ARG VERSION=dev
-ARG FFMPEG_VERSION=7.1
 
 # ==================== 阶段 1: 前端构建 ====================
 # $BUILDPLATFORM 确保在原生架构执行, 前端产物是平台无关的
@@ -49,106 +48,43 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
     ./cmd/proxy/
 
 
-# ==================== 阶段 3: 最小化 ffmpeg 静态编译 ====================
-# 目标：只编译字幕提取所需的最小模块集，静态链接，无运行时依赖
-#
-# 启用的封装格式 demuxer（读取容器）:
-#   matroska  — MKV / MKA（最常见内封字幕载体）
-#   mov,mp4   — MP4 / MOV / M4V（也可能内封字幕）
-#
-# 启用的字幕 decoder（文本字幕，可提取为 ASS/SRT）:
-#   ass / ssa          — ASS/SSA 软字幕（最常见）
-#   subrip / srt       — SRT 软字幕
-#   webvtt             — WebVTT 字幕
-#   mov_text           — MP4 内嵌文本字幕（tx3g）
-#   hdmv_pgs_subtitle  — PGS 蓝光图形字幕（ffprobe 探测用，提取为 sup）
-#   dvd_subtitle       — VOBSUB DVD 图形字幕（ffprobe 探测用，提取为 sub/idx）
-#
-# 启用的 muxer（输出格式）:
-#   ass / srt / webvtt / sup / matroska
-#
-# 启用的 protocol（网络访问）:
-#   http / https / tcp / file / pipe
-#
-# 完全禁用: 所有视频/音频 codec、硬件加速、滤镜、文档、示例
-FROM debian:bookworm-slim AS ffmpeg-builder
+# ==================== 阶段 3: 获取静态 ffmpeg ====================
+# 使用 John Van Sickle 预编译静态构建（https://johnvansickle.com/ffmpeg/）
+# - 完全静态链接，无任何 .so 运行时依赖，直接 COPY 进最终镜像即可
+# - 支持全格式（MKV/MP4/ASS/SRT/PGS/VOBSUB 等），体积 ~40MB
+# - 无需编译，下载解压即用，构建耗时 < 1 分钟
+# - 多架构支持: amd64 / arm64 / armhf
+FROM debian:bookworm-slim AS ffmpeg-fetcher
 
-ARG FFMPEG_VERSION
 ARG TARGETARCH
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    # 编译工具
-    build-essential \
-    pkg-config \
-    nasm \
-    # ffmpeg 依赖（最小集）
-    zlib1g-dev \
     wget \
     xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /build
-
-# 下载 ffmpeg 源码
-RUN wget -q "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" \
-    && tar xf "ffmpeg-${FFMPEG_VERSION}.tar.xz" \
-    && rm "ffmpeg-${FFMPEG_VERSION}.tar.xz"
-
-RUN cd "ffmpeg-${FFMPEG_VERSION}" && ./configure \
-    # 静态链接，输出独立二进制，无 .so 运行时依赖
-    --enable-static \
-    --disable-shared \
-    --prefix=/ffmpeg-out \
-    # 禁用所有模块，然后只开启需要的
-    --disable-everything \
-    --disable-doc \
-    --disable-debug \
-    --disable-htmlpages \
-    --disable-manpages \
-    --disable-podpages \
-    --disable-txtpages \
-    --disable-avdevice \
-    --disable-postproc \
-    --disable-network \
-    # 重新启用 network（http/https 拉取 CDN 直链需要）
-    --enable-network \
-    # ── 封装格式 demuxer（读取容器）──────────────────────────
-    --enable-demuxer=matroska \
-    --enable-demuxer=mov \
-    --enable-demuxer=mp4 \
-    --enable-demuxer=avi \
-    # ── 字幕 codec ────────────────────────────────────────────
-    --enable-decoder=ass \
-    --enable-decoder=ssa \
-    --enable-decoder=subrip \
-    --enable-decoder=srt \
-    --enable-decoder=webvtt \
-    --enable-decoder=mov_text \
-    --enable-decoder=hdmv_pgs_subtitle \
-    --enable-decoder=dvd_subtitle \
-    --enable-decoder=dvbsub \
-    --enable-encoder=ass \
-    --enable-encoder=subrip \
-    --enable-encoder=webvtt \
-    --enable-muxer=ass \
-    --enable-muxer=srt \
-    --enable-muxer=webvtt \
-    --enable-muxer=matroska \
-    --enable-muxer=sup \
-    # ── 网络协议 ──────────────────────────────────────────────
-    --enable-protocol=http \
-    --enable-protocol=https \
-    --enable-protocol=tcp \
-    --enable-protocol=file \
-    --enable-protocol=pipe \
-    # ── 优化体积 ──────────────────────────────────────────────
-    --enable-small \
-    --extra-cflags="-Os -ffunction-sections -fdata-sections" \
-    --extra-ldflags="-Wl,--gc-sections" \
-    && make -j$(nproc) \
-    && make install \
-    # 只保留 ffmpeg + ffprobe 两个二进制
-    && strip /ffmpeg-out/bin/ffmpeg /ffmpeg-out/bin/ffprobe
+# 将 Docker TARGETARCH 映射到 johnvansickle 的架构命名
+# TARGETARCH: amd64 → amd64 | arm64 → arm64 | arm/v7 → armhf
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+        amd64)  JVS_ARCH="amd64"  ;; \
+        arm64)  JVS_ARCH="arm64"  ;; \
+        arm)    JVS_ARCH="armhf"  ;; \
+        *)      echo "Unsupported arch: ${TARGETARCH}"; exit 1 ;; \
+    esac; \
+    wget -q --show-progress \
+        "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${JVS_ARCH}-static.tar.xz" \
+        -O /tmp/ffmpeg.tar.xz; \
+    tar xf /tmp/ffmpeg.tar.xz -C /tmp; \
+    rm /tmp/ffmpeg.tar.xz; \
+    # 解压目录名含版本号（如 ffmpeg-7.0.2-amd64-static），用通配符定位
+    FFDIR=$(find /tmp -maxdepth 1 -type d -name 'ffmpeg-*-static' | head -1); \
+    cp "${FFDIR}/ffmpeg"  /usr/local/bin/ffmpeg; \
+    cp "${FFDIR}/ffprobe" /usr/local/bin/ffprobe; \
+    chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe; \
+    # 验证二进制可用
+    /usr/local/bin/ffmpeg  -version 2>&1 | head -1; \
+    /usr/local/bin/ffprobe -version 2>&1 | head -1
 
 
 # ==================== 阶段 4: Python 依赖编译 ====================
@@ -212,12 +148,11 @@ COPY --from=py-builder /install /usr/local/lib/python3.12/site-packages
 # 验证关键依赖能正常 import（构建时就发现问题，而不是运行时才报错）
 RUN python -c "import uvicorn; import fastapi; import p115client; print('All imports OK')"
 
-# 最小化静态 ffmpeg/ffprobe（仅含字幕提取所需模块，约 8MB）
-COPY --from=ffmpeg-builder /ffmpeg-out/bin/ffmpeg  /usr/local/bin/ffmpeg
-COPY --from=ffmpeg-builder /ffmpeg-out/bin/ffprobe /usr/local/bin/ffprobe
+# 最小化静态 ffmpeg/ffprobe（John Van Sickle 构建，约 40MB，无运行时依赖）
+COPY --from=ffmpeg-fetcher /usr/local/bin/ffmpeg  /usr/local/bin/ffmpeg
+COPY --from=ffmpeg-fetcher /usr/local/bin/ffprobe /usr/local/bin/ffprobe
 RUN chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe \
-    # 验证二进制可用，并输出支持的格式确认（构建时可见）
-    && ffmpeg -version 2>&1 | head -3 \
+    && ffmpeg  -version 2>&1 | head -1 \
     && ffprobe -version 2>&1 | head -1
 
 # 应用代码
