@@ -739,36 +739,39 @@ async def _process_ass_content(ass_text: str, raw_bytes: bytes) -> tuple:
                     path, idx, chars_count, keys)
 
     # ── 并行子集化 ────────────────────────────────────────────────────────────
-    logger.info("[builtin] 开始并行子集化: %d 个字体文件", len(re_map))
-
     async def _do_subset(fk: tuple) -> tuple:
         path, idx = fk
         orig_size = os.path.getsize(path) if os.path.exists(path) else 0
-        logger.info("[builtin]   子集化开始: %s#%d  原始大小=%d bytes  字符数=%d",
-                    path, idx, orig_size, len(re_map[fk]))
         result = await asyncio.to_thread(_subset_font_sync, path, idx, re_map[fk])
-        if result:
-            logger.info("[builtin]   子集化完成: %s#%d  %d bytes → %d bytes (压缩至%.1f%%)",
-                        path, idx, orig_size, len(result),
-                        len(result) / orig_size * 100 if orig_size else 0)
-        else:
-            logger.warning("[builtin]   子集化失败: %s#%d", path, idx)
-        return fk, result
+        return fk, result, orig_size
 
     subset_results = await asyncio.gather(*[_do_subset(fk) for fk in re_map])
 
-    # ── UUEncode + 写入 [Fonts] ───────────────────────────────────────────────
+    # ── UUEncode + 写入 [Fonts] + 汇总日志 ───────────────────────────────────
     font_entries: dict = {}
-    for fk, subset_bytes in subset_results:
+    subset_lines: list = []
+    for fk, subset_bytes, orig_size in subset_results:
+        path, idx = fk
+        keys = file_to_keys[fk]
         if not subset_bytes:
-            failed_keys = file_to_keys[fk]
-            logger.warning("[builtin]   子集化失败，跳过key=%s", failed_keys)
-            missing.extend(failed_keys)
+            missing.extend(keys)
+            subset_lines.append(
+                f"  ❌ {path}#{idx}  原始={orig_size} bytes  子集化失败  key={keys}"
+            )
             continue
-        for key in file_to_keys[fk]:
+        ratio = len(subset_bytes) / orig_size * 100 if orig_size else 0
+        subset_lines.append(
+            f"  ✅ {path}#{idx}  {orig_size} → {len(subset_bytes)} bytes"
+            f" ({ratio:.1f}%)  字符数={len(re_map[fk])}  key={keys}"
+        )
+        for key in keys:
             fname = key.rsplit("^", 1)[0] if "^" in key else key
             font_entries[key] = _uuencode_font(subset_bytes, fname)
-            logger.info("[builtin]   UUEncode完成: key=[%s] → %d bytes 已嵌入", key, len(subset_bytes))
+
+    logger.info(
+        "[builtin] 子集化结果: %d 个字体文件\n%s",
+        len(re_map), "\n".join(subset_lines),
+    )
 
     if not font_entries:
         logger.warning("[builtin] ❌ 子集化全部失败，返回原始字幕")
