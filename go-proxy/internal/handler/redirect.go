@@ -110,14 +110,9 @@ func (h *RedirectHandler) HandleVideoStream(c *gin.Context) {
 
 // triggerEmbeddedSubExtraction 异步通知 Python 触发内封字幕提取
 // 在独立 goroutine 中执行，302 响应不等待此结果
+// 注意：不在 Go 端做格式过滤，115 CDN 直链可能不含扩展名；
+// 由 Python 端 ffprobe 探测是否存在字幕轨道，无轨道则写负缓存。
 func (h *RedirectHandler) triggerEmbeddedSubExtraction(itemID, cdnURL, userAgent, itemType string) {
-	// 只对 MKV/MKS 格式触发（这些格式才有内封字幕）
-	lower := strings.ToLower(cdnURL)
-	isMKV := strings.Contains(lower, ".mkv") || strings.Contains(lower, ".mks")
-	if !isMKV {
-		return
-	}
-
 	pyBase := strings.TrimRight(h.pyClient.BaseURL(), "/")
 	pyURL := pyBase + "/internal/subtitle/trigger"
 

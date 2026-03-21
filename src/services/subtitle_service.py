@@ -434,12 +434,18 @@ async def _extract_embedded_sub(
             return
 
         # ── Step1: ffprobe 探测字幕轨道 ─────────────────────────────────────
+        # 注意：115 CDN 直链可能不含文件扩展名，需要加 -allowed_extensions ALL
+        # 和 -protocol_whitelist 才能让 ffprobe 正常探测 HTTPS 流
         logger.debug("[subtitle] ffprobe 目标 URL: %s", cdn_url[:120] if cdn_url else "None")
+        ua = user_agent or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         probe_cmd = [
-            "ffprobe", "-v", "quiet",
+            "ffprobe", "-v", "warning",
+            "-protocol_whitelist", "file,http,https,tcp,tls,crypto",
+            "-allowed_extensions", "ALL",
+            "-user_agent", ua,
+            "-headers", f"Referer: https://115.com/\r\n",
             "-print_format", "json",
             "-show_streams", "-select_streams", "s",
-            "-user_agent", user_agent or "Mozilla/5.0",
             cdn_url,
         ]
         try:
@@ -449,9 +455,9 @@ async def _extract_embedded_sub(
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await asyncio.wait_for(probe_proc.communicate(), timeout=30)
-            if stderr:
-                logger.debug("[subtitle] ffprobe stderr: %s",
-                             stderr.decode("utf-8", errors="replace").strip()[:500])
+            stderr_txt = stderr.decode("utf-8", errors="replace").strip()
+            if stderr_txt:
+                logger.info("[subtitle] ffprobe stderr: %s", stderr_txt[:800])
             probe_data = json.loads(stdout.decode("utf-8", errors="replace"))
         except asyncio.TimeoutError:
             logger.warning("[subtitle] ffprobe 超时: item_id=%s", item_id)
@@ -525,7 +531,10 @@ async def _extract_embedded_sub(
             out_path = os.path.join(tmpdir, "sub.ass")
             extract_cmd = [
                 "ffmpeg", "-v", "warning",
-                "-user_agent", user_agent or "Mozilla/5.0",
+                "-protocol_whitelist", "file,http,https,tcp,tls,crypto",
+                "-allowed_extensions", "ALL",
+                "-user_agent", ua,
+                "-headers", f"Referer: https://115.com/\r\n",
                 "-i", cdn_url,
                 "-map", f"0:s:{sub_stream_pos}",
                 "-c:s", "ass",
