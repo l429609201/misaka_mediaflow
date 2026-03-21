@@ -427,7 +427,10 @@ async def trigger_embedded_sub_extraction(
     except Exception:
         track_prefs = []
 
-    # fire-and-forget
+    # 先标记为"提取中"，再创建 task
+    # 必须在 create_task 之前 add，否则 task 还未执行时 warmup 轮询会看到 extracting=False
+    # 而提前返回（asyncio.create_task 不会立即执行 task，要等当前协程 await 让出 CPU）
+    _sub_extracting.add(item_id)
     asyncio.create_task(
         _extract_embedded_sub(item_id, cdn_url, user_agent, track_prefs),
         name=f"embedded_sub_{item_id}",
@@ -494,9 +497,8 @@ async def _extract_embedded_sub(
          若 ffmpeg 也 SIGSEGV，则回退为继续扩大 Range 下载完整文件再提取
       5. 缓存结果
     """
-    if item_id in _sub_extracting:
-        return
-    _sub_extracting.add(item_id)
+    # _sub_extracting.add 由调用方 trigger_embedded_sub_extraction 在 create_task 前完成，
+    # 保证 warmup 轮询在 task 实际执行前就能看到 extracting=True
     t0 = time.monotonic()
     logger.info("[subtitle] 开始内封字幕提取: item_id=%s", item_id)
 
