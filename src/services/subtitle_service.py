@@ -421,6 +421,7 @@ async def _extract_embedded_sub(
             return
 
         # ── Step1: ffprobe 探测字幕轨道 ─────────────────────────────────────
+        logger.debug("[subtitle] ffprobe 目标 URL: %s", cdn_url[:120] if cdn_url else "None")
         probe_cmd = [
             "ffprobe", "-v", "quiet",
             "-print_format", "json",
@@ -434,7 +435,10 @@ async def _extract_embedded_sub(
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, _ = await asyncio.wait_for(probe_proc.communicate(), timeout=30)
+            stdout, stderr = await asyncio.wait_for(probe_proc.communicate(), timeout=30)
+            if stderr:
+                logger.debug("[subtitle] ffprobe stderr: %s",
+                             stderr.decode("utf-8", errors="replace").strip()[:500])
             probe_data = json.loads(stdout.decode("utf-8", errors="replace"))
         except asyncio.TimeoutError:
             logger.warning("[subtitle] ffprobe 超时: item_id=%s", item_id)
