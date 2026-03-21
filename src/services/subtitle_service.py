@@ -33,7 +33,8 @@ _CFG_CACHE_TTL = 60  # 秒
 
 # ── 内封字幕内存缓存（item_id → 字幕内容字节）──────────────────────────────────
 # 使用简单 dict + TTL，避免引入额外依赖
-_sub_cache: dict[str, tuple[bytes, float]] = {}  # {item_id: (data, expire_ts)}
+_sub_cache: dict[str, tuple[bytes, float]] = {}       # {item_id: (data, expire_ts)}
+_sub_cache_info: dict[str, dict] = {}                  # {item_id: {lang, title, codec}}
 _SUB_CACHE_TTL = 3600 * 6  # 6 小时
 _sub_extracting: set[str] = set()  # 正在提取中的 item_id
 
@@ -332,14 +333,25 @@ def get_cached_embedded_sub(item_id: str) -> Optional[bytes]:
     data, expire_ts = entry
     if time.monotonic() > expire_ts:
         _sub_cache.pop(item_id, None)
+        _sub_cache_info.pop(item_id, None)
         return None
     return data
 
 
-def _set_cached_embedded_sub(item_id: str, data: bytes) -> None:
-    """写入内封字幕缓存"""
+def get_cached_embedded_sub_info(item_id: str) -> Optional[dict]:
+    """返回已缓存的内封字幕元数据（lang/title/codec），未命中返回 None。"""
+    if get_cached_embedded_sub(item_id) is None:
+        return None
+    return _sub_cache_info.get(item_id)
+
+
+def _set_cached_embedded_sub(item_id: str, data: bytes, info: Optional[dict] = None) -> None:
+    """写入内封字幕缓存，info 为字幕元数据 {lang, title, codec}"""
     _sub_cache[item_id] = (data, time.monotonic() + _SUB_CACHE_TTL)
-    logger.info("[subtitle] 内封字幕已缓存: item_id=%s size=%d bytes", item_id, len(data))
+    if info:
+        _sub_cache_info[item_id] = info
+    logger.info("[subtitle] 内封字幕已缓存: item_id=%s size=%d bytes lang=%s",
+                item_id, len(data), (info or {}).get("lang", "?"))
 
 
 # ── 公开接口：触发内封字幕异步提取 ───────────────────────────────────────────
@@ -551,29 +563,50 @@ async def _extract_embedded_sub(
             # ── Step3: 过滤图形字幕，只保留文本字幕 ──────────────────────────
             BITMAP_CODECS = {"hdmv_pgs_subtitle", "pgssub", "dvd_subtitle", "dvbsub",
                              "dvb_subtitle", "xsub", "vobsub", "mov_text"}
+
+            # 详细打印所有发现的字幕轨道
+            logger.info("[subtitle] 发现 %d 条字幕轨道: item_id=%s", len(streams), item_id)
+            for s in streams:
+                s_lang  = (s.get("tags", {}).get("language") or "").strip()
+                s_title = (s.get("tags", {}).get("title") or "").strip()
+                s_codec = s.get("codec_name", "?")
+                s_idx   = s.get("index", "?")
+                is_bitmap = s_codec.lower() in BITMAP_CODECS
+                logger.info(
+                    "[subtitle]   轨道 index=%s codec=%s lang=%s title=%s %s",
+                    s_idx, s_codec, s_lang or "(无)", s_title or "(无)",
+                    "【图形字幕，跳过】" if is_bitmap else "【文本字幕，可提取】",
+                )
+
             text_streams = [
                 s for s in streams
                 if s.get("codec_name", "").lower() not in BITMAP_CODECS
             ]
             if not text_streams:
                 logger.info(
-                    "[subtitle] 内封字幕均为图形格式，无法提取为ASS: item_id=%s codecs=%s",
-                    item_id, [s.get("codec_name") for s in streams],
+                    "[subtitle] 内封字幕均为图形格式，无法提取为ASS: item_id=%s",
+                    item_id,
                 )
                 _sub_no_track[item_id] = time.monotonic() + _SUB_NO_TRACK_TTL
                 return
 
             chosen_index: Optional[int] = None
-            chosen_lang = ""
+            chosen_lang  = ""
+            chosen_title = ""
+            chosen_codec = ""
             if track_prefs:
+                logger.info("[subtitle] 按偏好匹配轨道: prefs=%s", track_prefs)
                 for pref in track_prefs:
                     pref_lower = pref.lower()
                     for s in text_streams:
-                        lang = (s.get("tags", {}).get("language") or "").lower()
+                        lang  = (s.get("tags", {}).get("language") or "").lower()
                         title = (s.get("tags", {}).get("title") or "").lower()
                         if pref_lower in (lang, title) or pref_lower in lang or pref_lower in title:
                             chosen_index = s.get("index")
-                            chosen_lang = lang
+                            chosen_lang  = lang
+                            chosen_title = (s.get("tags", {}).get("title") or "")
+                            chosen_codec = s.get("codec_name", "ass")
+                            logger.info("[subtitle] 偏好命中: pref=%s lang=%s title=%s", pref, lang, title)
                             break
                     if chosen_index is not None:
                         break
@@ -581,14 +614,17 @@ async def _extract_embedded_sub(
             if chosen_index is None:
                 s0 = text_streams[0]
                 chosen_index = s0.get("index")
-                chosen_lang = (s0.get("tags", {}).get("language") or "unknown")
+                chosen_lang  = (s0.get("tags", {}).get("language") or "unknown")
+                chosen_title = (s0.get("tags", {}).get("title") or "")
+                chosen_codec = s0.get("codec_name", "ass")
+                logger.info("[subtitle] 无偏好命中，取第一条文本字幕: lang=%s title=%s", chosen_lang, chosen_title)
 
             sub_stream_pos = next(
                 (i for i, s in enumerate(streams) if s.get("index") == chosen_index), 0
             )
             logger.info(
-                "[subtitle] 选择字幕轨道: item_id=%s stream_index=%s sub_pos=%d lang=%s",
-                item_id, chosen_index, sub_stream_pos, chosen_lang,
+                "[subtitle] 选择字幕轨道: item_id=%s stream_index=%s sub_pos=%d lang=%s title=%s codec=%s",
+                item_id, chosen_index, sub_stream_pos, chosen_lang, chosen_title, chosen_codec,
             )
 
             # ── Step4: ffmpeg 从本地文件头提取 .ass ──────────────────────────
@@ -643,19 +679,18 @@ async def _extract_embedded_sub(
             item_id, chosen_lang, len(sub_data), elapsed,
         )
 
-        # ── Step4: 尝试立即送 fontInAss 子集化，缓存处理后的结果 ────────────────
-        # 内封字幕播放时播放器直接从视频流读取，不走 HTTP 字幕接口，
-        # 所以无法在字幕请求时实时子集化，必须在提取阶段就预处理好。
+        # ── Step5: 尝试立即送 fontInAss 子集化，缓存处理后的结果 ────────────────
+        sub_info = {"lang": chosen_lang, "title": chosen_title, "codec": chosen_codec}
         subsetted = await process_embedded_sub_with_font_in_ass(item_id, sub_data)
         if subsetted is not None:
-            _set_cached_embedded_sub(item_id, subsetted)
+            _set_cached_embedded_sub(item_id, subsetted, sub_info)
             logger.info(
                 "[subtitle] 内封字幕已子集化并缓存: item_id=%s %d bytes → %d bytes",
                 item_id, len(sub_data), len(subsetted),
             )
         else:
-            # fontInAss 未启用或失败，缓存原始 ASS（万一 Emby 发字幕请求也能命中）
-            _set_cached_embedded_sub(item_id, sub_data)
+            # fontInAss 未启用或失败，缓存原始 ASS
+            _set_cached_embedded_sub(item_id, sub_data, sub_info)
 
     except Exception as e:
         logger.error("[subtitle] 内封字幕提取异常: %s item_id=%s", e, item_id)

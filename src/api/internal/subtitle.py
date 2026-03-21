@@ -15,6 +15,7 @@ from src.services.subtitle_service import (
     proxy_to_font_in_ass,
     process_embedded_sub_with_font_in_ass,
     get_cached_embedded_sub,
+    get_cached_embedded_sub_info,
     trigger_embedded_sub_extraction,
     _load_config,
 )
@@ -142,8 +143,24 @@ async def subtitle_embedded(item_id: str):
         },
     )
 
+@router.get("/subtitle/embedded/{item_id}/info")
+async def subtitle_embedded_info(item_id: str):
+    """
+    返回已缓存的内封字幕元数据（lang/title/codec），供 Go 注入 PlaybackInfo。
+    未命中返回 404。
+    """
+    info = get_cached_embedded_sub_info(item_id)
+    if info is None:
+        return JSONResponse({"cached": False}, status_code=404)
+    return JSONResponse({
+        "cached": True,
+        "lang":   info.get("lang", ""),
+        "title":  info.get("title", ""),
+        "codec":  info.get("codec", "ass"),
+    })
 
-@router.get("/subtitle/config")
+
+
 async def subtitle_config():
     """
     返回当前字幕功能配置。

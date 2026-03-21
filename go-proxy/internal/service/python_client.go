@@ -157,7 +157,37 @@ func (pc *PythonClient) CheckStrm(itemID, apiKey string) (bool, string, error) {
 	return result.IsStrm, result.ItemType, nil
 }
 
-// GetAPIInterval 从 Python 获取 115 的 API 请求间隔（秒）
+// EmbeddedSubInfo 内封字幕元数据
+type EmbeddedSubInfo struct {
+	Cached bool   `json:"cached"`
+	Lang   string `json:"lang"`
+	Title  string `json:"title"`
+	Codec  string `json:"codec"`
+}
+
+// GetEmbeddedSubInfo 查询某 item 是否有已提取的内封字幕及其元数据
+// 返回 nil 表示没有缓存
+func (pc *PythonClient) GetEmbeddedSubInfo(itemID string) *EmbeddedSubInfo {
+	reqURL := fmt.Sprintf("%s/internal/subtitle/embedded/%s/info", pc.baseURL, itemID)
+	resp, err := pc.client.Get(reqURL)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil
+	}
+	var info EmbeddedSubInfo
+	if err := json.Unmarshal(body, &info); err != nil || !info.Cached {
+		return nil
+	}
+	return &info
+}
+
 func (pc *PythonClient) GetAPIInterval() float64 {
 	reqURL := fmt.Sprintf("%s/internal/p115/api-interval", pc.baseURL)
 	resp, err := pc.client.Get(reqURL)

@@ -557,7 +557,7 @@ func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 	path := resp.Request.URL.Path
 	itemID := itemIdFromPath(path)
 	if itemID == "" {
-		logger.Infof("⚠️ [PlaybackInfo] 无法从路径提取 itemId: path=%s", path)
+		logger.Infof(" [PlaybackInfo] 无法从路径提取 itemId: path=%s", path)
 		return nil
 	}
 
@@ -568,7 +568,7 @@ func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 	// 调 Python 内部接口判断是否 STRM，Python 自己用保存的 user_id 拼路径
 	isStrm, _, err := h.pyClient.CheckStrm(itemID, apiKey)
 	if err != nil {
-		logger.Infof("⚠️ [PlaybackInfo] CheckStrm 调用失败: %v，跳过 patch", err)
+		logger.Infof(" [PlaybackInfo] CheckStrm 调用失败: %v，跳过 patch", err)
 		return nil
 	}
 	if !isStrm {
@@ -622,12 +622,58 @@ func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 		source["SupportsDirectPlay"] = true
 		source["SupportsDirectStream"] = true
 		source["SupportsTranscoding"] = false
-		// 关键：必须删除 TranscodingUrl 等字段
-		// Emby Web 只要发现 TranscodingUrl 存在，就会直接发起 HLS 请求，
-		// 完全忽略 SupportsDirectPlay=true，导致永远走转码分片播放
 		delete(source, "TranscodingUrl")
 		delete(source, "TranscodingContainer")
 		delete(source, "TranscodingSubProtocol")
+	}
+
+	// ── 注入内封字幕到 MediaStreams ──────────────────────────────────────────
+	// 查询 Python 是否有该 item 的内封字幕缓存，有则注入为外挂字幕条目，
+	// 这样 Emby 界面字幕列表里就能显示并让用户选择
+	if subInfo := h.pyClient.GetEmbeddedSubInfo(itemID); subInfo != nil {
+		langDisplay := subInfo.Lang
+		if langDisplay == "" {
+			langDisplay = "und"
+		}
+		titleDisplay := subInfo.Title
+		if titleDisplay == "" {
+			titleDisplay = "内封字幕 (" + langDisplay + ")"
+		}
+		// 构造外挂字幕流条目，Index 用一个不与现有轨道冲突的大数
+		injectedStream := map[string]interface{}{
+			"Codec":              "ass",
+			"Type":               "Subtitle",
+			"IsExternal":         true,
+			"IsTextSubtitleStream": true,
+			"IsForced":           false,
+			"Language":           langDisplay,
+			"DisplayTitle":       titleDisplay + " [内封提取]",
+			"Title":              titleDisplay,
+			"DeliveryMethod":     "External",
+			"DeliveryUrl":        fmt.Sprintf("/emby/videos/%s/Subtitles/embedded/0/Stream.ass", itemID),
+			"IsExternalUrl":      false,
+			"SupportsExternalStream": true,
+		}
+		// 注入到第一个 MediaSource 的 MediaStreams
+		if len(mediaSources) > 0 {
+			source, ok := mediaSources[0].(map[string]interface{})
+			if ok {
+				existingStreams, _ := source["MediaStreams"].([]interface{})
+				// 计算注入 Index（取现有最大 Index + 1）
+				maxIdx := 0
+				for _, s := range existingStreams {
+					sm, ok2 := s.(map[string]interface{})
+					if !ok2 { continue }
+					if idx, ok3 := sm["Index"].(float64); ok3 && int(idx) > maxIdx {
+						maxIdx = int(idx)
+					}
+				}
+				injectedStream["Index"] = maxIdx + 1
+				source["MediaStreams"] = append(existingStreams, injectedStream)
+				logger.Infof(" [PlaybackInfo] 注入内封字幕: item_id=%s lang=%s title=%s",
+					itemID, langDisplay, titleDisplay)
+			}
+		}
 	}
 
 	// 重新序列化
@@ -637,7 +683,7 @@ func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 		return nil
 	}
 
-	logger.Infof("✅ PlaybackInfo: STRM(itemId=%s) 强制 DirectPlay (MediaSources=%d 个)", itemID, len(mediaSources))
+	logger.Infof(" PlaybackInfo: STRM(itemId=%s) 强制 DirectPlay (MediaSources=%d 个)", itemID, len(mediaSources))
 
 	resp.Body = io.NopCloser(bytes.NewReader(newBody))
 	resp.ContentLength = int64(len(newBody))

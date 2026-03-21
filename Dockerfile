@@ -1,17 +1,14 @@
 # =============================================================
-# Misaka MediaFlow — 五阶段 Docker 构建
+# Misaka MediaFlow — 四阶段 Docker 构建
 #
 #   1. Node      → 编译前端 (React + Vite)  [$BUILDPLATFORM 原生编译]
 #   2. Go        → 编译反代 (Gin, CGO=0 静态链接)
-#   3. ffmpeg    → 下载 John Van Sickle 静态构建，无需编译，秒完成
-#                  静态二进制 ~40MB（vs apt 动态链接 ~350MB）
-#                  支持格式: MKV/MP4/MOV 封装 + ASS/SRT/PGS/VOBSUB 全部字幕
-#   4. Python    → 编译 C 扩展 (build-essential + dev headers)
-#   5. Runtime   → 纯运行时 (无编译器, su-exec 降权)
+#   3. Python    → 编译 C 扩展 (build-essential + dev headers)
+#   4. Runtime   → 纯运行时 (无编译器, su-exec 降权)
 #
 # 基底: l429609201/su-exec:3.12 (Debian slim + Python 3.12 + su-exec)
 # 安全: su-exec 降权至 UID=1000 非 root 用户
-# 体积: ~250MB (含静态 ffmpeg ~40MB，无任何运行时 .so 依赖)
+# ffmpeg: apt install（动态链接系统 OpenSSL，兼容性最佳，无 SIGSEGV 风险）
 # =============================================================
 
 ARG GO_VERSION=1.22
@@ -48,16 +45,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
     ./cmd/proxy/
 
 
-# ==================== 阶段 3: 获取静态 ffmpeg ====================
-# 二进制来自仓库 ffmpeg-image/{amd64,arm64}/（John Van Sickle 静态构建）
-# 完全静态链接，无任何 .so 运行时依赖，支持全格式字幕提取，约 40~76MB
-FROM scratch AS ffmpeg-fetcher
-ARG TARGETARCH
-COPY ffmpeg-image/${TARGETARCH}/ffmpeg  /ffmpeg
-COPY ffmpeg-image/${TARGETARCH}/ffprobe /ffprobe
-
-
-# ==================== 阶段 4: Python 依赖编译 ====================
+# ==================== 阶段 3: Python 依赖编译 ====================
 FROM l429609201/su-exec:3.12 AS py-builder
 
 # 编译时依赖 (不会进入最终镜像)
@@ -88,7 +76,7 @@ RUN find . -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null; \
     true
 
 
-# ==================== 阶段 5: 最终运行时镜像 ====================
+# ==================== 阶段 4: 最终运行时镜像 ====================
 FROM l429609201/su-exec:3.12
 
 # 环境变量
@@ -101,12 +89,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# 运行时系统依赖 (只装 .so 运行库, 不装 -dev 头文件)
-# ffmpeg 已通过静态编译独立引入，此处无需安装
+# 运行时系统依赖
+# ffmpeg: 用 apt 动态链接版，兼容所有内核，无静态 OpenSSL SIGSEGV 问题
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tzdata \
     libpq5 \
     libmariadb3 \
+    ffmpeg \
     && addgroup --gid 1000 mediaflow \
     && adduser --shell /bin/sh --disabled-password --uid 1000 --gid 1000 mediaflow \
     && apt-get clean \
