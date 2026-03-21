@@ -42,9 +42,6 @@ _result_cache: "OrderedDict[str, tuple[bytes, float]]" = OrderedDict()
 _RESULT_CACHE_MAX = 100
 _RESULT_CACHE_TTL = 3600 * 6   # 6h
 
-_font_bytes_cache: "OrderedDict[str, bytes]" = OrderedDict()
-_FONT_BYTES_MAX = 60
-
 # ── 本地字体库（5min 重扫）────────────────────────────────────────────────────
 # 每条记录: {"names": set[str], "subfamily": set[str], "path": str, "idx": int}
 _local_db: list = []
@@ -218,8 +215,8 @@ def analyse_ass(ass_text: str) -> dict:
         next(iter(styles.values())) if styles else ("Arial", False, False)
     )
 
-    # 累积 {key: str_chars}，最后转 set(codepoints)
-    char_map: dict = defaultdict(str)
+    # 累积 {key: list[str]}，最后 join 转 set(codepoints)，避免 O(n²) 字符串拼接
+    char_map: dict = defaultdict(list)
 
     for m in re.finditer(
         r"^Dialogue\s*:[^,]*,[^,]*,[^,]*,([^,]*),(?:[^,]*,){4}(.*)",
@@ -242,7 +239,8 @@ def analyse_ass(ass_text: str) -> dict:
             plain = text[pos:blk.start()]
             if plain and not drawing:
                 fn_key = f"{cur_font.lstrip('@')}^{_variant_key(cur_bold, cur_italic)}"
-                char_map[fn_key] += plain.replace("\\n", "").replace("\\N", "")
+                # 去掉 ASS 换行标记 \N \n（两字符序列）
+                char_map[fn_key].append(plain.replace("\\N", "").replace("\\n", ""))
             pos = blk.end()
 
             tags = blk.group(1)
@@ -260,13 +258,10 @@ def analyse_ass(ass_text: str) -> dict:
                 cur_font = fn_val if fn_val else orig_font
                 drawing = False   # \fn 同时退出绘图模式
 
-            # ── \b Bold ───────────────────────────────────────────────────
+            # ── \b Bold ─────────────────────────────────────────────────
+            # \b0 → Regular；\b1 或字重值（≥100）→ Bold
             for bm in _RE_B_TAG.finditer(tags):
-                val = int(bm.group(1))
-                if val == 0 or (1 < val < 612):
-                    cur_bold = False
-                else:
-                    cur_bold = True   # 1 或 ≥ 612（字重值）
+                cur_bold = int(bm.group(1)) != 0
 
             # ── \i Italic ─────────────────────────────────────────────────
             im = _RE_I_TAG.search(tags)
@@ -291,21 +286,21 @@ def analyse_ass(ass_text: str) -> dict:
         plain = text[pos:]
         if plain and not drawing:
             fn_key = f"{cur_font.lstrip('@')}^{_variant_key(cur_bold, cur_italic)}"
-            char_map[fn_key] += plain.replace("\\n", "").replace("\\N", "")
+            char_map[fn_key].append(plain.replace("\\N", "").replace("\\n", ""))
 
     # 转换为 codepoint set，并补全字符集
     result: dict = {}
-    for key, chars in char_map.items():
+    for key, chunks in char_map.items():
+        chars = "".join(chunks)
         if not chars:
             continue
         # 有数字 → 补全 0-9（MkvAutoSubset 同款逻辑）
         if _RE_HAS_DIGIT.search(chars):
             chars += "0123456789"
-        # 总是加 空格 + 非断行空格
-        chars += "a\u0020\u00a0"
-        codepoints = {ord(c) for c in chars if ord(c) > 0x20}
-        # 也把 0x20 本身加进去（空格）
-        codepoints.add(0x20)
+        # 总是加 空格 + 非断行空格（MkvAutoSubset："\u0020\u00a0"）
+        codepoints = {ord(c) for c in chars}
+        codepoints |= {0x20, 0xA0}   # 空格、非断行空格
+        codepoints.discard(0)         # 去掉 NUL
         if codepoints:
             result[key] = codepoints
     return result
@@ -407,49 +402,64 @@ def _get_local_db() -> list:
     return _local_db
 
 
+# downloads 目录缓存（30s TTL，比 local_db 更短以感知新下载的字体）
+_dl_db: list = []
+_dl_db_at: float = 0.0
+_DL_DB_TTL = 30
+
+
 def _get_downloads_db() -> list:
-    """单独扫描 downloads 目录（不缓存，每次查找时即时扫描）"""
-    return _scan_fonts(_FONTS_DOWNLOAD)
+    """扫描 downloads 目录，带 30s 缓存，避免同一次字幕处理重复全量扫描。"""
+    global _dl_db, _dl_db_at
+    now = time.monotonic()
+    if _dl_db is not None and (now - _dl_db_at) < _DL_DB_TTL:
+        return _dl_db
+    _dl_db = _scan_fonts(_FONTS_DOWNLOAD)
+    _dl_db_at = now
+    return _dl_db
+
+
+def _invalidate_downloads_db() -> None:
+    """下载新字体后调用，立即使 downloads 缓存失效。"""
+    global _dl_db_at
+    _dl_db_at = 0.0
 
 
 def _match_record(rec: dict, name: str, subfamily: str,
                   case_insensitive: bool = False) -> bool:
     """
     判断 FontRecord 是否匹配 (name, subfamily)。
-    name 匹配 rec["names"]；subfamily 匹配 rec["subfamily"]。
-    同时支持分隔符拆分：如 "Source Han Sans CN Bold"
-      尝试取最后一个分隔符后面的部分（"Bold"）作为 subfamily 比较。
+
+    匹配逻辑（两路）：
+      路径 A：直接匹配 — name 在 rec["names"] 中 且 subfamily 在 rec["subfamily"] 中
+      路径 B：分隔符拆分 — 对 rec["names"] 里的每个名字尝试拆分，
+              用"主名"匹配 name，用"尾部"匹配 subfamily
+              （解决字体文件 Family name 含字重后缀的情况，
+               如 Family="Source Han Sans CN Bold"，ASS 里写 "Source Han Sans CN"，
+               subfamily="Bold"，此时无法直接匹配，拆分后可以匹配）
     """
     target_names = rec["names"]
     target_sub   = rec["subfamily"]
 
-    def name_match(n: str) -> bool:
-        if case_insensitive:
-            return n.lower() == name.lower()
-        return n == name
+    def neq(a: str, b: str) -> bool:
+        return a.lower() == b.lower() if case_insensitive else a == b
 
-    def sub_match(sf: str) -> bool:
-        if case_insensitive:
-            return sf.lower() == subfamily.lower()
-        return sf == subfamily
+    # 路径 A：直接名字 + subfamily 匹配
+    if any(neq(n, name) for n in target_names):
+        if any(neq(sf, subfamily) for sf in target_sub):
+            return True
 
-    # 先检查名字是否在 names 集合
-    matched_name = any(name_match(n) for n in target_names)
-    if not matched_name:
-        return False
-
-    # 再检查 subfamily
-    if any(sub_match(sf) for sf in target_sub):
-        return True
-
-    # 分隔符拆分：从字体名尾部提取可能的 Subfamily 标识
-    for sep in _FONT_NAME_SEPS:
-        idx = name.rfind(sep)
-        if idx > 0 and idx < len(name) - 1:
-            tail = name[idx + 1:]
-            if any(sub_match(sf) if not case_insensitive
-                   else sf.lower() == tail.lower()
-                   for sf in target_sub):
+    # 路径 B：分隔符拆分（对记录里的名字拆，不是对 ASS 字体名拆）
+    # 例：记录名 "Source Han Sans CN Bold" 拆为 "Source Han Sans CN" + "Bold"
+    #     ASS 字体名 "Source Han Sans CN"，subfamily "Bold" → 匹配
+    for rec_name in target_names:
+        for sep in _FONT_NAME_SEPS:
+            idx = rec_name.rfind(sep)
+            if idx <= 0 or idx >= len(rec_name) - 1:
+                continue
+            base = rec_name[:idx]    # 分隔符前的主名
+            tail = rec_name[idx + 1:]  # 分隔符后的 Subfamily 候选
+            if neq(base, name) and neq(tail, subfamily):
                 return True
 
     return False
@@ -458,9 +468,10 @@ def _match_record(rec: dict, name: str, subfamily: str,
 def find_font(name: str, subfamily: str, db: list) -> Optional[tuple]:
     """
     三层 fallback 字体查找（对齐 MkvAutoSubset matchFonts）：
-      层0 (fb=0): 精确匹配 name + subfamily
-      层1 (fb=1): Bold/Italic → Regular fallback（名字相同，subfamily 退回 Regular）
-      层2 (fb=2): 大小写不敏感 fallback
+      层0: 精确匹配 name + subfamily
+      层1: Bold/Italic → Regular fallback
+      层2a: 大小写不敏感精确
+      层2b: 大小写不敏感 + Regular fallback
     返回 (path, face_index) 或 None。
     """
     # 层0: 精确
@@ -468,23 +479,24 @@ def find_font(name: str, subfamily: str, db: list) -> Optional[tuple]:
         if _match_record(rec, name, subfamily):
             return rec["path"], rec["idx"]
 
-    # 层1: Regular fallback（仅当 subfamily 不是 Regular 时）
+    # 层1: Regular fallback
     if subfamily != _VARIANT_REGULAR:
         for rec in db:
             if _match_record(rec, name, _VARIANT_REGULAR):
-                logger.debug("[builtin] fallback Regular: %s^%s → %s",
-                             name, subfamily, rec["path"])
+                logger.debug("[builtin] fb1 Regular: %s^%s → %s", name, subfamily, rec["path"])
                 return rec["path"], rec["idx"]
 
-    # 层2: 大小写不敏感
+    # 层2a: 大小写不敏感精确
     for rec in db:
         if _match_record(rec, name, subfamily, case_insensitive=True):
-            logger.debug("[builtin] fallback 大小写: %s^%s → %s",
-                         name, subfamily, rec["path"])
+            logger.debug("[builtin] fb2a 大小写: %s^%s → %s", name, subfamily, rec["path"])
             return rec["path"], rec["idx"]
-        if subfamily != _VARIANT_REGULAR:
+
+    # 层2b: 大小写不敏感 + Regular fallback
+    if subfamily != _VARIANT_REGULAR:
+        for rec in db:
             if _match_record(rec, name, _VARIANT_REGULAR, case_insensitive=True):
-                logger.debug("[builtin] fallback 大小写+Regular: %s^%s → %s",
+                logger.debug("[builtin] fb2b 大小写+Regular: %s^%s → %s",
                              name, subfamily, rec["path"])
                 return rec["path"], rec["idx"]
 
@@ -575,6 +587,7 @@ async def download_font(font_name: str) -> Optional[tuple]:
         dst = _FONTS_DOWNLOAD / f"{safe}{ext}"
         dst.write_bytes(resp.content)
         logger.info("[builtin] 字体已保存: %s (%d KB)", dst.name, len(resp.content) // 1024)
+        _invalidate_downloads_db()   # 使 downloads 缓存立即失效，下次查找能感知到新字体
         return str(dst), 0
     except Exception as e:
         logger.warning("[builtin] 字体下载异常: %s → %s", font_name, e)
