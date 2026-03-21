@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -21,6 +22,9 @@ import (
 	"github.com/mediaflow/go-proxy/internal/logger"
 	"github.com/mediaflow/go-proxy/internal/service"
 )
+
+// _notifiedItems 记录已发过字幕就绪通知的 item_id，避免重复弹消息
+var _notifiedItems sync.Map
 
 const (
 	// 302 缓存上限（秒）：即使 CDN 直链有效期更长，浏览器也最多缓存这么久
@@ -98,6 +102,10 @@ func (h *RedirectHandler) HandleVideoStream(c *gin.Context) {
 	// 提取完成后向客户端推 Emby 消息，引导用户重新选择字幕
 	// 不阻塞 302 响应：goroutine 在后台运行
 	go func() {
+		// 已通知过则跳过（避免每次 Range 请求都重复弹消息）
+		if _, alreadyNotified := _notifiedItems.Load(itemID); alreadyNotified {
+			return
+		}
 		// 查询 item 类型
 		_, itemType, err := h.pyClient.CheckStrm(itemID, apiKeyStr)
 		if err != nil {
@@ -109,6 +117,8 @@ func (h *RedirectHandler) HandleVideoStream(c *gin.Context) {
 			// 无内封字幕或提取失败，什么都不做
 			return
 		}
+		// 标记已通知（TTL 靠缓存自然过期，这里只防本次播放重复推）
+		_notifiedItems.Store(itemID, true)
 		logger.Infof("[subtitle] 内封字幕就绪，item_id=%s lang=%s，通知 Emby 刷新字幕", itemID, warmed.Lang)
 		// 通知 Emby 会话刷新：发送 DisplayMessage 让播放器弹提示
 		h.notifyEmbeddedSubReady(itemID, warmed.Lang, apiKeyStr)

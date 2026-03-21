@@ -33,6 +33,7 @@ var subsettableExts = map[string]bool{
 	"ass": true,
 	"ssa": true,
 	"srt": true,
+	"vtt": false, // 明确列出但不处理，避免歧义
 }
 
 // SubtitleHandler 字幕路由处理器

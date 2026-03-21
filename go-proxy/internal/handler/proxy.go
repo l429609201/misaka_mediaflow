@@ -676,19 +676,32 @@ func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 		if titleDisplay == "" {
 			titleDisplay = "内封字幕 (" + langDisplay + ")"
 		}
-		// 构造外挂字幕流条目，Index 用一个不与现有轨道冲突的大数
+
+		// 根据实际 codec 决定注入的格式和 DeliveryUrl 扩展名
+		// subrip → srt，ass/ssa → ass，其余默认 ass
+		embyCodec := "ass"
+		streamExt := "ass"
+		switch strings.ToLower(subInfo.Codec) {
+		case "subrip", "srt":
+			embyCodec = "subrip"
+			streamExt = "srt"
+		case "ass", "ssa":
+			embyCodec = "ass"
+			streamExt = "ass"
+		}
+
 		injectedStream := map[string]interface{}{
-			"Codec":              "ass",
-			"Type":               "Subtitle",
-			"IsExternal":         true,
+			"Codec":                embyCodec,
+			"Type":                 "Subtitle",
+			"IsExternal":           true,
 			"IsTextSubtitleStream": true,
-			"IsForced":           false,
-			"Language":           langDisplay,
-			"DisplayTitle":       titleDisplay + " [内封提取]",
-			"Title":              titleDisplay,
-			"DeliveryMethod":     "External",
-			"DeliveryUrl":        fmt.Sprintf("/emby/videos/%s/Subtitles/embedded/0/Stream.ass", itemID),
-			"IsExternalUrl":      false,
+			"IsForced":             false,
+			"Language":             langDisplay,
+			"DisplayTitle":         titleDisplay + " [内封提取]",
+			"Title":                titleDisplay,
+			"DeliveryMethod":       "External",
+			"DeliveryUrl":          fmt.Sprintf("/emby/Videos/%s/Subtitles/embedded/0/Stream.%s", itemID, streamExt),
+			"IsExternalUrl":        false,
 			"SupportsExternalStream": true,
 		}
 		// 注入到第一个 MediaSource 的 MediaStreams
@@ -707,8 +720,8 @@ func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 				}
 				injectedStream["Index"] = maxIdx + 1
 				source["MediaStreams"] = append(existingStreams, injectedStream)
-				logger.Infof(" [PlaybackInfo] 注入内封字幕: item_id=%s lang=%s title=%s",
-					itemID, langDisplay, titleDisplay)
+				logger.Infof(" [PlaybackInfo] 注入内封字幕: item_id=%s codec=%s ext=%s lang=%s title=%s",
+					itemID, embyCodec, streamExt, langDisplay, titleDisplay)
 			}
 		}
 	}
