@@ -137,109 +137,109 @@ def _collect_disk_fonts(root: Path) -> dict:
     return result
 
 
- async def _db_get_all_font_files(db) -> dict:
-     """查询所有 FontFile，返回 {path_hash: {id, path, file_hash, file_size}}"""
-     from sqlalchemy import select
-     from src.db.models import FontFile
-     rows = (await db.execute(select(FontFile))).scalars().all()
-     return {
-         r.path_hash: {
-             "id": r.id,
-             "path": r.path,
-             "file_hash": r.file_hash,
-             "file_size": r.file_size,
-         }
-         for r in rows
-     }
- 
- 
- async def _db_upsert_font_file(db, path: str, file_size: int, file_hash: str) -> int:
-     """
+async def _db_get_all_font_files(db) -> dict:
+    """查询所有 FontFile，返回 {path_hash: {id, path, file_hash, file_size}}"""
+    from sqlalchemy import select
+    from src.db.models import FontFile
+    rows = (await db.execute(select(FontFile))).scalars().all()
+    return {
+        r.path_hash: {
+            "id": r.id,
+            "path": r.path,
+            "file_hash": r.file_hash,
+            "file_size": r.file_size,
+        }
+        for r in rows
+    }
+
+
+async def _db_upsert_font_file(db, path: str, file_size: int, file_hash: str) -> int:
+    """
      Upsert FontFile，返回行 id。
      已存在(path_hash 相同)则更新 file_size/file_hash/scanned_at，否则新建。
      """
-     from sqlalchemy import select
-     from src.db.models import FontFile
-     from src.core.timezone import tm
-     ph = _md5_of_path(path)
-     row = (await db.execute(select(FontFile).where(FontFile.path_hash == ph))).scalars().first()
-     if row:
-         row.file_size  = file_size
-         row.file_hash  = file_hash
-         row.scanned_at = tm.now()
-     else:
-         row = FontFile(path=path, path_hash=ph,
+    from sqlalchemy import select
+    from src.db.models import FontFile
+    from src.core.timezone import tm
+    ph = _md5_of_path(path)
+    row = (await db.execute(select(FontFile).where(FontFile.path_hash == ph))).scalars().first()
+    if row:
+        row.file_size  = file_size
+        row.file_hash  = file_hash
+        row.scanned_at = tm.now()
+    else:
+        row = FontFile(path=path, path_hash=ph,
                         file_size=file_size, file_hash=file_hash,
                         scanned_at=tm.now())
-         db.add(row)
-     await db.flush()   # 让 row.id 可用，但不 commit（由调用方控制）
-     return row.id
- 
- 
- async def _db_delete_font_files(db, path_hashes: list):
-     """批量删除 FontFile（ON DELETE CASCADE 自动级联删 FontFace + FontName）"""
-     if not path_hashes:
-         return
-     from sqlalchemy import select, delete
-     from src.db.models import FontFile
-     # 分批删除，避免 IN 子句过长
-     for i in range(0, len(path_hashes), 200):
-         batch = path_hashes[i: i + 200]
-         await db.execute(
-             delete(FontFile).where(FontFile.path_hash.in_(batch))
-         )
- 
- 
- async def _db_insert_font_faces(db, file_id: int, faces: list):
-     """批量插入 FontFace + FontName，所有名字展开为独立索引行（小写）"""
-     from src.db.models import FontFace, FontName
-     from src.core.timezone import tm
-     now = tm.now()
-     for face in faces:
-         ff = FontFace(
-             file_id          = file_id,
-             face_index       = face["face_index"],
-             family_names     = json.dumps(face["family_names"],     ensure_ascii=False),
-             full_names       = json.dumps(face["full_names"],        ensure_ascii=False),
-             postscript_names = json.dumps(face["postscript_names"], ensure_ascii=False),
-             weight           = face["weight"],
-             is_bold          = face["is_bold"],
-             is_italic        = face["is_italic"],
-             scanned_at       = now,
-         )
-         db.add(ff)
-         await db.flush()   # 获取 ff.id
- 
-         all_names: set = set()
-         for lst in (face["family_names"], face["full_names"], face["postscript_names"]):
-             for n in lst:
-                 if n:
-                     all_names.add(n.strip().lower())
-         for name in all_names:
-             db.add(FontName(name=name, face_id=ff.id))
- 
- 
- async def _process_insert(path: str) -> int:
-     """
+        db.add(row)
+    await db.flush()   # 让 row.id 可用，但不 commit（由调用方控制）
+    return row.id
+
+
+async def _db_delete_font_files(db, path_hashes: list):
+    """批量删除 FontFile（ON DELETE CASCADE 自动级联删 FontFace + FontName）"""
+    if not path_hashes:
+        return
+    from sqlalchemy import select, delete
+    from src.db.models import FontFile
+    # 分批删除，避免 IN 子句过长
+    for i in range(0, len(path_hashes), 200):
+        batch = path_hashes[i: i + 200]
+        await db.execute(
+            delete(FontFile).where(FontFile.path_hash.in_(batch))
+        )
+
+
+async def _db_insert_font_faces(db, file_id: int, faces: list):
+    """批量插入 FontFace + FontName，所有名字展开为独立索引行（小写）"""
+    from src.db.models import FontFace, FontName
+    from src.core.timezone import tm
+    now = tm.now()
+    for face in faces:
+        ff = FontFace(
+            file_id          = file_id,
+            face_index       = face["face_index"],
+            family_names     = json.dumps(face["family_names"],     ensure_ascii=False),
+            full_names       = json.dumps(face["full_names"],        ensure_ascii=False),
+            postscript_names = json.dumps(face["postscript_names"], ensure_ascii=False),
+            weight           = face["weight"],
+            is_bold          = face["is_bold"],
+            is_italic        = face["is_italic"],
+            scanned_at       = now,
+        )
+        db.add(ff)
+        await db.flush()   # 获取 ff.id
+
+        all_names: set = set()
+        for lst in (face["family_names"], face["full_names"], face["postscript_names"]):
+            for n in lst:
+                if n:
+                    all_names.add(n.strip().lower())
+        for name in all_names:
+            db.add(FontName(name=name, face_id=ff.id))
+
+
+async def _process_insert(path: str) -> int:
+    """
      读取单个字体文件元数据并入库，返回成功写入的 face 数量。
      每个文件独立 session + commit，单文件失败不污染整批事务。
      """
-     try:
-         fsize = os.path.getsize(path)
-         fhash = await asyncio.to_thread(_md5_of_file, path)
-         faces = await asyncio.to_thread(_read_font_faces, path)
-         if not faces:
-             logger.debug("[font_idx] 跳过（无有效 face）: %s", path)
-             return 0
-         from src.db import get_async_session_local
-         async with get_async_session_local() as db:
-             file_id = await _db_upsert_font_file(db, path, fsize, fhash)
-             await _db_insert_font_faces(db, file_id, faces)
-             await db.commit()
-         return len(faces)
-     except Exception as e:
-         logger.warning("[font_idx] 入库失败 %s: %s", path, e)
-         return 0
+    try:
+        fsize = os.path.getsize(path)
+        fhash = await asyncio.to_thread(_md5_of_file, path)
+        faces = await asyncio.to_thread(_read_font_faces, path)
+        if not faces:
+            logger.debug("[font_idx] 跳过（无有效 face）: %s", path)
+            return 0
+        from src.db import get_async_session_local
+        async with get_async_session_local() as db:
+            file_id = await _db_upsert_font_file(db, path, fsize, fhash)
+            await _db_insert_font_faces(db, file_id, faces)
+            await db.commit()
+        return len(faces)
+    except Exception as e:
+        logger.warning("[font_idx] 入库失败 %s: %s", path, e)
+        return 0
 
 
 # ═══ Part 3: 扫描同步 & 字体查找 ════════════════════════════════════════════════
@@ -268,35 +268,35 @@ async def scan_and_sync(force: bool = False) -> dict:
 
     disk_fonts = await asyncio.to_thread(_collect_disk_fonts, _FONTS_ROOT)
 
-     from src.db import get_async_session_local
-     # ── 第一步：读取 DB 快照 + 执行删除（单独 session，确保 commit）────────
-     async with get_async_session_local() as db:
-         db_fonts = await _db_get_all_font_files(db)
- 
-         disk_hash_map = {_md5_of_path(p): p for p in disk_fonts}
-         disk_set = set(disk_hash_map.keys())
-         db_set   = set(db_fonts.keys())
- 
-         to_delete        = list(db_set - disk_set)
-         to_insert_hashes = disk_set - db_set
-         # 文件大小变化视为内容变化：先删后插
-         to_update = {
-             ph for ph in disk_set & db_set
-             if disk_fonts[disk_hash_map[ph]] != db_fonts[ph]["file_size"]
-         }
-         to_delete        += list(to_update)
-         to_insert_hashes |= to_update
- 
-         if to_delete:
-             await _db_delete_font_files(db, to_delete)
-             await db.commit()
-             logger.info("[font_idx] 删除字体记录: %d 条（文件已移除或内容变化）", len(to_delete))
- 
-     # ── 第二步：逐文件独立 session 插入，单文件失败不影响其他文件────────────
-     to_insert_paths = [disk_hash_map[ph] for ph in to_insert_hashes]
-     inserted_faces = 0
-     for path in to_insert_paths:
-         inserted_faces += await _process_insert(path)
+    from src.db import get_async_session_local
+    # ── 第一步：读取 DB 快照 + 执行删除（单独 session，确保 commit）────────
+    async with get_async_session_local() as db:
+        db_fonts = await _db_get_all_font_files(db)
+
+        disk_hash_map = {_md5_of_path(p): p for p in disk_fonts}
+        disk_set = set(disk_hash_map.keys())
+        db_set   = set(db_fonts.keys())
+
+        to_delete        = list(db_set - disk_set)
+        to_insert_hashes = disk_set - db_set
+        # 文件大小变化视为内容变化：先删后插
+        to_update = {
+            ph for ph in disk_set & db_set
+            if disk_fonts[disk_hash_map[ph]] != db_fonts[ph]["file_size"]
+        }
+        to_delete        += list(to_update)
+        to_insert_hashes |= to_update
+
+        if to_delete:
+            await _db_delete_font_files(db, to_delete)
+            await db.commit()
+            logger.info("[font_idx] 删除字体记录: %d 条（文件已移除或内容变化）", len(to_delete))
+
+    # ── 第二步：逐文件独立 session 插入，单文件失败不影响其他文件────────────
+    to_insert_paths = [disk_hash_map[ph] for ph in to_insert_hashes]
+    inserted_faces = 0
+    for path in to_insert_paths:
+        inserted_faces += await _process_insert(path)
 
     _lookup_cache.clear()
     _last_sync_at = time.monotonic()
@@ -342,17 +342,17 @@ async def find_font_in_db(
     result = None
     try:
         from src.db import get_async_session_local
-         from sqlalchemy import select
-         from src.db.models import FontName, FontFace, FontFile
+        from sqlalchemy import select
+        from src.db.models import FontName, FontFace, FontFile
         async with get_async_session_local() as db:
-             stmt = (
-                 select(FontFile.path, FontFace.face_index,
+            stmt = (
+                select(FontFile.path, FontFace.face_index,
                         FontFace.weight, FontFace.is_bold, FontFace.is_italic)
-                 .join(FontFace, FontFace.file_id == FontFile.id)
-                 .join(FontName, FontName.face_id == FontFace.id)
-                 .where(FontName.name == name_lower)
-             )
-             candidates = (await db.execute(stmt)).fetchall()
+                .join(FontFace, FontFace.file_id == FontFile.id)
+                .join(FontName, FontName.face_id == FontFace.id)
+                .where(FontName.name == name_lower)
+            )
+            candidates = (await db.execute(stmt)).fetchall()
 
         if candidates:
             # 层0: 精确匹配
@@ -405,9 +405,9 @@ async def register_subtitle(file_path: str, item_id: str = "") -> bool:
     """
     try:
         from src.db import get_async_session_local
-         from sqlalchemy import select
-         from src.db.models import SubtitleFile
-         from src.core.timezone import tm
+        from sqlalchemy import select
+        from src.db.models import SubtitleFile
+        from src.core.timezone import tm
 
         ph    = _md5_of_path(file_path)
         fsize = os.path.getsize(file_path)
@@ -415,11 +415,11 @@ async def register_subtitle(file_path: str, item_id: str = "") -> bool:
         now   = tm.now()
 
         async with get_async_session_local() as db:
-             existing = (
-                 await db.execute(select(SubtitleFile).where(SubtitleFile.path_hash == ph))
-             ).scalars().first()
- 
-             if existing and existing.file_hash == fhash:
+            existing = (
+                await db.execute(select(SubtitleFile).where(SubtitleFile.path_hash == ph))
+            ).scalars().first()
+
+            if existing and existing.file_hash == fhash:
                 logger.debug("[font_idx] 字幕未变化，跳过: %s", file_path)
                 return False
 
@@ -427,21 +427,21 @@ async def register_subtitle(file_path: str, item_id: str = "") -> bool:
             font_keys_json = json.dumps(font_keys, ensure_ascii=False)
 
             if existing:
-                 existing.file_hash  = fhash
-                 existing.file_size  = fsize
-                 existing.font_keys  = font_keys_json
-                 existing.item_id    = item_id or ""
-                 existing.scanned_at = now
+                existing.file_hash  = fhash
+                existing.file_size  = fsize
+                existing.font_keys  = font_keys_json
+                existing.item_id    = item_id or ""
+                existing.scanned_at = now
             else:
-                 db.add(SubtitleFile(
-                     item_id    = item_id or "",
-                     file_path  = file_path,
-                     path_hash  = ph,
-                     file_hash  = fhash,
-                     file_size  = fsize,
-                     font_keys  = font_keys_json,
-                     scanned_at = now,
-                 ))
+                db.add(SubtitleFile(
+                    item_id    = item_id or "",
+                    file_path  = file_path,
+                    path_hash  = ph,
+                    file_hash  = fhash,
+                    file_size  = fsize,
+                    font_keys  = font_keys_json,
+                    scanned_at = now,
+                ))
             await db.commit()
 
         logger.info("[font_idx] 字幕已登记: %s font_keys=%d 个", file_path, len(font_keys))
@@ -458,17 +458,17 @@ async def get_subtitle_font_keys(file_path: str) -> list:
     """
     try:
         from src.db import get_async_session_local
-         from sqlalchemy import select
-         from src.db.models import SubtitleFile
+        from sqlalchemy import select
+        from src.db.models import SubtitleFile
         ph = _md5_of_path(file_path)
         async with get_async_session_local() as db:
-             rec = (
-                 await db.execute(select(SubtitleFile).where(SubtitleFile.path_hash == ph))
-             ).scalars().first()
-             if rec:
-                 cur_hash = await asyncio.to_thread(_md5_of_file, file_path)
-                 if cur_hash == rec.file_hash:
-                     return json.loads(rec.font_keys or "[]")
+            rec = (
+                await db.execute(select(SubtitleFile).where(SubtitleFile.path_hash == ph))
+            ).scalars().first()
+            if rec:
+                cur_hash = await asyncio.to_thread(_md5_of_file, file_path)
+                if cur_hash == rec.file_hash:
+                    return json.loads(rec.font_keys or "[]")
     except Exception as e:
         logger.debug("[font_idx] 读取字幕字体缓存失败: %s", e)
 
@@ -494,12 +494,12 @@ async def sync_subtitles(subtitle_root: Path) -> dict:
             except OSError:
                 pass
 
-     from src.db import get_async_session_local
-     from sqlalchemy import select, delete
-     from src.db.models import SubtitleFile
+    from src.db import get_async_session_local
+    from sqlalchemy import select, delete
+    from src.db.models import SubtitleFile
     async with get_async_session_local() as db:
-         all_recs = (await db.execute(select(SubtitleFile))).scalars().all()
-         db_subs = {r.path_hash: r.file_path for r in all_recs}
+        all_recs = (await db.execute(select(SubtitleFile))).scalars().all()
+        db_subs = {r.path_hash: r.file_path for r in all_recs}
 
     disk_ph_set = set(disk_subs.values())
     db_ph_set   = set(db_subs.keys())
@@ -509,11 +509,11 @@ async def sync_subtitles(subtitle_root: Path) -> dict:
     deleted = 0
     if to_delete_ph:
         async with get_async_session_local() as db:
-             for i in range(0, len(to_delete_ph), 200):
-                 batch = to_delete_ph[i: i + 200]
-                 await db.execute(
-                     delete(SubtitleFile).where(SubtitleFile.path_hash.in_(batch))
-                 )
+            for i in range(0, len(to_delete_ph), 200):
+                batch = to_delete_ph[i: i + 200]
+                await db.execute(
+                    delete(SubtitleFile).where(SubtitleFile.path_hash.in_(batch))
+                )
             await db.commit()
         deleted = len(to_delete_ph)
         logger.info("[font_idx] 清理已删字幕记录: %d 条", deleted)
