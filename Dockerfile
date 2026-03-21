@@ -49,42 +49,10 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
 
 
 # ==================== 阶段 3: 获取静态 ffmpeg ====================
-# 使用 John Van Sickle 预编译静态构建（https://johnvansickle.com/ffmpeg/）
-# - 完全静态链接，无任何 .so 运行时依赖，直接 COPY 进最终镜像即可
-# - 支持全格式（MKV/MP4/ASS/SRT/PGS/VOBSUB 等），体积 ~40MB
-# - 无需编译，下载解压即用，构建耗时 < 1 分钟
-# - 多架构支持: amd64 / arm64 / armhf
-FROM debian:bookworm-slim AS ffmpeg-fetcher
-
-ARG TARGETARCH
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget \
-    xz-utils \
-    && rm -rf /var/lib/apt/lists/*
-
-# 将 Docker TARGETARCH 映射到 johnvansickle 的架构命名
-# TARGETARCH: amd64 → amd64 | arm64 → arm64 | arm/v7 → armhf
-RUN set -eux; \
-    case "${TARGETARCH}" in \
-        amd64)  JVS_ARCH="amd64"  ;; \
-        arm64)  JVS_ARCH="arm64"  ;; \
-        arm)    JVS_ARCH="armhf"  ;; \
-        *)      echo "Unsupported arch: ${TARGETARCH}"; exit 1 ;; \
-    esac; \
-    wget -q --show-progress \
-        "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${JVS_ARCH}-static.tar.xz" \
-        -O /tmp/ffmpeg.tar.xz; \
-    tar xf /tmp/ffmpeg.tar.xz -C /tmp; \
-    rm /tmp/ffmpeg.tar.xz; \
-    # 解压目录名含版本号（如 ffmpeg-7.0.2-amd64-static），用通配符定位
-    FFDIR=$(find /tmp -maxdepth 1 -type d -name 'ffmpeg-*-static' | head -1); \
-    cp "${FFDIR}/ffmpeg"  /usr/local/bin/ffmpeg; \
-    cp "${FFDIR}/ffprobe" /usr/local/bin/ffprobe; \
-    chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe; \
-    # 验证二进制可用
-    /usr/local/bin/ffmpeg  -version 2>&1 | head -1; \
-    /usr/local/bin/ffprobe -version 2>&1 | head -1
+# 从 Docker Hub 自有镜像取预编译静态二进制，零外部网络依赖，秒完成。
+# 镜像制作方式见 README（本地下载 johnvansickle 构建后推送到 Docker Hub）。
+# 完全静态链接，无任何 .so 运行时依赖，支持全格式字幕提取。
+FROM --platform=$TARGETPLATFORM l429609201/ffmpeg-static:latest AS ffmpeg-fetcher
 
 
 # ==================== 阶段 4: Python 依赖编译 ====================
@@ -148,9 +116,9 @@ COPY --from=py-builder /install /usr/local/lib/python3.12/site-packages
 # 验证关键依赖能正常 import（构建时就发现问题，而不是运行时才报错）
 RUN python -c "import uvicorn; import fastapi; import p115client; print('All imports OK')"
 
-# 最小化静态 ffmpeg/ffprobe（John Van Sickle 构建，约 40MB，无运行时依赖）
-COPY --from=ffmpeg-fetcher /usr/local/bin/ffmpeg  /usr/local/bin/ffmpeg
-COPY --from=ffmpeg-fetcher /usr/local/bin/ffprobe /usr/local/bin/ffprobe
+# 静态 ffmpeg/ffprobe（从自有 Docker Hub 镜像取，约 40MB，无运行时依赖）
+COPY --from=ffmpeg-fetcher /ffmpeg  /usr/local/bin/ffmpeg
+COPY --from=ffmpeg-fetcher /ffprobe /usr/local/bin/ffprobe
 RUN chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe \
     && ffmpeg  -version 2>&1 | head -1 \
     && ffprobe -version 2>&1 | head -1
