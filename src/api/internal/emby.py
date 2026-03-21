@@ -61,9 +61,10 @@ async def check_strm(item_id: str, api_key: str = ""):
 
         data = resp.json()
         path: str = data.get("Path", "")
+        item_type: str = data.get("Type", "")   # Movie / Episode / Series / ...
         is_strm = path.lower().endswith(".strm")
-        logger.info("[check-strm] item_id=%s path=%r is_strm=%s", item_id, path, is_strm)
-        return {"is_strm": is_strm}
+        logger.info("[check-strm] item_id=%s path=%r is_strm=%s type=%s", item_id, path, is_strm, item_type)
+        return {"is_strm": is_strm, "item_type": item_type}
 
     except Exception as e:
         logger.error("[check-strm] 请求异常: %s", e)

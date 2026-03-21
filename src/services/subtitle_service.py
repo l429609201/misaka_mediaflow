@@ -62,6 +62,7 @@ async def _load_config() -> dict:
             "font_in_ass_url",
             "embedded_sub_enabled",
             "embedded_sub_tracks",
+            "embedded_sub_include_movies",
         ]
         result = {}
         async with get_async_session_local() as db:
@@ -333,15 +334,27 @@ async def trigger_embedded_sub_extraction(
     item_id: str,
     cdn_url: str,
     user_agent: str = "",
+    item_type: str = "",
 ) -> None:
     """
     302 成功后异步触发内封字幕提取，不阻塞主流程。
     - 若开关未开启，直接返回
     - 若该 item_id 已有缓存、正在提取中、或已确认无字幕轨道，跳过
+    - item_type: Emby 的 Type 字段，如 "Movie" / "Episode"
+      默认只对剧集(Episode)生效；开启 embedded_sub_include_movies 后对电影也生效
     """
     cfg = await _load_config()
     if cfg.get("embedded_sub_enabled", "").lower() != "true":
         return
+
+    # ── 电影类型过滤 ────────────────────────────────────────────────────────
+    # item_type 为空时（兼容旧版 Go 未传）不过滤，保持原有行为
+    if item_type:
+        is_movie = item_type.lower() == "movie"
+        include_movies = cfg.get("embedded_sub_include_movies", "").lower() == "true"
+        if is_movie and not include_movies:
+            logger.debug("[subtitle] 电影类型跳过内封字幕提取(未开启对电影生效): item_id=%s", item_id)
+            return
 
     if item_id in _sub_extracting:
         logger.debug("[subtitle] 已在提取中，跳过: item_id=%s", item_id)

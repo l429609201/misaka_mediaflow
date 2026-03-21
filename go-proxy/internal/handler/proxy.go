@@ -566,7 +566,7 @@ func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 	logger.Infof("[PlaybackInfo] itemId=%s apiKey长度=%d", itemID, len(apiKey))
 
 	// 调 Python 内部接口判断是否 STRM，Python 自己用保存的 user_id 拼路径
-	isStrm, err := h.pyClient.CheckStrm(itemID, apiKey)
+	isStrm, _, err := h.pyClient.CheckStrm(itemID, apiKey)
 	if err != nil {
 		logger.Infof("⚠️ [PlaybackInfo] CheckStrm 调用失败: %v，跳过 patch", err)
 		return nil

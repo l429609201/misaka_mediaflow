@@ -112,12 +112,13 @@ async def subtitle_trigger(request: Request):
     item_id    = body.get("item_id", "")
     cdn_url    = body.get("cdn_url", "")
     user_agent = body.get("user_agent", "")
+    item_type  = body.get("item_type", "")   # Emby Type: Movie / Episode / 空(兼容旧版)
 
     if not item_id or not cdn_url:
         return JSONResponse({"error": "missing item_id or cdn_url"}, status_code=400)
 
     # 异步触发，不阻塞（内部已用 asyncio.create_task）
-    await trigger_embedded_sub_extraction(item_id, cdn_url, user_agent)
+    await trigger_embedded_sub_extraction(item_id, cdn_url, user_agent, item_type)
     return {"accepted": True, "item_id": item_id}
 
 

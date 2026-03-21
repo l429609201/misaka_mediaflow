@@ -97,12 +97,20 @@ func (h *RedirectHandler) HandleVideoStream(c *gin.Context) {
 
 	// ⭐ 302 成功后，fire-and-forget 通知 Python 触发内封字幕提取
 	// 只在 MKV/MKS 文件时触发（字幕通常在 MKV 容器中）
-	go h.triggerEmbeddedSubExtraction(itemID, result.URL, userAgent)
+	// 异步查询 item_type（Movie/Episode），由 Python 端决定是否跳过电影
+	go func() {
+		// 查询 item 类型（复用 CheckStrm 接口，附带返回 item_type）
+		_, itemType, err := h.pyClient.CheckStrm(itemID, apiKeyStr)
+		if err != nil {
+			itemType = "" // 查询失败时留空，Python 端兼容空值（不过滤）
+		}
+		h.triggerEmbeddedSubExtraction(itemID, result.URL, userAgent, itemType)
+	}()
 }
 
 // triggerEmbeddedSubExtraction 异步通知 Python 触发内封字幕提取
 // 在独立 goroutine 中执行，302 响应不等待此结果
-func (h *RedirectHandler) triggerEmbeddedSubExtraction(itemID, cdnURL, userAgent string) {
+func (h *RedirectHandler) triggerEmbeddedSubExtraction(itemID, cdnURL, userAgent, itemType string) {
 	// 只对 MKV/MKS 格式触发（这些格式才有内封字幕）
 	lower := strings.ToLower(cdnURL)
 	isMKV := strings.Contains(lower, ".mkv") || strings.Contains(lower, ".mks")
@@ -117,6 +125,7 @@ func (h *RedirectHandler) triggerEmbeddedSubExtraction(itemID, cdnURL, userAgent
 		"item_id":    itemID,
 		"cdn_url":    cdnURL,
 		"user_agent": userAgent,
+		"item_type":  itemType, // Movie / Episode / 空(兼容旧版)
 	}
 	body, _ := json.Marshal(payload)
 
