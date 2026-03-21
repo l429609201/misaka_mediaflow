@@ -7,7 +7,7 @@ uvicorn[standard]>=0.29.0
 # ---- Database ----
 sqlalchemy>=2.0.0
 alembic>=1.13.0
-aiosqlite>=0.20.0
+# aiosqlite 已移除: 项目使用 MySQL/PostgreSQL，不再使用 SQLite
 asyncpg>=0.29.0
 psycopg2-binary>=2.9.9
 pymysql>=1.1.0
@@ -34,4 +34,5 @@ python-multipart>=0.0.9
 
 # ---- Subtitle font subsetting (builtin engine) ----
 fonttools>=4.51.0         # font subsetting: pyftsubset
-brotli>=1.1.0             # fonttools woff2 compression (optional but recommended)
+# brotli 为可选项: fonttools woff2 压缩支持，不影响核心子集化功能
+# brotli>=1.1.0

@@ -91,12 +91,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # 运行时系统依赖 (只装 .so 运行库, 不装 -dev 头文件)
-# ffmpeg: 供内封字幕提取功能使用 (embedded_sub_enabled=true 时需要)
+# 注意: ffmpeg 体积约 300MB，默认不内置
+#   若需内封字幕提取功能(embedded_sub_enabled=true)，请在宿主机或 docker-compose
+#   中通过 command 安装，或使用带 ffmpeg 的自定义基础镜像
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tzdata \
     libpq5 \
     libmariadb3 \
-    ffmpeg \
     && addgroup --gid 1000 mediaflow \
     && adduser --shell /bin/sh --disabled-password --uid 1000 --gid 1000 mediaflow \
     && apt-get clean \
