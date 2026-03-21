@@ -47,6 +47,16 @@ export const systemApi = {
   saveSource: (payload) => api.post('/search-source/save', payload),
 }
 
+// ==================== Subtitle ====================
+export const subtitleApi = {
+  // 内封字幕缓存列表
+  listEmbeddedCache: () => api.get('/subtitle/embedded/list'),
+  // 字体状态
+  getFontStatus: () => api.get('/subtitle/font/status'),
+  // 手动触发字体扫描
+  triggerFontScan: () => api.post('/subtitle/font/scan'),
+}
+
 // ==================== Storage ====================
 export const storageApi = {
   meta: () => api.get('/storage/meta'),

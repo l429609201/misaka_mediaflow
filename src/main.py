@@ -1,5 +1,6 @@
 # src/main.py — 对齐 misaka_danmu_server 的 src/main.py
 
+import asyncio
 import logging
 import os
 from pathlib import Path
@@ -106,6 +107,15 @@ async def lifespan(app: FastAPI):
 
     # 5. 启动定时调度器
     start_scheduler()
+
+    # 5.5 字体目录初始扫描（异步后台，不阻塞启动）
+    async def _bg_font_scan():
+        try:
+            from src.services.font_index_service import scan_and_sync
+            await scan_and_sync(force=True)
+        except Exception as _e:
+            logger.warning("字体目录初始扫描失败: %s", _e)
+    asyncio.create_task(_bg_font_scan())
 
     # 6. Go 反代随主程序自动启动
     go_result = await go_proxy_service.start()
