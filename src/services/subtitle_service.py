@@ -442,9 +442,14 @@ async def _extract_embedded_sub(
             probe_data = json.loads(stdout.decode("utf-8", errors="replace"))
         except asyncio.TimeoutError:
             logger.warning("[subtitle] ffprobe 超时: item_id=%s", item_id)
+            # 超时写短暂冷却期（5分钟），避免反复触发
+            _sub_no_track[item_id] = time.monotonic() + 300
             return
         except Exception as e:
             logger.warning("[subtitle] ffprobe 失败: %s item_id=%s", e, item_id)
+            # ffprobe 异常（包含 JSON 解析失败）写短暂冷却期（5分钟）
+            # 避免同一 item_id 在同一次播放请求中被反复触发（并发请求场景）
+            _sub_no_track[item_id] = time.monotonic() + 300
             return
 
         streams = probe_data.get("streams", [])
