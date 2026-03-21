@@ -459,13 +459,12 @@ async def _extract_embedded_sub(
 
         # ── Step1: ffprobe 探测字幕轨道 ─────────────────────────────────────
         # 115 CDN 直链带签名 token，不需要额外 Cookie/Referer。
-        # -protocol_whitelist 确保 HTTPS 被允许；
-        # 不传 -allowed_extensions / -headers，避免某些 ffprobe 版本因参数解析 SIGSEGV。
+        # 注意：不传 -protocol_whitelist，静态构建的 ffprobe 在某些内核下
+        # 用该参数注册协议时会 SIGSEGV；静态 ffprobe 默认已包含 https 支持。
         logger.debug("[subtitle] ffprobe 目标 URL: %s", cdn_url[:120] if cdn_url else "None")
         ua = user_agent or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         probe_cmd = [
             "ffprobe", "-v", "warning",
-            "-protocol_whitelist", "file,http,https,tcp,tls,crypto",
             "-user_agent", ua,
             "-print_format", "json",
             "-show_streams", "-select_streams", "s",
@@ -573,7 +572,6 @@ async def _extract_embedded_sub(
             out_path = os.path.join(tmpdir, "sub.ass")
             extract_cmd = [
                 "ffmpeg", "-v", "warning",
-                "-protocol_whitelist", "file,http,https,tcp,tls,crypto",
                 "-user_agent", ua,
                 "-i", cdn_url,
                 "-map", f"0:s:{sub_stream_pos}",
