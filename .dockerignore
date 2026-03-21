@@ -48,3 +48,12 @@ docker-compose*.yml
 Dockerfile
 .dockerignore
 
+# ffmpeg 二进制：只保留当前构建目标架构，另一架构不需要进构建上下文
+# 注意：实际排除由 CI 动态处理，此处排除非目标架构的目录
+# amd64 构建时排除 arm64，arm64 构建时排除 amd64
+# → 通过 Dockerfile ARG TARGETARCH + COPY 精确控制，两个都传进去也无害
+# → 但为了减小构建上下文传输体积，排除 ffmpeg-image 下非必要文件
+ffmpeg-image/amd64/*.tar
+ffmpeg-image/amd64/*.xz
+ffmpeg-image/arm64/*.tar
+ffmpeg-image/arm64/*.xz
