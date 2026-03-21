@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -663,7 +664,7 @@ func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 	if subtitleCount == 0 {
 		logger.Infof("[PlaybackInfo] itemId=%s 无外挂字幕轨道（外置字幕文件未扫描或视频无字幕）", itemID)
 		if subInfo := h.pyClient.GetEmbeddedSubInfo(itemID); subInfo == nil {
-			if reqURL, _, err := h.pyClient.ResolveLink(itemID, 0, apiKey, "", resp.Request.UserAgent()); err == nil && reqURL != nil && reqURL.URL != "" {
+			if reqURL, err := h.pyClient.ResolveLink(itemID, 0, apiKey, "", resp.Request.UserAgent()); err == nil && reqURL != nil && reqURL.URL != "" {
 				logger.Infof("[PlaybackInfo] itemId=%s 开始同步预热内封字幕，等待当前播放会话注入", itemID)
 				if warmed := h.pyClient.WarmupEmbeddedSub(itemID, reqURL.URL, resp.Request.UserAgent(), itemType, 4*time.Second); warmed != nil {
 					logger.Infof("[PlaybackInfo] itemId=%s 同步预热成功，本次 PlaybackInfo 将注入内封字幕", itemID)
