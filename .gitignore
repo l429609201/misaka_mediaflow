@@ -1,4 +1,10 @@
-# Python
+# ffmpeg 静态二进制（体积过大，不入 git；只提交 ffmpeg-image/Dockerfile）
+ffmpeg-image/amd64/
+ffmpeg-image/arm64/
+# 原始压缩包
+ffmpeg-release-*-static.tar.xz
+ffmpeg-release-*-static.tar
+
 __pycache__/
 *.py[cod]
 *.egg-info/
