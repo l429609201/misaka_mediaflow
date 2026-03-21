@@ -166,36 +166,52 @@ async def proxy_to_font_in_ass(
     request_headers: dict,
 ) -> Optional[tuple[int, bytes, dict]]:
     """
-    字幕子集化主路由（nginx 模式）：
+    外挂字幕子集化主路由：
       1. 从 Emby 拉取原始字幕内容
       2. 根据 subtitle_engine 配置选择处理引擎：
          - builtin : 内置 fonttools 引擎（无需外部服务）
          - external: 转发给外置 fontInAss process_bytes（默认）
       3. 返回处理后的字幕给播放器，失败时降级返回原始内容
+
+    Returns None 表示子集化未启用或初始化失败（调用方应告知 Go 透传 Emby）。
     """
     cfg = await _load_config()
+
+    # ── 检查总开关 ───────────────────────────────────────────────────────────
     if cfg.get("font_in_ass_enabled", "").lower() != "true":
+        logger.info(
+            "[subtitle] 字幕子集化未启用(font_in_ass_enabled != true)，透传 Emby。"
+            " 如需子集化请在「系统设置 → 字幕」中开启。path=%s", original_path
+        )
         return None
 
     engine = cfg.get("subtitle_engine", "external").strip().lower()  # builtin / external
+    logger.info("[subtitle] 子集化引擎: %s path=%s", engine, original_path)
 
-    # 外置引擎额外检查 URL
+    # ── 外置引擎：检查 URL 配置 ──────────────────────────────────────────────
+    base_url = ""
     if engine != "builtin":
         base_url = (cfg.get("font_in_ass_url") or "").rstrip("/")
         if not base_url:
-            logger.warning("[subtitle] 外置引擎已启用但未配置 fontInAss 地址")
+            logger.warning(
+                "[subtitle] 外置引擎已启用但未配置 fontInAss 地址(font_in_ass_url 为空)，透传 Emby。"
+                " 请配置 fontInAss 服务地址或将引擎切换为 builtin。path=%s", original_path
+            )
             return None
+        logger.info("[subtitle] 外置 fontInAss 地址: %s", base_url)
 
     # ── Step1: 获取 Emby 地址 ────────────────────────────────────────────────
     emby_host = await _get_emby_host()
     if not emby_host:
-        logger.warning("[subtitle] 无法获取 Emby 地址，字幕子集化无法工作")
+        logger.warning("[subtitle] 无法获取 Emby 地址，字幕子集化无法工作。path=%s", original_path)
         return None
 
     # ── Step2: 从 Emby 拉取原始字幕内容 ─────────────────────────────────────
     emby_url = f"{emby_host}{original_path}"
     if query_string:
         emby_url = f"{emby_url}?{query_string}"
+
+    logger.info("[subtitle] 从 Emby 拉取原始字幕: url=%s", emby_url)
 
     forward_headers = {}
     for h in ("authorization", "x-emby-token", "x-emby-authorization", "cookie"):
@@ -214,17 +230,20 @@ async def proxy_to_font_in_ass(
             if not sub_bytes:
                 logger.warning("[subtitle] Emby 返回空字幕: url=%s", emby_url)
                 return None
-            logger.info("[subtitle] 从 Emby 拉取字幕成功: path=%s size=%d bytes",
-                        original_path, len(sub_bytes))
+            logger.info("[subtitle] ✅ 从 Emby 拉取字幕成功: %d bytes path=%s",
+                        len(sub_bytes), original_path)
     except Exception as e:
         logger.warning("[subtitle] 从 Emby 拉取字幕异常: %s (url=%s)", e, emby_url)
         return None
 
     # ── Step3A: 内置引擎 ──────────────────────────────────────────────────────
     if engine == "builtin":
+        logger.info("[subtitle] 调用内置 fonttools 引擎: path=%s", original_path)
         return await _process_with_builtin(sub_bytes, original_path)
 
     # ── Step3B: 外置引擎（fontInAss process_bytes）───────────────────────────
+    logger.info("[subtitle] 调用外置 fontInAss 引擎: %s/fontinass/process_bytes path=%s",
+                base_url, original_path)
     return await _process_with_external(sub_bytes, original_path, base_url)
 
 

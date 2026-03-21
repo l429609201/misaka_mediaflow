@@ -57,6 +57,8 @@ func NewSubtitleHandler(cfg *config.Config, pc *service.PythonClient) *SubtitleH
 // 路由：/emby/videos/:itemId/Subtitles/:subId/*rest
 // 示例：/emby/videos/123/Subtitles/1/0/Stream.ass  → rest="/0/Stream.ass"
 func (h *SubtitleHandler) HandleSubtitle(c *gin.Context) {
+	itemId := c.Param("itemId")
+	subId := c.Param("subId")
 	rest := strings.TrimPrefix(c.Param("rest"), "/") // Gin 通配符带前导 /，去掉
 
 	// 判断是否需要子集化的字幕格式
@@ -70,10 +72,11 @@ func (h *SubtitleHandler) HandleSubtitle(c *gin.Context) {
 	}
 
 	logger.Infof("[subtitle] 字幕请求命中路由: itemId=%s subId=%s rest=%s needsProcessing=%v",
-		c.Param("itemId"), c.Param("subId"), rest, needsProcessing)
+		itemId, subId, rest, needsProcessing)
 
 	if !needsProcessing {
 		// 非 ASS/SSA/SRT 格式（如 VTT）→ 直接透传 Emby
+		logger.Infof("[subtitle] 非文字字幕格式，直接透传: itemId=%s rest=%s", itemId, rest)
 		h.proxyH.HandleProxy(c)
 		return
 	}
@@ -87,10 +90,14 @@ func (h *SubtitleHandler) HandleSubtitle(c *gin.Context) {
 
 	params := url.Values{}
 	params.Set("path", originalPath)
+	params.Set("item_id", itemId)
+	params.Set("sub_id", subId)
 	if queryString != "" {
 		params.Set("qs", queryString)
 	}
 	pyURL += "?" + params.Encode()
+
+	logger.Infof("[subtitle] 调用 Python 字幕服务: url=%s", pyURL)
 
 	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, pyURL, nil)
 	if err != nil {
@@ -113,32 +120,63 @@ func (h *SubtitleHandler) HandleSubtitle(c *gin.Context) {
 	}
 	defer resp.Body.Close()
 
-	// Python 返回 {"action":"passthrough"} → 直接透传 Emby
-	if resp.Header.Get("Content-Type") == "application/json" || resp.StatusCode == http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
+	bodyBytes, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		logger.Infof("[subtitle] 读取 Python 响应失败: %v，降级透传", readErr)
+		h.proxyH.HandleProxy(c)
+		return
+	}
+
+	// ── 判断 Python 响应类型 ──────────────────────────────────────────────────
+	// 先尝试 JSON 解析，判断是否是 {action: passthrough} 指令
+	ct := resp.Header.Get("Content-Type")
+	logger.Infof("[subtitle] Python 响应: status=%d Content-Type=%s size=%d bytes itemId=%s",
+		resp.StatusCode, ct, len(bodyBytes), itemId)
+
+	if strings.Contains(ct, "application/json") {
+		// Python 明确返回 JSON → 解析 action 字段
 		var pyResp struct {
 			Action string `json:"action"`
 		}
 		if err2 := json.Unmarshal(bodyBytes, &pyResp); err2 == nil && pyResp.Action == "passthrough" {
+			logger.Infof("[subtitle] Python 指示透传 Emby: itemId=%s", itemId)
 			h.proxyH.HandleProxy(c)
 			return
 		}
-		// 是实际字幕内容，直接返回给播放器
-		for k, vals := range resp.Header {
-			kl := strings.ToLower(k)
-			if kl == "content-type" || kl == "content-encoding" || kl == "content-length" {
-				for _, v := range vals {
-					c.Header(k, v)
-				}
-			}
-		}
-		c.Status(resp.StatusCode)
-		c.Writer.Write(bodyBytes) //nolint:errcheck
+		// JSON 但不是 passthrough 指令 → 异常，降级透传
+		logger.Infof("[subtitle] Python 返回未知 JSON，降级透传: itemId=%s body=%s", itemId, string(bodyBytes[:min(len(bodyBytes), 200)]))
+		h.proxyH.HandleProxy(c)
 		return
 	}
 
-	// 其他情况降级透传
-	logger.Infof("[subtitle] Python 返回异常 status=%d，降级透传", resp.StatusCode)
-	h.proxyH.HandleProxy(c)
+	if resp.StatusCode != http.StatusOK {
+		// 非 200 且非 JSON → 异常，降级透传
+		logger.Infof("[subtitle] Python 返回异常 status=%d，降级透传: itemId=%s", resp.StatusCode, itemId)
+		h.proxyH.HandleProxy(c)
+		return
+	}
+
+	// status=200 且非 JSON → 字幕内容，直接返回给播放器（子集化已在 Python 端完成）
+	logger.Infof("[subtitle] 返回子集化字幕: itemId=%s subId=%s size=%d bytes", itemId, subId, len(bodyBytes))
+	for k, vals := range resp.Header {
+		kl := strings.ToLower(k)
+		if kl == "content-type" || kl == "content-disposition" {
+			for _, v := range vals {
+				c.Header(k, v)
+			}
+		}
+	}
+	c.Header("X-Subtitle-Source", resp.Header.Get("X-Subtitle-Source"))
+	c.Header("Cache-Control", "no-cache")
+	c.Status(resp.StatusCode)
+	c.Writer.Write(bodyBytes) //nolint:errcheck
+}
+
+// min 辅助函数（Go 1.21 之前无内置 min）
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 

@@ -27,54 +27,71 @@ router = APIRouter(tags=["Internal-Subtitle"])
 @router.get("/subtitle/proxy")
 async def subtitle_proxy(request: Request):
     """
-    字幕透传/fontInAss 转发。
-
-    Go 反代拦截到 /emby/videos/:id/Subtitles/:subId/Stream.ass 等请求后，
-    调用此接口。Python 决定是转发给 fontInAss 还是直接让 Go 透传 Emby。
+    字幕子集化主入口 — Go 反代拦截到 ASS/SRT 字幕请求后调用此接口。
 
     处理优先级：
-      1. 检查内封字幕缓存（embedded_sub），命中则直接返回缓存内容送给 fontInAss 处理
-      2. 转发给 fontInAss（font_in_ass_enabled=true 时）
-      3. 以上都不满足 → 告诉 Go 透传 Emby
+      1. 内封字幕缓存命中 → 子集化后直接返回（无需从 Emby 拉取）
+      2. 调用子集化引擎（内置 fonttools 或外置 fontInAss）从 Emby 拉取并处理
+      3. 以上都不满足（未启用 / 引擎失败）→ 返回 action=passthrough 让 Go 透传
 
     Query params（由 Go 透传）:
-      path      : 原始请求路径（如 /emby/videos/123/Subtitles/1/0/Stream.ass）
-      qs        : 原始 query string（如 api_key=xxx&...）
+      path    : 原始请求路径（如 /emby/Videos/123/Subtitles/1/0/Stream.ass）
+      item_id : Go 从路由参数直接提取的 itemId（可选，用于避免正则解析）
+      sub_id  : Go 从路由参数直接提取的 subId（可选）
+      qs      : 原始 query string（如 api_key=xxx&...）
     """
     import re as _re
     original_path = request.query_params.get("path", "")
     query_string  = request.query_params.get("qs", "")
+    # Go 新版本直接传 item_id/sub_id，省去正则解析
+    item_id_param = request.query_params.get("item_id", "")
+    sub_id_param  = request.query_params.get("sub_id", "")
+
+    logger.info("[subtitle] proxy 被调用: path=%s item_id=%s sub_id=%s",
+                original_path, item_id_param, sub_id_param)
 
     if not original_path:
+        logger.warning("[subtitle] proxy: 缺少 path 参数")
         return JSONResponse({"error": "missing path param"}, status_code=400)
 
-    # ── 优先级1：内封字幕缓存命中 → 送 fontInAss 子集化 ──────────────────────
-    # 从路径中提取 itemId：/emby/videos/{itemId}/Subtitles/...
-    m = _re.search(r"/videos/(\d+)/Subtitles", original_path, _re.IGNORECASE)
-    if m:
-        item_id = m.group(1)
+    # ── 优先级1：内封字幕缓存命中 → 直接返回（子集化已在提取时完成）────────────
+    # item_id 优先使用 Go 直接传递的值，兜底用正则从 path 提取
+    item_id = item_id_param
+    if not item_id:
+        m = _re.search(r"/videos/(\d+)/Subtitles", original_path, _re.IGNORECASE)
+        if m:
+            item_id = m.group(1)
+
+    if item_id:
         embedded_data = get_cached_embedded_sub(item_id)
         if embedded_data is not None:
-            # 尝试送 fontInAss 做子集化，失败则直接返回原始内封字幕
+            logger.info("[subtitle] 命中内封字幕缓存: item_id=%s size=%d bytes", item_id, len(embedded_data))
             subsetted = await process_embedded_sub_with_font_in_ass(item_id, embedded_data)
             if subsetted is not None:
-                logger.info("[subtitle] 内封字幕 fontInAss 子集化成功: item_id=%s", item_id)
+                logger.info("[subtitle] ✅ 内封字幕子集化完成: item_id=%s %d→%d bytes",
+                            item_id, len(embedded_data), len(subsetted))
                 return Response(
                     content=subsetted,
                     status_code=200,
                     media_type="text/x-ssa",
-                    headers={"X-Subtitle-Source": "embedded-fontinass"},
+                    headers={"X-Subtitle-Source": "embedded-subsetted"},
                 )
-            # fontInAss 未启用或失败 → 直接返回原始内封字幕（不降级到 Emby）
-            logger.info("[subtitle] 内封字幕直接返回(无fontInAss): item_id=%s size=%d", item_id, len(embedded_data))
+            # 子集化未启用或失败 → 直接返回原始内封字幕（不降级到 Emby）
+            logger.info("[subtitle] 内封字幕直接返回(子集化未启用): item_id=%s size=%d bytes",
+                        item_id, len(embedded_data))
             return Response(
                 content=embedded_data,
                 status_code=200,
                 media_type="text/plain; charset=utf-8",
-                headers={"X-Subtitle-Source": "embedded-cache"},
+                headers={"X-Subtitle-Source": "embedded-raw"},
             )
+        else:
+            logger.debug("[subtitle] 无内封字幕缓存: item_id=%s，转入外挂字幕子集化", item_id)
+    else:
+        logger.debug("[subtitle] 无法提取 item_id，跳过内封字幕查询: path=%s", original_path)
 
-    # ── 优先级2：转发给 fontInAss ─────────────────────────────────────────────
+    # ── 优先级2：外挂字幕子集化（从 Emby 拉取 → 引擎处理）──────────────────────
+    logger.info("[subtitle] 开始外挂字幕子集化: path=%s qs=%s", original_path, query_string[:80] if query_string else "")
     result = await proxy_to_font_in_ass(
         original_path=original_path,
         query_string=query_string,
@@ -82,10 +99,13 @@ async def subtitle_proxy(request: Request):
     )
 
     if result is None:
-        # fontInAss 未启用或失败 → 告诉 Go 直接透传 Emby
+        # 子集化引擎未启用或失败 → 告诉 Go 直接透传 Emby
+        logger.info("[subtitle] ⚠️ 子集化未执行(引擎未启用或失败)，返回 passthrough: path=%s", original_path)
         return JSONResponse({"action": "passthrough"}, status_code=200)
 
     status_code, body, headers = result
+    logger.info("[subtitle] ✅ 外挂字幕子集化完成: path=%s size=%d bytes content-type=%s",
+                original_path, len(body), headers.get("content-type", "?"))
     return Response(
         content=body,
         status_code=status_code,

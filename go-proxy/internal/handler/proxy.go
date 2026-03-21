@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httputil"
@@ -625,6 +626,42 @@ func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 		delete(source, "TranscodingUrl")
 		delete(source, "TranscodingContainer")
 		delete(source, "TranscodingSubProtocol")
+	}
+
+	// ── 记录并修正现有外挂字幕 DeliveryUrl ──────────────────────────────────
+	// Emby 外挂字幕（IsExternal=true）的 DeliveryUrl 必须经过 Go 反代才能被子集化路由拦截。
+	// DeliveryUrl 通常是相对路径（/emby/Videos/{id}/Subtitles/{subIdx}/0/Stream.ass），
+	// 只要播放器通过 Go 反代访问，就会自然命中 subtitle 路由。
+	// 这里打印日志以便诊断字幕 URL 是否正确。
+	subtitleCount := 0
+	for _, ms := range mediaSources {
+		source, ok := ms.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		streams, _ := source["MediaStreams"].([]interface{})
+		for _, s := range streams {
+			sm, ok2 := s.(map[string]interface{})
+			if !ok2 {
+				continue
+			}
+			if smType, _ := sm["Type"].(string); smType != "Subtitle" {
+				continue
+			}
+			isExternal, _ := sm["IsExternal"].(bool)
+			deliveryUrl, _ := sm["DeliveryUrl"].(string)
+			codec, _ := sm["Codec"].(string)
+			lang, _ := sm["Language"].(string)
+			idx, _ := sm["Index"].(float64)
+			if isExternal && deliveryUrl != "" {
+				subtitleCount++
+				logger.Infof("[PlaybackInfo] 外挂字幕 index=%.0f codec=%s lang=%s DeliveryUrl=%s",
+					idx, codec, lang, deliveryUrl)
+			}
+		}
+	}
+	if subtitleCount == 0 {
+		logger.Infof("[PlaybackInfo] itemId=%s 无外挂字幕轨道（外置字幕文件未扫描或视频无字幕）", itemID)
 	}
 
 	// ── 注入内封字幕到 MediaStreams ──────────────────────────────────────────
