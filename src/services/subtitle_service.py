@@ -429,8 +429,32 @@ async def _extract_embedded_sub(
     try:
         import shutil, tempfile, os
 
-        if not shutil.which("ffprobe") or not shutil.which("ffmpeg"):
+        # ── Step0: 验证 ffprobe 二进制可用 ─────────────────────────────────
+        ffprobe_path = shutil.which("ffprobe")
+        ffmpeg_path  = shutil.which("ffmpeg")
+        if not ffprobe_path or not ffmpeg_path:
             logger.warning("[subtitle] ffprobe/ffmpeg 未找到，内封字幕提取不可用")
+            return
+
+        # 先跑 -version 确认二进制本身能执行（防止 LFS 指针文件或架构不符）
+        try:
+            ver_proc = await asyncio.create_subprocess_exec(
+                ffprobe_path, "-version",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            ver_out, _ = await asyncio.wait_for(ver_proc.communicate(), timeout=10)
+            ver_txt = ver_out.decode("utf-8", errors="replace").strip()
+            if ver_proc.returncode != 0 or not ver_txt.startswith("ffprobe"):
+                logger.error(
+                    "[subtitle] ffprobe 二进制异常(rc=%s path=%s): %s",
+                    ver_proc.returncode, ffprobe_path, ver_txt[:300],
+                )
+                return
+            # 只打第一行（版本号），方便确认镜像
+            logger.info("[subtitle] ffprobe 版本: %s", ver_txt.splitlines()[0])
+        except Exception as e:
+            logger.error("[subtitle] ffprobe -version 执行失败: %s path=%s", e, ffprobe_path)
             return
 
         # ── Step1: ffprobe 探测字幕轨道 ─────────────────────────────────────
