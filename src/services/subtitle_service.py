@@ -455,16 +455,35 @@ async def _extract_embedded_sub(
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await asyncio.wait_for(probe_proc.communicate(), timeout=30)
-            stderr_txt = stderr.decode("utf-8", errors="replace").strip()
-            if stderr_txt:
-                logger.info("[subtitle] ffprobe stderr: %s", stderr_txt[:800])
-            probe_data = json.loads(stdout.decode("utf-8", errors="replace"))
         except asyncio.TimeoutError:
             logger.warning("[subtitle] ffprobe 超时: item_id=%s", item_id)
             _sub_probe_fail[item_id] = time.monotonic() + _SUB_PROBE_FAIL_TTL
             return
         except Exception as e:
-            logger.warning("[subtitle] ffprobe 失败: %s item_id=%s", e, item_id)
+            logger.warning("[subtitle] ffprobe 启动失败: %s item_id=%s", e, item_id)
+            _sub_probe_fail[item_id] = time.monotonic() + _SUB_PROBE_FAIL_TTL
+            return
+
+        # 无论成败先把 stderr 打出来，方便排查
+        stderr_txt = stderr.decode("utf-8", errors="replace").strip()
+        stdout_txt = stdout.decode("utf-8", errors="replace").strip()
+        if stderr_txt:
+            logger.info("[subtitle] ffprobe stderr(rc=%s): %s",
+                        probe_proc.returncode, stderr_txt[:1000])
+
+        if probe_proc.returncode != 0 or not stdout_txt:
+            logger.warning(
+                "[subtitle] ffprobe 非正常退出: rc=%s stdout_empty=%s item_id=%s",
+                probe_proc.returncode, not stdout_txt, item_id,
+            )
+            _sub_probe_fail[item_id] = time.monotonic() + _SUB_PROBE_FAIL_TTL
+            return
+
+        try:
+            probe_data = json.loads(stdout_txt)
+        except Exception as e:
+            logger.warning("[subtitle] ffprobe 输出解析失败: %s stdout=%r item_id=%s",
+                           e, stdout_txt[:200], item_id)
             _sub_probe_fail[item_id] = time.monotonic() + _SUB_PROBE_FAIL_TTL
             return
 
