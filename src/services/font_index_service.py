@@ -14,7 +14,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-_FONTS_ROOT     = Path(os.environ.get('BUILTIN_FONT_DIR', '/data/config/fonts'))
+_FONTS_ROOT     = Path(os.environ.get('BUILTIN_FONT_DIR', '/app/config/fonts'))
 _FONTS_DOWNLOAD = _FONTS_ROOT / 'downloads'
 _FONT_EXTS      = {'.ttf', '.otf', '.ttc', '.otc'}
 _SUB_EXTS       = {'.ass', '.ssa', '.srt'}

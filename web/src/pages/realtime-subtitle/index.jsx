@@ -121,7 +121,7 @@
                        <Text strong>内置引擎</Text><br />
                        <Text type="secondary" style={{ fontSize: 12 }}>
                          使用内置 fonttools 处理，无需外部服务；字体放入挂载目录{' '}
-                         <Text code style={{ fontSize: 11 }}>/data/config/fonts</Text>{' '}
+                         <Text code style={{ fontSize: 11 }}>/app/config/fonts</Text>{' '}
                          （在线字体自动下载到 downloads 子目录）
                        </Text>
                      </Radio>
@@ -139,10 +139,10 @@
                    description={
                      <span>
                        将字体文件（.ttf / .otf / .ttc）放入{' '}
-                       <Text code>/data/config/fonts</Text>{' '}
+                       <Text code>/app/config/fonts</Text>{' '}
                        下（递归扫描，但排除 <Text code>downloads</Text> 子目录）。
                        找不到的字体从 fontInAss 在线字体库自动下载，保存至{' '}
-                       <Text code>/data/config/fonts/downloads</Text>。
+                       <Text code>/app/config/fonts/downloads</Text>。
                      </span>
                    }
                  />
@@ -335,7 +335,7 @@
                  description={
                    <span>
                      未扫描到任何字体。请将字体文件（.ttf / .otf / .ttc）放入{' '}
-                     <Text code>{status?.fonts_root || '/data/config/fonts'}</Text>{' '}
+                     <Text code>{status?.fonts_root || '/app/config/fonts'}</Text>{' '}
                      后点击「重新扫描」，或等待下次自动扫描。
                    </span>
                  }

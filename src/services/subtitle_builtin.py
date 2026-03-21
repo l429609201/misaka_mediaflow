@@ -29,7 +29,7 @@ import httpx
 logger = logging.getLogger(__name__)
 
 # ── 路径配置 ──────────────────────────────────────────────────────────────────
-_FONTS_ROOT     = Path(os.environ.get("BUILTIN_FONT_DIR", "/data/config/fonts"))
+_FONTS_ROOT     = Path(os.environ.get("BUILTIN_FONT_DIR", "/app/config/fonts"))
 _FONTS_DOWNLOAD = _FONTS_ROOT / "downloads"
 _ONLINE_DB_PATH = _FONTS_ROOT / "onlineFonts.json"
 _ONLINE_DB_URL  = (
