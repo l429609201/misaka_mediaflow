@@ -243,9 +243,10 @@ class ProxyService:
             return await _query(session)
 
     async def _resolve_via_path_mapping(
-        self, db: AsyncSession, file_path: str, storage_id: int, user_agent: str = ""
+        self, db: AsyncSession, file_path: str, storage_id: int, user_agent: str = "",
+        *, _prewarmed_manager=None,
     ) -> dict:
-        """通过路径映射 + 存储适配器获取直链，user_agent 透传给 115"""
+        """通过路径映射 + 存储适配器获取直链，user_agent 透传给 115，_prewarmed_manager 透传复用"""
         # ── 查找所有有效的路径映射规则 ──
         query = select(PathMapping).where(PathMapping.is_active == 1)
         if storage_id > 0:
@@ -278,14 +279,18 @@ class ProxyService:
         if not cloud_path:
             logger.warning("无匹配路径映射: %s，尝试直接用文件名查 115", file_path)
             return await self._resolve_115_by_cloud_path(
-                file_path, db, user_agent, _path_mapping_checked=True
+                file_path, db, user_agent,
+                _path_mapping_checked=True,
+                _prewarmed_manager=_prewarmed_manager,
             )
 
         # ── 查找匹配的存储源配置 ──────────────────────────────────────────
         # storage_id=0 表示路径映射未关联存储源，直接走 115 解析
         if matched_storage_id == 0:
             logger.debug("路径映射未关联存储源(storage_id=0)，直接走 115 解析: %s", cloud_path)
-            return await self._resolve_115_by_cloud_path(cloud_path, db, user_agent)
+            return await self._resolve_115_by_cloud_path(
+                cloud_path, db, user_agent, _prewarmed_manager=_prewarmed_manager,
+            )
 
         result = await db.execute(
             select(StorageConfig).where(StorageConfig.id == matched_storage_id)
@@ -293,11 +298,15 @@ class ProxyService:
         storage = result.scalars().first()
         if not storage or storage.is_active != 1:
             logger.warning("存储源未找到或已禁用: storage_id=%s，降级到 115 搜索", matched_storage_id)
-            return await self._resolve_115_by_cloud_path(cloud_path, db, user_agent)
+            return await self._resolve_115_by_cloud_path(
+                cloud_path, db, user_agent, _prewarmed_manager=_prewarmed_manager,
+            )
 
         # ── 115 存储 → FsCache + 115 API 搜索 ──────────────────────────
         if storage.type == "p115":
-            return await self._resolve_115_by_cloud_path(cloud_path, db, user_agent)
+            return await self._resolve_115_by_cloud_path(
+                cloud_path, db, user_agent, _prewarmed_manager=_prewarmed_manager,
+            )
 
         # ── 其他存储类型 → 通用适配器 ────────────────────────────────────
         try:
@@ -314,48 +323,64 @@ class ProxyService:
 
     async def _resolve_115_by_cloud_path(
         self, cloud_path: str, db: AsyncSession | None = None, user_agent: str = "",
-        *, _path_mapping_checked: bool = False
+        *, _path_mapping_checked: bool = False,
+        _prewarmed_manager=None,
     ) -> dict:
         """
         通过挂载路径 → 网盘路径 → pick_code → 115直链，完整三步解析。
 
-        优化:
-          - 步骤1(路径映射) 和 步骤2(FsCache查询) 并行执行
-          - 步骤3 复用已有 manager，不再重复初始化
-          - _path_mapping_checked=True 时跳过路径映射（已在上层查过）
-          - 所有步骤合并为一条日志输出
+        并行优化（三并行）:
+          - _ensure_115_manager（含 DB cookie查询）
+          - PathMapping（本地路径 → 云端路径）
+          - FsCache查询（pick_code）
+          三者同时发起，全部就绪后再用 pick_code 调 115 downurl API。
+
+          _path_mapping_checked=True 时跳过路径映射（上层已查过）。
+          _prewarmed_manager: 上层已预热的 manager，直接复用，跳过初始化。
         """
         try:
-            manager = await self._ensure_115_manager()
+            # ── 三并行：manager初始化 + PathMapping + FsCache ─────────────────
+            if _prewarmed_manager is not None:
+                # 上层（_fallback_via_emby）已预热，直接复用
+                manager = _prewarmed_manager
+                if _path_mapping_checked:
+                    pan_path = cloud_path
+                    fscache_pick_code = await self._lookup_pickcode_from_fscache(cloud_path, db)
+                else:
+                    pan_path, fscache_pick_code = await asyncio.gather(
+                        self._strip_mount_prefix(cloud_path, db),
+                        self._lookup_pickcode_from_fscache(cloud_path, db),
+                    )
+            elif _path_mapping_checked:
+                # 跳过路径映射，但 manager 和 FsCache 并行
+                manager, fscache_pick_code = await asyncio.gather(
+                    self._ensure_115_manager(),
+                    self._lookup_pickcode_from_fscache(cloud_path, db),
+                )
+                pan_path = cloud_path
+            else:
+                # 完整三并行
+                manager, pan_path, fscache_pick_code = await asyncio.gather(
+                    self._ensure_115_manager(),
+                    self._strip_mount_prefix(cloud_path, db),
+                    self._lookup_pickcode_from_fscache(cloud_path, db),
+                )
+
             if not manager:
                 return {"url": "", "expires_in": 0, "error": "115 not available"}
 
-            # 步骤1: 路径映射（如果上层已查过则跳过）
-            # 步骤2: FsCache 查 pick_code
-            # 两者并行执行
-            if _path_mapping_checked:
-                # 上层 _resolve_via_path_mapping 已经查过且未命中，直接用原路径
-                pan_path = cloud_path
-                fscache_pick_code = await self._lookup_pickcode_from_fscache(cloud_path, db)
-            else:
-                pan_path_task = self._strip_mount_prefix(cloud_path, db)
-                fscache_task = self._lookup_pickcode_from_fscache(cloud_path, db)
-                pan_path, fscache_pick_code = await asyncio.gather(pan_path_task, fscache_task)
-
-            # 优先用 FsCache 结果
+            # ── pick_code 优先级：FsCache(原路径) → FsCache(pan_path) → 115搜索 ──
             pick_code = ""
             step2_via = ""
             if fscache_pick_code:
                 pick_code = fscache_pick_code
                 step2_via = "FsCache命中"
             else:
-                # FsCache 未命中，再用转换后的 pan_path 查 FsCache（路径可能不同）
                 if pan_path != cloud_path:
                     pick_code = await self._lookup_pickcode_from_fscache(pan_path, db)
                     if pick_code:
                         step2_via = "FsCache命中(pan_path)"
 
-            # FsCache 全未命中 → 降级到 115 搜索 API
             if not pick_code:
                 file_name = PurePosixPath(pan_path).name
                 if not file_name:
@@ -375,7 +400,7 @@ class ProxyService:
                 )
                 return {"url": "", "expires_in": 0, "error": "115 path resolve failed"}
 
-            # 步骤3: 用 pick_code 获取直链（复用 manager）
+            # ── 步骤3: pick_code → 115 downurl ───────────────────────────────
             link = await manager.adapter.get_direct_link("", pick_code=pick_code, user_agent=user_agent)
             if link and link.url:
                 logger.info(
@@ -511,33 +536,37 @@ class ProxyService:
         self, db: AsyncSession, item_id: str, api_key: str, user_id: str, storage_id: int, user_agent: str = ""
     ) -> dict:
         """
-        当 MediaItem 表中没有记录时，三段式降级链获取文件路径：
+        当 MediaItem 表中没有记录时，三段式降级链获取文件路径。
+
+        并行优化:
+          - Step1 PlaybackInfo（HTTP ~150ms）与 _ensure_115_manager（DB ~10ms）并行
+            PlaybackInfo 等待期间 manager 已就绪，拿到 pick_code 后直接调 115 API
+          - Step2/Step3 仍为顺序降级（有依赖关系，不可并行）
 
         Step 1 (最优): POST PlaybackInfo → MediaSources.Path
-                       ✅ 不需要 UserId，直接拿到 STRM 内容（http 链接 / pick_code）
         Step 2 (降级): GET Users/Me → 拿 UserId → GET Items/{id}
-                       适合非 STRM 的普通挂载场景
-        Step 3 (兜底): GET Items/{id} 不带 UserId（部分 Emby 配置不验证）
+        Step 3 (兜底): GET Items/{id} 不带 UserId
         """
-        # 0. 获取媒体服务器配置
+        # 0. 获取媒体服务器配置（必须先拿 host/key 才能发 HTTP）
         ms_host, ms_api_key = await self._get_media_server_config(db)
         effective_api_key = api_key or ms_api_key
         if not ms_host or not effective_api_key:
             logger.warning("媒体服务器未配置, 无法 fallback: item_id=%s", item_id)
             return {"url": "", "expires_in": 0, "error": "media server not configured"}
 
-        # ── Step 1: PlaybackInfo（不需要 UserId，参考 embyreverseproxy 做法）──────
-        file_path, item_info = await self._fetch_path_via_playback_info(
-            ms_host, effective_api_key, item_id
+        # ── Step 1: PlaybackInfo 与 115 manager 预热并行 ──────────────────────
+        # PlaybackInfo 是最慢的一步（~150ms），同时预热 manager 避免后续再等 DB
+        (file_path, item_info), prewarmed_manager = await asyncio.gather(
+            self._fetch_path_via_playback_info(ms_host, effective_api_key, item_id),
+            self._ensure_115_manager(),
         )
-        logger.debug("Step1 PlaybackInfo: item_id=%s path=%s", item_id, file_path or "N/A")
+        logger.debug("Step1 PlaybackInfo: item_id=%s path=%s manager_ready=%s",
+                     item_id, file_path or "N/A", prewarmed_manager is not None)
 
-        # ── Step 2: UserId 降级链 ─────────────────────────────────────────────────
+        # ── Step 2: UserId 降级链（Step1 未拿到路径时才走）─────────────────────
         if not file_path:
-            # 2a. 用 api_key 查当前用户 UserId（GET /Users/Me）
             resolved_user_id = user_id or await self._fetch_user_id(ms_host, effective_api_key)
             logger.debug("Step2 UserId: item_id=%s user_id=%s", item_id, resolved_user_id or "N/A")
-
             if resolved_user_id:
                 item_info = await self._fetch_emby_item(
                     ms_host, effective_api_key, item_id, resolved_user_id
@@ -545,7 +574,7 @@ class ProxyService:
                 if item_info:
                     file_path = self._extract_file_path(item_info)
 
-        # ── Step 3: 不带 UserId 也试一次（部分 Emby 不验证） ─────────────────────
+        # ── Step 3: 不带 UserId 兜底 ─────────────────────────────────────────
         if not file_path:
             logger.debug("Step3 Items无UserId: item_id=%s", item_id)
             item_info = await self._fetch_emby_item(ms_host, effective_api_key, item_id, "")
@@ -558,42 +587,45 @@ class ProxyService:
 
         logger.info("Emby fallback 获取到路径: item_id=%s path=%s", item_id, file_path)
 
-        # ── 路径处理 ──────────────────────────────────────────────────────────────
-        # 情况A: 拿到的就是 http/https URL（PlaybackInfo 返回的 STRM 内容）
-        #         先尝试提取 pick_code → 获取 115 直链
-        #         提取不到时，说明这个 URL 本身就是直链，直接作为 302 目标返回
+        # ── 路径处理 ──────────────────────────────────────────────────────────
+        # 情况A: http/https URL（STRM 内容）→ 提取 pick_code → 115 直链（复用预热的 manager）
         if file_path.startswith(("http://", "https://")):
             pick_code = self._extract_pick_code(file_path)
             if pick_code:
                 logger.info("从PlaybackInfo URL提取到pick_code=%s item_id=%s", pick_code, item_id)
-                result = await self._resolve_via_115(pick_code, user_agent)
+                result = await self._resolve_via_115(pick_code, user_agent, _manager=prewarmed_manager)
                 if result.get("url"):
-                    # 缓存命中结果，下次走快路径
                     await self._cache_media_mapping(
                         db, item_id, item_info or {}, pick_code, file_path
                     )
                 return result
-            # URL 中没有 pick_code → STRM 内容本身就是 HTTP 直链，直接 302
             logger.info("STRM内容为HTTP直链(无pick_code)，直接302: item_id=%s url=%s", item_id, file_path[:100])
             return {"url": file_path, "expires_in": 0, "error": ""}
 
-        # 情况B: 本地 .strm 文件路径 → 读文件内容 → 提取 pick_code
+        # 情况B: 本地 .strm 文件路径 → 读文件 → 提取 pick_code（复用预热的 manager）
         if file_path.lower().endswith(".strm"):
-            result = await self._resolve_strm_fallback(db, item_id, item_info or {}, file_path, user_agent)
+            result = await self._resolve_strm_fallback(
+                db, item_id, item_info or {}, file_path, user_agent,
+                _manager=prewarmed_manager,
+            )
             if result and result.get("url"):
                 return result
 
-        # 情况C: 普通本地挂载路径 → PathMapping → FsCache
-        return await self._resolve_via_path_mapping(db, file_path, storage_id, user_agent)
+        # 情况C: 普通本地挂载路径 → PathMapping → FsCache（透传预热的 manager）
+        return await self._resolve_via_path_mapping(
+            db, file_path, storage_id, user_agent,
+            _prewarmed_manager=prewarmed_manager,
+        )
 
     async def _resolve_strm_fallback(
-        self, db: AsyncSession, item_id: str, item_info: dict, strm_path: str, user_agent: str = ""
+        self, db: AsyncSession, item_id: str, item_info: dict, strm_path: str, user_agent: str = "",
+        *, _manager=None,
     ) -> dict | None:
         """
         STRM 文件 fallback:
         1. 读取 STRM 文件内容
         2. 从内容中提取 pick_code
-        3. 获取 115 直链
+        3. 获取 115 直链（透传预热的 _manager，避免重复初始化）
         4. 缓存 item_id → pick_code 映射
         """
         # 尝试读取 STRM 文件
@@ -610,8 +642,8 @@ class ProxyService:
 
         logger.info("从 STRM 提取到 pick_code: item_id=%s, pick_code=%s", item_id, pick_code)
 
-        # 获取 115 直链
-        result = await self._resolve_via_115(pick_code, user_agent)
+        # 获取 115 直链（复用预热的 manager）
+        result = await self._resolve_via_115(pick_code, user_agent, _manager=_manager)
 
         # 如果成功，缓存映射到 MediaItem 表
         if result.get("url"):
