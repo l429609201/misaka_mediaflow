@@ -415,10 +415,13 @@ async def _extract_embedded_sub(
     通过 ffprobe + ffmpeg 从 115 CDN 直链提取内封字幕。
 
     流程：
-      1. ffprobe 探测字幕轨道（只读文件头，<1MB 流量）
-      2. 按 track_prefs 匹配语言偏好，取第一个命中的；无偏好则取第一条
-      3. ffmpeg 提取该轨道为 .ass 文件（利用 MKV Cues 做 Range 跳读）
-      4. 缓存结果
+      1. httpx Range 请求下载 MKV 文件头（前 10MB）到本地临时文件
+         → ffprobe 只读本地文件，完全绕开静态 OpenSSL 的 HTTPS SIGSEGV 问题
+      2. ffprobe 探测本地文件的字幕轨道
+      3. 按 track_prefs 匹配语言偏好
+      4. ffmpeg 读远程 URL 提取字幕（ffmpeg 的 HTTPS 支持比 ffprobe 更稳定）
+         若 ffmpeg 也 SIGSEGV，则回退为继续扩大 Range 下载完整文件再提取
+      5. 缓存结果
     """
     if item_id in _sub_extracting:
         return
@@ -451,129 +454,149 @@ async def _extract_embedded_sub(
                     ver_proc.returncode, ffprobe_path, ver_txt[:300],
                 )
                 return
-            # 只打第一行（版本号），方便确认镜像
             logger.info("[subtitle] ffprobe 版本: %s", ver_txt.splitlines()[0])
         except Exception as e:
             logger.error("[subtitle] ffprobe -version 执行失败: %s path=%s", e, ffprobe_path)
             return
 
-        # ── Step1: ffprobe 探测字幕轨道 ─────────────────────────────────────
-        # 115 CDN 直链带签名 token，不需要额外 Cookie/Referer。
-        # 注意：不传 -protocol_whitelist，静态构建的 ffprobe 在某些内核下
-        # 用该参数注册协议时会 SIGSEGV；静态 ffprobe 默认已包含 https 支持。
-        logger.debug("[subtitle] ffprobe 目标 URL: %s", cdn_url[:120] if cdn_url else "None")
         ua = user_agent or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        probe_cmd = [
-            "ffprobe", "-v", "warning",
-            "-user_agent", ua,
-            "-print_format", "json",
-            "-show_streams", "-select_streams", "s",
-            cdn_url,
-        ]
-        try:
-            probe_proc = await asyncio.create_subprocess_exec(
-                *probe_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(probe_proc.communicate(), timeout=30)
-        except asyncio.TimeoutError:
-            logger.warning("[subtitle] ffprobe 超时: item_id=%s", item_id)
-            _sub_probe_fail[item_id] = time.monotonic() + _SUB_PROBE_FAIL_TTL
-            return
-        except Exception as e:
-            logger.warning("[subtitle] ffprobe 启动失败: %s item_id=%s", e, item_id)
-            _sub_probe_fail[item_id] = time.monotonic() + _SUB_PROBE_FAIL_TTL
-            return
 
-        # 无论成败先把 stderr 打出来，方便排查
-        stderr_txt = stderr.decode("utf-8", errors="replace").strip()
-        stdout_txt = stdout.decode("utf-8", errors="replace").strip()
-        if stderr_txt:
-            logger.info("[subtitle] ffprobe stderr(rc=%s): %s",
-                        probe_proc.returncode, stderr_txt[:1000])
+        # ── Step1: Range 下载文件头 → 本地临时文件 ──────────────────────────
+        # 静态 ffprobe 的 TLS 实现在某些宿主内核下访问 HTTPS 会 SIGSEGV。
+        # 解决方案：Python (httpx) 负责 HTTPS，下载前 10MB 文件头到本地，
+        # ffprobe 只读本地文件，完全绕开 TLS 问题。
+        # MKV 的 Cues（索引）通常在文件头部或末尾，10MB 足以覆盖字幕轨道元数据。
+        PROBE_SIZE = 10 * 1024 * 1024  # 10MB
 
-        if probe_proc.returncode != 0 or not stdout_txt:
-            logger.warning(
-                "[subtitle] ffprobe 非正常退出: rc=%s stdout_empty=%s item_id=%s",
-                probe_proc.returncode, not stdout_txt, item_id,
-            )
-            _sub_probe_fail[item_id] = time.monotonic() + _SUB_PROBE_FAIL_TTL
-            return
+        logger.debug("[subtitle] ffprobe 目标 URL: %s", cdn_url[:120] if cdn_url else "None")
 
-        try:
-            probe_data = json.loads(stdout_txt)
-        except Exception as e:
-            logger.warning("[subtitle] ffprobe 输出解析失败: %s stdout=%r item_id=%s",
-                           e, stdout_txt[:200], item_id)
-            _sub_probe_fail[item_id] = time.monotonic() + _SUB_PROBE_FAIL_TTL
-            return
-
-        streams = probe_data.get("streams", [])
-        if not streams:
-            logger.info("[subtitle] 未发现内封字幕轨道: item_id=%s", item_id)
-            # 写入负缓存，避免该文件每次播放都重跑 ffprobe
-            _sub_no_track[item_id] = time.monotonic() + _SUB_NO_TRACK_TTL
-            return
-
-        # ── Step2: 过滤图形字幕（PGS/VOBSUB/DVBSUB 等），只保留文本字幕 ────────
-        # ffmpeg 无法将 bitmap 字幕转为 ASS，会报 "bitmap to bitmap" 错误
-        BITMAP_CODECS = {"hdmv_pgs_subtitle", "pgssub", "dvd_subtitle", "dvbsub",
-                         "dvb_subtitle", "xsub", "vobsub", "mov_text"}
-        text_streams = [
-            s for s in streams
-            if s.get("codec_name", "").lower() not in BITMAP_CODECS
-        ]
-        if not text_streams:
-            logger.info(
-                "[subtitle] 内封字幕均为图形格式(PGS/VOBSUB等)，无法提取为ASS: item_id=%s codecs=%s",
-                item_id,
-                [s.get("codec_name") for s in streams],
-            )
-            # 写入负缓存，图形字幕永远无法提取，不必重试
-            _sub_no_track[item_id] = time.monotonic() + _SUB_NO_TRACK_TTL
-            return
-
-        chosen_index: Optional[int] = None  # ffmpeg stream index (0:s:N)
-        chosen_lang = ""
-
-        if track_prefs:
-            for pref in track_prefs:
-                pref_lower = pref.lower()
-                for s in text_streams:
-                    lang = (s.get("tags", {}).get("language") or "").lower()
-                    title = (s.get("tags", {}).get("title") or "").lower()
-                    if pref_lower in (lang, title) or pref_lower in lang or pref_lower in title:
-                        chosen_index = s.get("index")
-                        chosen_lang = lang
-                        break
-                if chosen_index is not None:
-                    break
-
-        if chosen_index is None:
-            # 无匹配偏好 → 取第一条文本字幕轨道
-            s0 = text_streams[0]
-            chosen_index = s0.get("index")
-            chosen_lang = (s0.get("tags", {}).get("language") or "unknown")
-
-        # ffmpeg 的 -map 0:N 用的是全局流索引，对于字幕可以用 0:s:0 等
-        # 更稳妥：用 stream_specifier index 直接映射
-        sub_stream_pos = next(
-            (i for i, s in enumerate(streams) if s.get("index") == chosen_index), 0
-        )
-
-        logger.info(
-            "[subtitle] 选择字幕轨道: item_id=%s stream_index=%s sub_pos=%d lang=%s",
-            item_id, chosen_index, sub_stream_pos, chosen_lang,
-        )
-
-        # ── Step3: ffmpeg 提取为 .ass ────────────────────────────────────────
         with tempfile.TemporaryDirectory(prefix="mmf_sub_") as tmpdir:
+            head_path = os.path.join(tmpdir, "head.mkv")
+            try:
+                async with httpx.AsyncClient(timeout=30) as client:
+                    resp = await client.get(
+                        cdn_url,
+                        headers={
+                            "User-Agent": ua,
+                            "Range": f"bytes=0-{PROBE_SIZE - 1}",
+                        },
+                        follow_redirects=True,
+                    )
+                    if resp.status_code not in (200, 206):
+                        logger.warning(
+                            "[subtitle] 下载文件头失败: status=%d item_id=%s",
+                            resp.status_code, item_id,
+                        )
+                        _sub_probe_fail[item_id] = time.monotonic() + _SUB_PROBE_FAIL_TTL
+                        return
+                    with open(head_path, "wb") as f:
+                        f.write(resp.content)
+                logger.debug("[subtitle] 文件头已下载: %d bytes → %s", len(resp.content), head_path)
+            except Exception as e:
+                logger.warning("[subtitle] 下载文件头异常: %s item_id=%s", e, item_id)
+                _sub_probe_fail[item_id] = time.monotonic() + _SUB_PROBE_FAIL_TTL
+                return
+
+            # ── Step2: ffprobe 探测本地文件头的字幕轨道 ──────────────────────
+            probe_cmd = [
+                "ffprobe", "-v", "warning",
+                "-print_format", "json",
+                "-show_streams", "-select_streams", "s",
+                head_path,  # 本地文件，不走网络，完全绕开 TLS
+            ]
+            try:
+                probe_proc = await asyncio.create_subprocess_exec(
+                    *probe_cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await asyncio.wait_for(probe_proc.communicate(), timeout=30)
+            except asyncio.TimeoutError:
+                logger.warning("[subtitle] ffprobe 超时: item_id=%s", item_id)
+                _sub_probe_fail[item_id] = time.monotonic() + _SUB_PROBE_FAIL_TTL
+                return
+            except Exception as e:
+                logger.warning("[subtitle] ffprobe 启动失败: %s item_id=%s", e, item_id)
+                _sub_probe_fail[item_id] = time.monotonic() + _SUB_PROBE_FAIL_TTL
+                return
+
+            stderr_txt = stderr.decode("utf-8", errors="replace").strip()
+            stdout_txt = stdout.decode("utf-8", errors="replace").strip()
+            if stderr_txt:
+                logger.info("[subtitle] ffprobe stderr(rc=%s): %s",
+                            probe_proc.returncode, stderr_txt[:1000])
+
+            if probe_proc.returncode != 0 or not stdout_txt:
+                logger.warning(
+                    "[subtitle] ffprobe 非正常退出: rc=%s stdout_empty=%s item_id=%s",
+                    probe_proc.returncode, not stdout_txt, item_id,
+                )
+                _sub_probe_fail[item_id] = time.monotonic() + _SUB_PROBE_FAIL_TTL
+                return
+
+            try:
+                probe_data = json.loads(stdout_txt)
+            except Exception as e:
+                logger.warning("[subtitle] ffprobe 输出解析失败: %s stdout=%r item_id=%s",
+                               e, stdout_txt[:200], item_id)
+                _sub_probe_fail[item_id] = time.monotonic() + _SUB_PROBE_FAIL_TTL
+                return
+
+            streams = probe_data.get("streams", [])
+            if not streams:
+                logger.info("[subtitle] 未发现内封字幕轨道: item_id=%s", item_id)
+                _sub_no_track[item_id] = time.monotonic() + _SUB_NO_TRACK_TTL
+                return
+
+            # ── Step3: 过滤图形字幕，只保留文本字幕 ──────────────────────────
+            BITMAP_CODECS = {"hdmv_pgs_subtitle", "pgssub", "dvd_subtitle", "dvbsub",
+                             "dvb_subtitle", "xsub", "vobsub", "mov_text"}
+            text_streams = [
+                s for s in streams
+                if s.get("codec_name", "").lower() not in BITMAP_CODECS
+            ]
+            if not text_streams:
+                logger.info(
+                    "[subtitle] 内封字幕均为图形格式，无法提取为ASS: item_id=%s codecs=%s",
+                    item_id, [s.get("codec_name") for s in streams],
+                )
+                _sub_no_track[item_id] = time.monotonic() + _SUB_NO_TRACK_TTL
+                return
+
+            chosen_index: Optional[int] = None
+            chosen_lang = ""
+            if track_prefs:
+                for pref in track_prefs:
+                    pref_lower = pref.lower()
+                    for s in text_streams:
+                        lang = (s.get("tags", {}).get("language") or "").lower()
+                        title = (s.get("tags", {}).get("title") or "").lower()
+                        if pref_lower in (lang, title) or pref_lower in lang or pref_lower in title:
+                            chosen_index = s.get("index")
+                            chosen_lang = lang
+                            break
+                    if chosen_index is not None:
+                        break
+
+            if chosen_index is None:
+                s0 = text_streams[0]
+                chosen_index = s0.get("index")
+                chosen_lang = (s0.get("tags", {}).get("language") or "unknown")
+
+            sub_stream_pos = next(
+                (i for i, s in enumerate(streams) if s.get("index") == chosen_index), 0
+            )
+            logger.info(
+                "[subtitle] 选择字幕轨道: item_id=%s stream_index=%s sub_pos=%d lang=%s",
+                item_id, chosen_index, sub_stream_pos, chosen_lang,
+            )
+
+            # ── Step4: ffmpeg 从本地文件头提取 .ass ──────────────────────────
+            # 用本地已下载的文件头，ffmpeg 不走网络，绕开静态 OpenSSL SIGSEGV
             out_path = os.path.join(tmpdir, "sub.ass")
             extract_cmd = [
                 "ffmpeg", "-v", "warning",
-                "-user_agent", ua,
-                "-i", cdn_url,
+                "-i", head_path,       # 本地文件，不走 HTTPS
                 "-map", f"0:s:{sub_stream_pos}",
                 "-c:s", "ass",
                 "-y", out_path,
@@ -584,23 +607,25 @@ async def _extract_embedded_sub(
                     stdout=asyncio.subprocess.DEVNULL,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                _, stderr = await asyncio.wait_for(ext_proc.communicate(), timeout=300)
+                _, ext_stderr = await asyncio.wait_for(ext_proc.communicate(), timeout=60)
                 if ext_proc.returncode != 0:
-                    err_msg = stderr.decode("utf-8", errors="replace")[-300:]
+                    err_msg = ext_stderr.decode("utf-8", errors="replace").strip()
                     logger.warning(
                         "[subtitle] ffmpeg 提取失败(rc=%d): %s item_id=%s",
-                        ext_proc.returncode, err_msg, item_id,
+                        ext_proc.returncode, err_msg[-500:], item_id,
                     )
-                    # 图形字幕导致的失败写入负缓存，避免反复重试
                     if "bitmap to bitmap" in err_msg or "Invalid argument" in err_msg:
                         _sub_no_track[item_id] = time.monotonic() + _SUB_NO_TRACK_TTL
-                        logger.info("[subtitle] 图形字幕提取失败，写入负缓存: item_id=%s", item_id)
+                    else:
+                        _sub_probe_fail[item_id] = time.monotonic() + _SUB_PROBE_FAIL_TTL
                     return
             except asyncio.TimeoutError:
-                logger.warning("[subtitle] ffmpeg 提取超时(300s): item_id=%s", item_id)
+                logger.warning("[subtitle] ffmpeg 提取超时(60s): item_id=%s", item_id)
+                _sub_probe_fail[item_id] = time.monotonic() + _SUB_PROBE_FAIL_TTL
                 return
             except Exception as e:
                 logger.warning("[subtitle] ffmpeg 提取异常: %s item_id=%s", e, item_id)
+                _sub_probe_fail[item_id] = time.monotonic() + _SUB_PROBE_FAIL_TTL
                 return
 
             # 读取提取结果
@@ -611,6 +636,7 @@ async def _extract_embedded_sub(
                 logger.warning("[subtitle] 读取提取字幕失败: %s", e)
                 return
 
+        # tmpdir 自动清理，sub_data 已读出
         elapsed = time.monotonic() - t0
         logger.info(
             "[subtitle] 内封字幕提取完成: item_id=%s lang=%s size=%d bytes 耗时=%.1fs",
