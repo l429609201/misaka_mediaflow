@@ -38,9 +38,16 @@ _SUB_CACHE_TTL = 3600 * 6  # 6 小时
 _sub_extracting: set[str] = set()  # 正在提取中的 item_id
 
 # ── 无字幕负缓存（item_id → expire_ts）────────────────────────────────────────
-# 对确认没有内封字幕的文件记录 TTL，避免每次播放都重跑 ffprobe
+# 对【确认没有内封字幕轨道】的文件记录 TTL，避免每次播放都重跑 ffprobe
 _sub_no_track: dict[str, float] = {}  # {item_id: expire_ts}
-_SUB_NO_TRACK_TTL = 3600 * 2  # 2 小时（比字幕缓存短，允许用户重新挂字幕后重试）
+_SUB_NO_TRACK_TTL = 3600 * 2  # 2 小时
+
+# ── ffprobe 失败冷却期（item_id → expire_ts）──────────────────────────────────
+# 与 _sub_no_track 严格分离：
+#   _sub_no_track  = ffprobe 成功但确认无字幕轨道（语义明确）
+#   _sub_probe_fail = ffprobe 本身失败/超时（可能是临时问题，冷却后允许重试）
+_sub_probe_fail: dict[str, float] = {}  # {item_id: expire_ts}
+_SUB_PROBE_FAIL_TTL = 60  # 60 秒冷却，避免并发刷屏，但不长期封锁
 
 
 # ── 配置读取 ──────────────────────────────────────────────────────────────────
@@ -377,6 +384,12 @@ async def trigger_embedded_sub_extraction(
         logger.debug("[subtitle] 已确认无内封字幕，跳过: item_id=%s", item_id)
         return
 
+    # 检查 ffprobe 失败冷却期（与"无字幕"语义分离，冷却结束后允许重试）
+    probe_fail_expire = _sub_probe_fail.get(item_id)
+    if probe_fail_expire and time.monotonic() < probe_fail_expire:
+        logger.debug("[subtitle] ffprobe 失败冷却中，跳过: item_id=%s", item_id)
+        return
+
     track_prefs_raw = cfg.get("embedded_sub_tracks", "")
     try:
         track_prefs: list[str] = json.loads(track_prefs_raw) if track_prefs_raw else []
@@ -442,14 +455,11 @@ async def _extract_embedded_sub(
             probe_data = json.loads(stdout.decode("utf-8", errors="replace"))
         except asyncio.TimeoutError:
             logger.warning("[subtitle] ffprobe 超时: item_id=%s", item_id)
-            # 超时写短暂冷却期（5分钟），避免反复触发
-            _sub_no_track[item_id] = time.monotonic() + 300
+            _sub_probe_fail[item_id] = time.monotonic() + _SUB_PROBE_FAIL_TTL
             return
         except Exception as e:
             logger.warning("[subtitle] ffprobe 失败: %s item_id=%s", e, item_id)
-            # ffprobe 异常（包含 JSON 解析失败）写短暂冷却期（5分钟）
-            # 避免同一 item_id 在同一次播放请求中被反复触发（并发请求场景）
-            _sub_no_track[item_id] = time.monotonic() + 300
+            _sub_probe_fail[item_id] = time.monotonic() + _SUB_PROBE_FAIL_TTL
             return
 
         streams = probe_data.get("streams", [])
