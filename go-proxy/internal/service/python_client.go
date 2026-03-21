@@ -4,6 +4,7 @@
 package service
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -159,10 +160,11 @@ func (pc *PythonClient) CheckStrm(itemID, apiKey string) (bool, string, error) {
 
 // EmbeddedSubInfo 内封字幕元数据
 type EmbeddedSubInfo struct {
-	Cached bool   `json:"cached"`
-	Lang   string `json:"lang"`
-	Title  string `json:"title"`
-	Codec  string `json:"codec"`
+	Cached     bool   `json:"cached"`
+	Extracting bool   `json:"extracting"`
+	Lang       string `json:"lang"`
+	Title      string `json:"title"`
+	Codec      string `json:"codec"`
 }
 
 // GetEmbeddedSubInfo 查询某 item 是否有已提取的内封字幕及其元数据
@@ -187,6 +189,68 @@ func (pc *PythonClient) GetEmbeddedSubInfo(itemID string) *EmbeddedSubInfo {
 	}
 	return &info
 }
+
+// WaitEmbeddedSubInfo 等待内封字幕提取完成，最多等待 maxWait。
+// 若 item 正在提取中则轮询，提取完成后返回字幕信息；
+// 若等待超时或无字幕则返回 nil。
+func (pc *PythonClient) WaitEmbeddedSubInfo(itemID string, maxWait time.Duration) *EmbeddedSubInfo {
+	statusURL := fmt.Sprintf("%s/internal/subtitle/embedded/%s/status", pc.baseURL, itemID)
+	deadline := time.Now().Add(maxWait)
+	ticker := time.NewTicker(300 * time.Millisecond)
+	defer ticker.Stop()
+
+	for time.Now().Before(deadline) {
+		<-ticker.C
+		resp, err := pc.client.Get(statusURL)
+		if err != nil {
+			return nil
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		var status EmbeddedSubInfo
+		if err := json.Unmarshal(body, &status); err != nil {
+			return nil
+		}
+		if status.Cached {
+			return &status
+		}
+		if !status.Extracting {
+			// 已确认无字幕，不再等待
+			return nil
+		}
+		// status.Extracting==true → 继续等待
+	}
+	return nil
+}
+
+// WarmupEmbeddedSub 在 PlaybackInfo 阶段同步触发一次内封字幕提取，并短暂等待结果。
+func (pc *PythonClient) WarmupEmbeddedSub(itemID, cdnURL, userAgent, itemType string, waitTimeout time.Duration) *EmbeddedSubInfo {
+	payload := map[string]interface{}{
+		"item_id": itemID,
+		"cdn_url": cdnURL,
+		"user_agent": userAgent,
+		"item_type": itemType,
+		"wait_timeout": waitTimeout.Seconds(),
+	}
+	body, _ := json.Marshal(payload)
+	reqURL := fmt.Sprintf("%s/internal/subtitle/embedded/warmup", pc.baseURL)
+	resp, err := pc.client.Post(reqURL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil
+	}
+	var info EmbeddedSubInfo
+	if err := json.Unmarshal(respBody, &info); err != nil || !info.Cached {
+		return nil
+	}
+	return &info
+}
+
 
 func (pc *PythonClient) GetAPIInterval() float64 {
 	reqURL := fmt.Sprintf("%s/internal/p115/api-interval", pc.baseURL)

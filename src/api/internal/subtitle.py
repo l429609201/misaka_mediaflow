@@ -15,8 +15,9 @@ from src.services.subtitle_service import (
     proxy_to_font_in_ass,
     process_embedded_sub_with_font_in_ass,
     get_cached_embedded_sub,
-    get_cached_embedded_sub_info,
+    get_embedded_sub_status,
     trigger_embedded_sub_extraction,
+    warmup_embedded_subtitle,
     _load_config,
 )
 
@@ -163,24 +164,40 @@ async def subtitle_embedded(item_id: str):
         },
     )
 
-@router.get("/subtitle/embedded/{item_id}/info")
-async def subtitle_embedded_info(item_id: str):
-    """
-    返回已缓存的内封字幕元数据（lang/title/codec），供 Go 注入 PlaybackInfo。
-    未命中返回 404。
-    """
-    info = get_cached_embedded_sub_info(item_id)
-    if info is None:
-        return JSONResponse({"cached": False}, status_code=404)
-    return JSONResponse({
-        "cached": True,
-        "lang":   info.get("lang", ""),
-        "title":  info.get("title", ""),
-        "codec":  info.get("codec", "ass"),
-    })
+@router.get("/subtitle/embedded/{item_id}/status")
+async def subtitle_embedded_status(item_id: str):
+    """返回内封字幕缓存/提取状态，供 Go 在 PlaybackInfo 阶段轮询等待。"""
+    return JSONResponse(get_embedded_sub_status(item_id))
 
 
+@router.post("/subtitle/embedded/warmup")
+async def subtitle_embedded_warmup(request: Request):
+    """同步预热内封字幕，供 Go 在 PlaybackInfo 阶段调用。"""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json"}, status_code=400)
 
+    item_id = body.get("item_id", "")
+    cdn_url = body.get("cdn_url", "")
+    user_agent = body.get("user_agent", "")
+    item_type = body.get("item_type", "")
+    wait_timeout = float(body.get("wait_timeout", 3.5) or 3.5)
+
+    if not item_id or not cdn_url:
+        return JSONResponse({"error": "missing item_id or cdn_url"}, status_code=400)
+
+    status = await warmup_embedded_subtitle(
+        item_id=item_id,
+        cdn_url=cdn_url,
+        user_agent=user_agent,
+        item_type=item_type,
+        wait_timeout=wait_timeout,
+    )
+    return JSONResponse(status)
+
+
+@router.get("/subtitle/config")
 async def subtitle_config():
     """
     返回当前字幕功能配置。
@@ -189,7 +206,7 @@ async def subtitle_config():
     cfg = await _load_config()
     return {
         "font_in_ass_enabled": cfg.get("font_in_ass_enabled", "false").lower() == "true",
-        "font_in_ass_url":     cfg.get("font_in_ass_url", ""),
+        "font_in_ass_url": cfg.get("font_in_ass_url", ""),
         "embedded_sub_enabled": cfg.get("embedded_sub_enabled", "false").lower() == "true",
         "embedded_sub_tracks": cfg.get("embedded_sub_tracks", ""),
     }

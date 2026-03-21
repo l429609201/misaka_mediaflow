@@ -434,6 +434,46 @@ async def trigger_embedded_sub_extraction(
     )
 
 
+def get_embedded_sub_status(item_id: str) -> dict:
+    """返回内封字幕当前状态，供 Go 轮询等待。"""
+    info = get_cached_embedded_sub_info(item_id)
+    return {
+        "cached": info is not None,
+        "extracting": item_id in _sub_extracting,
+        "lang": (info or {}).get("lang", ""),
+        "title": (info or {}).get("title", ""),
+        "codec": (info or {}).get("codec", "ass"),
+    }
+
+
+async def warmup_embedded_subtitle(
+    item_id: str,
+    cdn_url: str,
+    user_agent: str = "",
+    item_type: str = "",
+    wait_timeout: float = 3.5,
+) -> dict:
+    """
+    PlaybackInfo 阶段同步预热内封字幕：
+    1. 先触发后台提取
+    2. 若已有缓存则立即返回
+    3. 否则在短时间内轮询等待提取结果
+    """
+    await trigger_embedded_sub_extraction(item_id, cdn_url, user_agent, item_type)
+
+    deadline = time.monotonic() + max(wait_timeout, 0.1)
+    while time.monotonic() < deadline:
+        status = get_embedded_sub_status(item_id)
+        if status["cached"]:
+            return status
+        if not status["extracting"]:
+            return status
+        await asyncio.sleep(0.25)
+
+    return get_embedded_sub_status(item_id)
+
+
+
 # ── 内封字幕提取核心（异步，后台运行）────────────────────────────────────────
 
 async def _extract_embedded_sub(
