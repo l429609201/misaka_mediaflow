@@ -31,3 +31,7 @@ p115client
 
 # ---- Utils ----
 python-multipart>=0.0.9
+
+# ---- Subtitle font subsetting (builtin engine) ----
+fonttools>=4.51.0         # font subsetting: pyftsubset
+brotli>=1.1.0             # fonttools woff2 compression (optional but recommended)

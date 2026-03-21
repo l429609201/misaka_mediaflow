@@ -60,6 +60,7 @@ async def _load_config() -> dict:
         keys = [
             "font_in_ass_enabled",
             "font_in_ass_url",
+            "subtitle_engine",           # "builtin" | "external"（默认 external）
             "embedded_sub_enabled",
             "embedded_sub_tracks",
             "embedded_sub_include_movies",
@@ -157,35 +158,30 @@ async def proxy_to_font_in_ass(
     request_headers: dict,
 ) -> Optional[tuple[int, bytes, dict]]:
     """
-    模拟 fontInAss nginx 模式：
-      1. 自己从 Emby 拉取原始字幕内容
-      2. 把字幕字节 POST 给 fontInAss /fontinass/process_bytes 处理
-      3. 返回子集化后的内容给播放器
-
-    fontInAss README 原理说明：
-      拦截 /videos/(.*)/Subtitles 请求，将内容发送到程序处理后，替换原本的内容返回给客户端
-
-    Args:
-        original_path:   原始请求路径，如 /emby/videos/123/Subtitles/1/0/Stream.ass
-        query_string:    原始 query string（含 api_key 等）
-        request_headers: 原始请求头（透传 Cookie/Authorization）
-
-    Returns:
-        (status_code, body_bytes, response_headers)  或 None（未启用/失败）
+    字幕子集化主路由（nginx 模式）：
+      1. 从 Emby 拉取原始字幕内容
+      2. 根据 subtitle_engine 配置选择处理引擎：
+         - builtin : 内置 fonttools 引擎（无需外部服务）
+         - external: 转发给外置 fontInAss process_bytes（默认）
+      3. 返回处理后的字幕给播放器，失败时降级返回原始内容
     """
     cfg = await _load_config()
     if cfg.get("font_in_ass_enabled", "").lower() != "true":
         return None
 
-    base_url = (cfg.get("font_in_ass_url") or "").rstrip("/")
-    if not base_url:
-        logger.warning("[subtitle] fontInAss 已启用但未配置地址")
-        return None
+    engine = cfg.get("subtitle_engine", "external").strip().lower()  # builtin / external
+
+    # 外置引擎额外检查 URL
+    if engine != "builtin":
+        base_url = (cfg.get("font_in_ass_url") or "").rstrip("/")
+        if not base_url:
+            logger.warning("[subtitle] 外置引擎已启用但未配置 fontInAss 地址")
+            return None
 
     # ── Step1: 获取 Emby 地址 ────────────────────────────────────────────────
     emby_host = await _get_emby_host()
     if not emby_host:
-        logger.warning("[subtitle] 无法获取 Emby 地址，fontInAss 无法工作")
+        logger.warning("[subtitle] 无法获取 Emby 地址，字幕子集化无法工作")
         return None
 
     # ── Step2: 从 Emby 拉取原始字幕内容 ─────────────────────────────────────
@@ -193,7 +189,6 @@ async def proxy_to_font_in_ass(
     if query_string:
         emby_url = f"{emby_url}?{query_string}"
 
-    # 只透传必要头，避免 Host 冲突
     forward_headers = {}
     for h in ("authorization", "x-emby-token", "x-emby-authorization", "cookie"):
         v = request_headers.get(h) or request_headers.get(h.title())
@@ -204,24 +199,53 @@ async def proxy_to_font_in_ass(
         async with httpx.AsyncClient(timeout=30) as client:
             emby_resp = await client.get(emby_url, headers=forward_headers, follow_redirects=True)
             if emby_resp.status_code != 200:
-                logger.warning(
-                    "[subtitle] 从 Emby 拉取字幕失败: status=%d url=%s",
-                    emby_resp.status_code, emby_url,
-                )
+                logger.warning("[subtitle] 从 Emby 拉取字幕失败: status=%d url=%s",
+                               emby_resp.status_code, emby_url)
                 return None
             sub_bytes = emby_resp.content
             if not sub_bytes:
-                logger.warning("[subtitle] Emby 返回空字幕内容: url=%s", emby_url)
+                logger.warning("[subtitle] Emby 返回空字幕: url=%s", emby_url)
                 return None
-            logger.info(
-                "[subtitle] 从 Emby 拉取字幕成功: path=%s size=%d bytes",
-                original_path, len(sub_bytes),
-            )
+            logger.info("[subtitle] 从 Emby 拉取字幕成功: path=%s size=%d bytes",
+                        original_path, len(sub_bytes))
     except Exception as e:
         logger.warning("[subtitle] 从 Emby 拉取字幕异常: %s (url=%s)", e, emby_url)
         return None
 
-    # ── Step3: POST 字幕字节给 fontInAss process_bytes 处理 ──────────────────
+    # ── Step3A: 内置引擎 ──────────────────────────────────────────────────────
+    if engine == "builtin":
+        return await _process_with_builtin(sub_bytes, original_path)
+
+    # ── Step3B: 外置引擎（fontInAss process_bytes）───────────────────────────
+    return await _process_with_external(sub_bytes, original_path, base_url)
+
+
+async def _process_with_builtin(
+    sub_bytes: bytes,
+    original_path: str,
+) -> tuple[int, bytes, dict]:
+    """调用内置 fonttools 引擎处理字幕"""
+    try:
+        from src.services.subtitle_builtin import process_ass_builtin
+        result_bytes, missing = await process_ass_builtin(sub_bytes)
+        if missing:
+            logger.warning("[subtitle] 内置引擎字体缺失: path=%s 缺失=%s",
+                           original_path, missing)
+        logger.info("[subtitle] ✅ 内置引擎完成: %d bytes → %d bytes path=%s",
+                    len(sub_bytes), len(result_bytes), original_path)
+        return 200, result_bytes, {"content-type": "text/x-ssa; charset=utf-8"}
+    except Exception as e:
+        logger.warning("[subtitle] 内置引擎异常: %s path=%s", e, original_path)
+        return 200, sub_bytes, {"content-type": "text/plain; charset=utf-8"}
+
+
+async def _process_with_external(
+    sub_bytes: bytes,
+    original_path: str,
+    base_url: str,
+) -> tuple[int, bytes, dict]:
+    """调用外置 fontInAss process_bytes 接口处理字幕"""
+    import base64 as _b64
     process_url = f"{base_url}/fontinass/process_bytes"
     try:
         async with httpx.AsyncClient(timeout=60) as client:
@@ -230,56 +254,39 @@ async def proxy_to_font_in_ass(
                 content=sub_bytes,
                 headers={"Content-Type": "application/octet-stream"},
             )
-            import base64 as _b64
-            x_code = fa_resp.headers.get("X-Code", "")
-            # error header: base64 编码的字体缺失信息
-            error_raw = fa_resp.headers.get("error", "")
-            error_msg = ""
-            if error_raw:
-                try:
-                    error_msg = _b64.b64decode(error_raw).decode("utf-8", errors="replace").strip()
-                except Exception:
-                    error_msg = error_raw
+        x_code = fa_resp.headers.get("X-Code", "")
+        error_raw = fa_resp.headers.get("error", "")
+        error_msg = ""
+        if error_raw:
+            try:
+                error_msg = _b64.b64decode(error_raw).decode("utf-8", errors="replace").strip()
+            except Exception:
+                error_msg = error_raw
 
-            logger.debug(
-                "[subtitle] fontInAss 响应: status=%d X-Code=%s input=%d bytes output=%d bytes path=%s",
-                fa_resp.status_code, x_code, len(sub_bytes), len(fa_resp.content), original_path,
-            )
+        logger.debug("[subtitle] fontInAss 响应: status=%d X-Code=%s %d→%d bytes",
+                     fa_resp.status_code, x_code, len(sub_bytes), len(fa_resp.content))
 
-            # fontInAss X-Code: 空 或 "0" 表示成功，其他值为错误码
-            if x_code not in ("", "0"):
-                logger.warning(
-                    "[subtitle] fontInAss 处理失败: X-Code=%s path=%s",
-                    x_code, original_path,
-                )
-                # 降级返回原始字幕，保证播放器不卡住
-                return 200, sub_bytes, {"content-type": "text/plain; charset=utf-8"}
+        if x_code not in ("", "0"):
+            logger.warning("[subtitle] fontInAss 失败: X-Code=%s path=%s", x_code, original_path)
+            return 200, sub_bytes, {"content-type": "text/plain; charset=utf-8"}
 
-            result_bytes = fa_resp.content
-            if len(result_bytes) == 0:
-                logger.warning(
-                    "[subtitle] fontInAss 返回空内容，降级返回原始字幕: path=%s",
-                    original_path,
-                )
-                return 200, sub_bytes, {"content-type": "text/plain; charset=utf-8"}
+        result_bytes = fa_resp.content
+        if not result_bytes:
+            logger.warning("[subtitle] fontInAss 返回空内容，降级: path=%s", original_path)
+            return 200, sub_bytes, {"content-type": "text/plain; charset=utf-8"}
 
-            if error_msg:
-                logger.warning("[subtitle] fontInAss 字体缺失: path=%s\n%s", original_path, error_msg)
+        if error_msg:
+            logger.warning("[subtitle] fontInAss 字体缺失: path=%s\n%s", original_path, error_msg)
 
-            logger.info(
-                "[subtitle] ✅ fontInAss 子集化成功: %d bytes → %d bytes path=%s",
-                len(sub_bytes), len(result_bytes), original_path,
-            )
-            resp_headers = {
-                k: v for k, v in fa_resp.headers.items()
-                if k.lower() in ("content-type", "content-encoding")
-            }
-            if "content-type" not in {k.lower() for k in resp_headers}:
-                resp_headers["content-type"] = "text/x-ssa; charset=utf-8"
-            return 200, result_bytes, resp_headers
+        logger.info("[subtitle] ✅ 外置引擎完成: %d bytes → %d bytes path=%s",
+                    len(sub_bytes), len(result_bytes), original_path)
+        resp_headers = {k: v for k, v in fa_resp.headers.items()
+                        if k.lower() in ("content-type", "content-encoding")}
+        if "content-type" not in {k.lower() for k in resp_headers}:
+            resp_headers["content-type"] = "text/x-ssa; charset=utf-8"
+        return 200, result_bytes, resp_headers
     except Exception as e:
         logger.warning("[subtitle] fontInAss process_bytes 异常: %s path=%s", e, original_path)
-        # 降级返回原始字幕
         return 200, sub_bytes, {"content-type": "text/plain; charset=utf-8"}
 
 
