@@ -63,7 +63,7 @@ COPY requirements.txt .
 # --no-compile: 不生成 .pyc (运行时 PYTHONDONTWRITEBYTECODE=1)
 RUN pip install --no-cache-dir --no-compile -r requirements.txt --target .
 
-# 清理：删除测试/文档/类型桩/缓存，压缩体积
+# 清理：删除测试/文档/类型桩/缓存，strip .so 调试符号，压缩体积
 RUN find . -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null; \
     find . -type f -name '*.pyc' -delete 2>/dev/null; \
     find . -type f -name '*.pyo' -delete 2>/dev/null; \
@@ -73,6 +73,9 @@ RUN find . -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null; \
     find . -type d -name 'docs' -exec rm -rf {} + 2>/dev/null; \
     find . -type d -name 'doc' -exec rm -rf {} + 2>/dev/null; \
     find . -type f -name '*.pyi' -delete 2>/dev/null; \
+    find . -name 'fonttools/ttLib/tables/otTables.py' -o -name 'fonttools/misc/testTools.py' | xargs rm -f 2>/dev/null; \
+    find . -name 'fonttools/feaLib/data' -type d -exec rm -rf {} + 2>/dev/null; \
+    find . -type f -name '*.so' | xargs strip --strip-unneeded 2>/dev/null; \
     true
 
 
