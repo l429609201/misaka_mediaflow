@@ -592,9 +592,9 @@ async def stream_logs(request: Request):
         if not ok:
             raise HTTPException(status_code=401, detail="Invalid token")
     else:
-        from src.core.security import _check_ip_whitelist
+        from src.core.security import _check_ip_whitelist_async
         client_ip = request.client.host if request.client else ""
-        if not _check_ip_whitelist(client_ip):
+        if not await _check_ip_whitelist_async(client_ip):
             raise HTTPException(status_code=401, detail="Unauthorized")
 
     async def event_generator():
