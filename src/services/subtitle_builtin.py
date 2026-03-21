@@ -676,8 +676,20 @@ async def _process_ass_content(ass_text: str, raw_bytes: bytes) -> tuple:
     for key in font_chars:
         fname, subfamily = (key.rsplit("^", 1) if "^" in key
                             else (key, _VARIANT_REGULAR))
+        is_bold   = "Bold"   in subfamily
+        is_italic = "Italic" in subfamily
 
-        loc = find_local_font(fname, subfamily)
+        # ── 优先查 DB 字体索引（持久化缓存，重启不丢失）─────────────────────────
+        loc = None
+        try:
+            from src.services.font_index_service import find_font_in_db
+            loc = await find_font_in_db(fname, is_bold=is_bold, is_italic=is_italic)
+        except Exception:
+            pass
+
+        # ── DB 未命中 → 降级内存扫描（兜底，保持兼容）──────────────────────────
+        if not loc:
+            loc = find_local_font(fname, subfamily)
         if not loc:
             loc = find_downloaded_font(fname, subfamily)
         if not loc:
