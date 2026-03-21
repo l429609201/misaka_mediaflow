@@ -15,7 +15,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -666,30 +665,13 @@ func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 	}
 
 	// ── 注入内封字幕到 MediaStreams ──────────────────────────────────────────
-	// 查询 Python 是否有该 item 的内封字幕缓存，有则注入为外挂字幕条目，
-	// 这样 Emby 界面字幕列表里就能显示并让用户选择
+	// 只查缓存，不阻塞等待。302 goroutine 负责异步 warmup，第二次播放命中缓存后注入。
 	subInfo := h.pyClient.GetEmbeddedSubInfo(itemID)
-	if subInfo == nil {
-		// 缓存未命中 → 同步预热：先拿 CDN 直链，再触发字幕提取等待最多 4s
-		// 这样第一次播放就能把字幕注入进 PlaybackInfo，播放器当次就能看到字幕
-		userAgent := resp.Request.Header.Get("User-Agent")
-		userID := resp.Request.URL.Query().Get("UserId")
-		if userID == "" {
-			userID = resp.Request.URL.Query().Get("userId")
-		}
-		logger.Infof("[PlaybackInfo] itemId=%s 无字幕缓存，尝试同步预热内封字幕...", itemID)
-		result, resolveErr := h.pyClient.ResolveLink(itemID, 0, apiKey, userID, userAgent)
-		if resolveErr == nil && result != nil && result.URL != "" {
-			subInfo = h.pyClient.WarmupEmbeddedSub(itemID, result.URL, userAgent, "", 4*time.Second)
-			if subInfo != nil {
-				logger.Infof("[PlaybackInfo] itemId=%s 预热成功，本次 PlaybackInfo 将注入字幕 lang=%s codec=%s",
-					itemID, subInfo.Lang, subInfo.Codec)
-			} else {
-				logger.Infof("[PlaybackInfo] itemId=%s 预热超时或无内封字幕，跳过注入", itemID)
-			}
-		} else {
-			logger.Infof("[PlaybackInfo] itemId=%s ResolveLink 失败(%v)，跳过字幕预热", itemID, resolveErr)
-		}
+	if subInfo != nil {
+		logger.Infof("[PlaybackInfo] itemId=%s 命中字幕缓存，准备注入 lang=%s codec=%s",
+			itemID, subInfo.Lang, subInfo.Codec)
+	} else {
+		logger.Infof("[PlaybackInfo] itemId=%s 暂无字幕缓存，302后台将异步预热", itemID)
 	}
 
 	if subInfo != nil {
