@@ -773,17 +773,24 @@ async def _extract_embedded_sub(
             item_id, chosen_lang, len(sub_data), elapsed,
         )
 
-        # ── Step5: 尝试立即送 fontInAss 子集化，缓存处理后的结果 ────────────────
+        # ── Step5: 尝试立即子集化（内置 builtin 或外置 fontInAss 均支持），缓存结果 ──
+        # 使用与字幕请求时完全相同的引擎路径（process_subtitle_bytes），
+        # 保证 builtin / external 都能在提取后立即处理，而不是等到播放器请求时才处理。
         sub_info = {"lang": chosen_lang, "title": chosen_title, "codec": chosen_codec}
-        subsetted = await process_embedded_sub_with_font_in_ass(item_id, sub_data)
-        if subsetted is not None:
+        subset_result = await process_subtitle_bytes(
+            sub_bytes=sub_data,
+            item_id=item_id,
+            path_hint=f"embedded/{item_id}",
+        )
+        if subset_result is not None:
+            _, subsetted, _ = subset_result
             _set_cached_embedded_sub(item_id, subsetted, sub_info)
             logger.info(
                 "[subtitle] 内封字幕已子集化并缓存: item_id=%s %d bytes → %d bytes",
                 item_id, len(sub_data), len(subsetted),
             )
         else:
-            # fontInAss 未启用或失败，缓存原始 ASS
+            # 子集化未启用或失败，缓存原始 ASS（播放器请求时仍会尝试子集化）
             _set_cached_embedded_sub(item_id, sub_data, sub_info)
 
     except Exception as e:
