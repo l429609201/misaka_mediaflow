@@ -553,13 +553,16 @@ async def _extract_embedded_sub(
             ver_txt = ver_out.decode("utf-8", errors="replace").strip()
             if ver_proc.returncode != 0 or not ver_txt.startswith("ffprobe"):
                 logger.error(
-                    "[subtitle] ffprobe 二进制异常(rc=%s path=%s): %s",
+                    "[subtitle] ffprobe 二进制异常(rc=%s path=%s 输出=%s)，"
+                    "可能原因：架构不匹配/glibc版本/权限问题，跳过提取并进入冷却",
                     ver_proc.returncode, ffprobe_path, ver_txt[:300],
                 )
+                _sub_probe_fail[item_id] = time.monotonic() + _SUB_PROBE_FAIL_TTL
                 return
             logger.info("[subtitle] ffprobe 版本: %s", ver_txt.splitlines()[0])
         except Exception as e:
-            logger.error("[subtitle] ffprobe -version 执行失败: %s path=%s", e, ffprobe_path)
+            logger.error("[subtitle] ffprobe -version 执行失败: %s path=%s，进入冷却", e, ffprobe_path)
+            _sub_probe_fail[item_id] = time.monotonic() + _SUB_PROBE_FAIL_TTL
             return
 
         ua = user_agent or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
