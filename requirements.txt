@@ -9,7 +9,7 @@ sqlalchemy>=2.0.0
 alembic>=1.13.0
 # aiosqlite 已移除: 项目使用 MySQL/PostgreSQL，不再使用 SQLite
 asyncpg>=0.29.0
-psycopg2-binary>=2.9.9
+# psycopg2-binary 已移除: 项目使用异步 asyncpg，同步驱动不再需要（节省 ~15MB）
 pymysql>=1.1.0
 aiomysql>=0.2.0
 

@@ -8,7 +8,8 @@
 #
 # 基底: l429609201/su-exec:3.12 (Debian slim + Python 3.12 + su-exec)
 # 安全: su-exec 降权至 UID=1000 非 root 用户
-# ffmpeg: apt install（动态链接系统 OpenSSL，兼容性最佳，无 SIGSEGV 风险）
+# ffmpeg: 使用项目内预构建静态二进制（ffmpeg-image/{arch}/ffmpeg|ffprobe）
+#         体积约 60MB vs apt install ffmpeg 的 ~180MB，节省 ~120MB
 # =============================================================
 
 ARG GO_VERSION=1.22
@@ -49,10 +50,10 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
 FROM l429609201/su-exec:3.12 AS py-builder
 
 # 编译时依赖 (不会进入最终镜像)
+# libpq-dev 已移除: psycopg2-binary 已从 requirements.txt 删除，asyncpg 不需要 libpq-dev
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     python3-dev \
-    libpq-dev \
     default-libmysqlclient-dev \
     && rm -rf /var/lib/apt/lists/*
 
@@ -75,6 +76,13 @@ RUN find . -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null; \
     find . -type f -name '*.pyi' -delete 2>/dev/null; \
     find . -name 'fonttools/ttLib/tables/otTables.py' -o -name 'fonttools/misc/testTools.py' | xargs rm -f 2>/dev/null; \
     find . -name 'fonttools/feaLib/data' -type d -exec rm -rf {} + 2>/dev/null; \
+    find . -name 'fonttools/voltLib' -type d -exec rm -rf {} + 2>/dev/null; \
+    find . -name 'fonttools/mtiLib' -type d -exec rm -rf {} + 2>/dev/null; \
+    find . -name 'fonttools/designspaceLib' -type d -exec rm -rf {} + 2>/dev/null; \
+    find . -name 'fonttools/varLib' -type d -exec rm -rf {} + 2>/dev/null; \
+    find . -name 'fonttools/cu2qu' -type d -exec rm -rf {} + 2>/dev/null; \
+    find . -name 'fonttools/ttLib/tables/__pycache__' -type d -exec rm -rf {} + 2>/dev/null; \
+    find . -type f -name '*.fea' -delete 2>/dev/null; \
     find . -type f -name '*.so' | xargs strip --strip-unneeded 2>/dev/null; \
     true
 
@@ -92,17 +100,21 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# 运行时系统依赖
-# ffmpeg: 用 apt 动态链接版，兼容所有内核，无静态 OpenSSL SIGSEGV 问题
+# 运行时系统依赖（最小化）
+# ffmpeg 改用项目内预构建静态二进制，不再 apt install（节省 ~120MB libav* 动态库）
+# libpq5 随 psycopg2-binary 一起移除（项目已切换纯 asyncpg）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tzdata \
-    libpq5 \
     libmariadb3 \
-    ffmpeg \
     && addgroup --gid 1000 mediaflow \
     && adduser --shell /bin/sh --disabled-password --uid 1000 --gid 1000 mediaflow \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# 静态 ffmpeg/ffprobe 二进制（从项目 ffmpeg-image 目录复制）
+ARG TARGETARCH=amd64
+COPY --chmod=755 ffmpeg-image/${TARGETARCH}/ffmpeg  /usr/local/bin/ffmpeg
+COPY --chmod=755 ffmpeg-image/${TARGETARCH}/ffprobe /usr/local/bin/ffprobe
 
 # Python 依赖 (从编译阶段复制, 无 gcc/dev 残留)
 COPY --from=py-builder /install /usr/local/lib/python3.12/site-packages
