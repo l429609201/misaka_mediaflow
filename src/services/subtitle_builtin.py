@@ -517,6 +517,24 @@ def find_downloaded_font(name: str, subfamily: str = _VARIANT_REGULAR) -> Option
 # Part 3: 在线字体库（fontInAss onlineFonts.json）
 # ═══════════════════════════════════════════════════════════
 
+def _parse_online_index(raw) -> dict:
+    """
+    解析 onlineFonts.json，兼容新旧两种格式，返回 {小写字体名: entry_dict}。
+
+    旧格式（已废弃）: [{"name": "...", "url": "..."}, ...]
+    新格式（当前）:   [["baseUrl1", "baseUrl2"], {"字体名小写": [idx,...], ...}]
+      → 新格式目前无法直接下载单字体，直接返回空字典，不报错。
+    """
+    if not isinstance(raw, list) or len(raw) == 0:
+        return {}
+    # 旧格式：第一个元素是 dict 且含 "name" key
+    if isinstance(raw[0], dict) and "name" in raw[0]:
+        return {e["name"].strip().lower(): e for e in raw if isinstance(e, dict) and e.get("name")}
+    # 新格式：第一个元素是 list（CDN URL 数组），暂不支持下载
+    logger.debug("[builtin] onlineFonts.json 为新格式（CDN索引），在线下载暂不支持，跳过")
+    return {}
+
+
 async def _load_online_index() -> dict:
     """24h 更新一次的在线字体库索引，索引格式: {小写名: entry_dict}"""
     global _online_index, _online_index_at
@@ -529,10 +547,11 @@ async def _load_online_index() -> dict:
     if _ONLINE_DB_PATH.exists():
         try:
             raw = _json.loads(_ONLINE_DB_PATH.read_bytes())
-            _online_index = {e["name"].strip().lower(): e for e in raw if e.get("name")}
+            parsed = _parse_online_index(raw)
             _online_index_at = now
             age = now - _ONLINE_DB_PATH.stat().st_mtime
             if age < _ONLINE_DB_TTL:
+                _online_index = parsed
                 return _online_index
         except Exception as e:
             logger.debug("[builtin] 读取本地字体库索引失败: %s", e)
@@ -545,11 +564,11 @@ async def _load_online_index() -> dict:
             _ONLINE_DB_PATH.write_bytes(resp.content)
             import json as _json2
             raw = _json2.loads(resp.content)
-            _online_index = {e["name"].strip().lower(): e for e in raw if e.get("name")}
+            _online_index = _parse_online_index(raw)
             _online_index_at = now
-            logger.info("[builtin] 在线字体库更新: %d 条", len(_online_index))
+            logger.debug("[builtin] 在线字体库索引刷新: %d 条可用", len(_online_index))
     except Exception as e:
-        logger.warning("[builtin] 拉取在线字体库失败: %s", e)
+        logger.debug("[builtin] 拉取在线字体库失败: %s", e)
     return _online_index
 
 
@@ -668,9 +687,9 @@ async def _process_ass_content(ass_text: str, raw_bytes: bytes) -> tuple:
         logger.info("[builtin] ASS 无字体信息，直接返回原始内容")
         return raw_bytes, [], "text/x-ssa; charset=utf-8"
 
-    logger.info("[builtin] ASS 解析完成: 发现 %d 个字体 key", len(font_chars))
-    for key, codepoints in font_chars.items():
-        logger.info("[builtin]   字体key: %-40s  字符数=%d", key, len(codepoints))
+    logger.info("[builtin] ASS 解析: %d 个字体 key: %s",
+                len(font_chars),
+                ", ".join(f"{k}({v}字符)" for k, v in font_chars.items()))
 
     font_resolved: dict = {}
     missing: list = []
@@ -681,42 +700,31 @@ async def _process_ass_content(ass_text: str, raw_bytes: bytes) -> tuple:
         is_bold   = "Bold"   in subfamily
         is_italic = "Italic" in subfamily
 
-        logger.info("[builtin] 查找字体: [%s] (subfamily=%s bold=%s italic=%s)",
-                    fname, subfamily, is_bold, is_italic)
-
         # ── 优先查 DB 字体索引（持久化缓存，重启不丢失）─────────────────────────
         loc = None
-        source = None
         try:
             from src.services.font_index_service import find_font_in_db
             loc = await find_font_in_db(fname, is_bold=is_bold, is_italic=is_italic)
-            if loc:
-                source = "DB索引"
         except Exception:
             pass
 
         # ── DB 未命中 → 降级内存扫描（兜底，保持兼容）──────────────────────────
         if not loc:
             loc = find_local_font(fname, subfamily)
-            if loc:
-                source = "本地字体库"
         if not loc:
             loc = find_downloaded_font(fname, subfamily)
-            if loc:
-                source = "downloads缓存"
         if not loc:
-            logger.info("[builtin]   本地未找到 [%s]，尝试在线下载...", fname)
             loc = await download_font(fname)
-            if loc:
-                source = "在线下载"
 
         if loc:
             font_resolved[key] = loc
-            logger.info("[builtin]   ✅ 找到: [%s] → %s#%d  来源=%s",
-                        key, loc[0], loc[1], source)
         else:
-            logger.warning("[builtin]   ❌ 缺失: [%s] 本地+downloads+在线均未找到", key)
             missing.append(key)
+
+    # 一条日志汇总查找结果
+    found_summary = [f"✅{k}({font_resolved[k][0].rsplit('/', 1)[-1]})" for k in font_resolved]
+    miss_summary  = [f"❌{k}" for k in missing]
+    logger.info("[builtin] 字体查找: %s", "  ".join(found_summary + miss_summary) or "无")
 
     if not font_resolved:
         logger.warning("[builtin] 所有字体均缺失，返回原始字幕")
@@ -730,14 +738,6 @@ async def _process_ass_content(ass_text: str, raw_bytes: bytes) -> tuple:
         re_map[fk] |= font_chars[key]
         file_to_keys[fk].append(key)
 
-    logger.info("[builtin] reMap: %d 个 key → %d 个唯一字体文件（共享字体合并子集化）",
-                len(font_resolved), len(re_map))
-    for fk, keys in file_to_keys.items():
-        path, idx = fk
-        chars_count = len(re_map[fk])
-        logger.info("[builtin]   文件: %s#%d  合并后字符数=%d  对应key=%s",
-                    path, idx, chars_count, keys)
-
     # ── 并行子集化 ────────────────────────────────────────────────────────────
     async def _do_subset(fk: tuple) -> tuple:
         path, idx = fk
@@ -747,41 +747,36 @@ async def _process_ass_content(ass_text: str, raw_bytes: bytes) -> tuple:
 
     subset_results = await asyncio.gather(*[_do_subset(fk) for fk in re_map])
 
-    # ── UUEncode + 写入 [Fonts] + 汇总日志 ───────────────────────────────────
+    # ── UUEncode + 写入 [Fonts] ───────────────────────────────────────────────
     font_entries: dict = {}
-    subset_lines: list = []
+    subset_ok: list = []
+    subset_fail: list = []
     for fk, subset_bytes, orig_size in subset_results:
         path, idx = fk
         keys = file_to_keys[fk]
+        fname_short = path.rsplit("/", 1)[-1]
         if not subset_bytes:
             missing.extend(keys)
-            subset_lines.append(
-                f"  ❌ {path}#{idx}  原始={orig_size} bytes  子集化失败  key={keys}"
-            )
+            subset_fail.append(f"❌{fname_short}#{idx}")
             continue
         ratio = len(subset_bytes) / orig_size * 100 if orig_size else 0
-        subset_lines.append(
-            f"  ✅ {path}#{idx}  {orig_size} → {len(subset_bytes)} bytes"
-            f" ({ratio:.1f}%)  字符数={len(re_map[fk])}  key={keys}"
-        )
+        subset_ok.append(f"✅{fname_short}#{idx}({orig_size}→{len(subset_bytes)}B,{ratio:.0f}%)")
         for key in keys:
             fname = key.rsplit("^", 1)[0] if "^" in key else key
             font_entries[key] = _uuencode_font(subset_bytes, fname)
 
-    logger.info(
-        "[builtin] 子集化结果: %d 个字体文件\n%s",
-        len(re_map), "\n".join(subset_lines),
-    )
-
     if not font_entries:
-        logger.warning("[builtin] ❌ 子集化全部失败，返回原始字幕")
+        logger.warning("[builtin] 子集化全部失败，返回原始字幕  缺失=%s",
+                       ", ".join(missing))
         return raw_bytes, missing, "text/x-ssa; charset=utf-8"
 
     ass_out = _insert_fonts_section(ass_text, font_entries)
     out_bytes = ass_out.encode("utf-8")
     logger.info(
-        "[builtin] ✅ 子集化完成: 输入=%d bytes 输出=%d bytes 嵌入=%d/%d 字体key 缺失=%s",
-        len(raw_bytes), len(out_bytes), len(font_entries), len(font_chars), missing or "无",
+        "[builtin] ✅ 子集化完成: %d→%d bytes  成功=%s%s",
+        len(raw_bytes), len(out_bytes),
+        " ".join(subset_ok),
+        ("  失败=" + " ".join(subset_fail)) if subset_fail else "",
     )
     return out_bytes, missing, "text/x-ssa; charset=utf-8"
 
@@ -792,50 +787,47 @@ async def process_subtitle_builtin(raw_bytes: bytes) -> tuple:
     Returns: (processed_bytes, missing_fonts, content_type)
     """
     t0 = time.monotonic()
-    logger.info("[builtin] ▶ 开始处理: 输入大小=%d bytes", len(raw_bytes))
 
     cache_key = hashlib.md5(raw_bytes).hexdigest()
     now = t0
     if cache_key in _result_cache:
         cached_bytes, expire_ts = _result_cache[cache_key]
         if now < expire_ts:
-            logger.info("[builtin] ✅ 命中结果缓存: key=%s 输出=%d bytes",
-                        cache_key[:8], len(cached_bytes))
+            logger.debug("[builtin] 命中结果缓存: key=%s %d bytes", cache_key[:8], len(cached_bytes))
             return cached_bytes, [], "text/x-ssa; charset=utf-8"
         del _result_cache[cache_key]
 
     fmt = _detect_format(raw_bytes)
-    logger.info("[builtin] 检测到字幕格式: %s", fmt)
 
     if fmt == "vtt":
-        logger.info("[builtin] VTT 格式，跳过子集化直接返回")
         return raw_bytes, [], "text/vtt; charset=utf-8"
     if fmt == "unknown":
-        logger.info("[builtin] 未知格式，跳过子集化直接返回")
         return raw_bytes, [], "text/plain; charset=utf-8"
 
+    enc_used = "utf-8"
     for enc in ("utf-8-sig", "gbk", "latin-1"):
         try:
             text = raw_bytes.decode(enc)
-            logger.info("[builtin] 字幕编码: %s", enc)
+            enc_used = enc
             break
         except Exception:
             continue
     else:
         text = raw_bytes.decode("utf-8", errors="replace")
-        logger.info("[builtin] 字幕编码: utf-8(fallback)")
 
     if fmt == "srt":
-        logger.info("[builtin] SRT → ASS 转换再子集化")
         text = srt_to_ass(text)
 
+    logger.info("[builtin] 开始子集化: fmt=%s enc=%s size=%d bytes", fmt, enc_used, len(raw_bytes))
     result_bytes, missing, ct = await _process_ass_content(text, raw_bytes)
 
     elapsed = time.monotonic() - t0
-    logger.info(
-        "[builtin] ✅ 处理完成: 输入=%d bytes 输出=%d bytes 耗时=%.2fs 缺失字体=%s",
-        len(raw_bytes), len(result_bytes), elapsed, missing or "无",
-    )
+    if missing:
+        logger.warning("[builtin] 子集化完成: %d→%d bytes 耗时=%.1fs 缺失字体=%s",
+                       len(raw_bytes), len(result_bytes), elapsed, ", ".join(missing))
+    else:
+        logger.info("[builtin] 子集化完成: %d→%d bytes 耗时=%.1fs",
+                    len(raw_bytes), len(result_bytes), elapsed)
 
     _result_cache[cache_key] = (result_bytes, now + _RESULT_CACHE_TTL)
     if len(_result_cache) > _RESULT_CACHE_MAX:
