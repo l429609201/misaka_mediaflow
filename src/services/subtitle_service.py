@@ -223,17 +223,17 @@ async def proxy_to_font_in_ass(
 async def _process_with_builtin(
     sub_bytes: bytes,
     original_path: str,
-) -> tuple[int, bytes, dict]:
-    """调用内置 fonttools 引擎处理字幕"""
+) -> tuple:
+    """调用内置 fonttools 引擎处理字幕（支持 ASS/SRT/VTT/其他）"""
     try:
-        from src.services.subtitle_builtin import process_ass_builtin
-        result_bytes, missing = await process_ass_builtin(sub_bytes)
+        from src.services.subtitle_builtin import process_subtitle_builtin
+        result_bytes, missing, content_type = await process_subtitle_builtin(sub_bytes)
         if missing:
             logger.warning("[subtitle] 内置引擎字体缺失: path=%s 缺失=%s",
                            original_path, missing)
         logger.info("[subtitle] ✅ 内置引擎完成: %d bytes → %d bytes path=%s",
                     len(sub_bytes), len(result_bytes), original_path)
-        return 200, result_bytes, {"content-type": "text/x-ssa; charset=utf-8"}
+        return 200, result_bytes, {"content-type": content_type}
     except Exception as e:
         logger.warning("[subtitle] 内置引擎异常: %s path=%s", e, original_path)
         return 200, sub_bytes, {"content-type": "text/plain; charset=utf-8"}
