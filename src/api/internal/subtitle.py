@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 
 from src.services.subtitle_service import (
     proxy_to_font_in_ass,
-    process_embedded_sub_with_font_in_ass,
+    process_subtitle_bytes,
     get_cached_embedded_sub,
     get_embedded_sub_status,
     trigger_embedded_sub_extraction,
@@ -67,17 +67,24 @@ async def subtitle_proxy(request: Request):
         embedded_data = get_cached_embedded_sub(item_id)
         if embedded_data is not None:
             logger.info("[subtitle] 命中内封字幕缓存: item_id=%s size=%d bytes", item_id, len(embedded_data))
-            subsetted = await process_embedded_sub_with_font_in_ass(item_id, embedded_data)
-            if subsetted is not None:
-                logger.info("[subtitle] ✅ 内封字幕子集化完成: item_id=%s %d→%d bytes",
-                            item_id, len(embedded_data), len(subsetted))
+            # 走统一子集化引擎（外置 fontInAss 或内置 fonttools，与外挂字幕逻辑完全相同）
+            result = await process_subtitle_bytes(
+                sub_bytes=embedded_data,
+                item_id=item_id,
+                path_hint=original_path,
+            )
+            if result is not None:
+                status_code, body, headers = result
+                logger.info("[subtitle] ✅ 内封字幕子集化完成: item_id=%s %d→%d bytes engine=%s",
+                            item_id, len(embedded_data), len(body),
+                            headers.get("X-Subtitle-Engine", "?"))
                 return Response(
-                    content=subsetted,
-                    status_code=200,
-                    media_type="text/x-ssa",
-                    headers={"X-Subtitle-Source": "embedded-subsetted"},
+                    content=body,
+                    status_code=status_code,
+                    headers={"X-Subtitle-Source": "embedded-subsetted", **headers},
+                    media_type=headers.get("content-type", "text/plain; charset=utf-8"),
                 )
-            # 子集化未启用或失败 → 直接返回原始内封字幕（不降级到 Emby）
+            # 引擎未启用 → 直接返回原始内封字幕
             logger.info("[subtitle] 内封字幕直接返回(子集化未启用): item_id=%s size=%d bytes",
                         item_id, len(embedded_data))
             return Response(

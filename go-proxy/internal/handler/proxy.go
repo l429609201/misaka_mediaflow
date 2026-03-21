@@ -703,32 +703,33 @@ func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 		}
 
 		// 根据实际 codec 决定扩展名
-		// subrip → srt，ass/ssa → ass，其余默认 srt
 		streamExt := "srt"
+		embyCodec := "subrip"
 		switch strings.ToLower(subInfo.Codec) {
 		case "ass", "ssa":
 			streamExt = "ass"
+			embyCodec = "ass"
 		}
 
 		deliveryURL := fmt.Sprintf("/emby/Videos/%s/Subtitles/embedded/0/Stream.%s", itemID, streamExt)
 
-		// 注入到每个 MediaSource 的 ExternalSubtitles 数组
-		// Emby 播放器从 ExternalSubtitles 读外挂字幕列表，不干扰 MediaStreams 中的视频/音频轨道
+		// 注入到每个 MediaSource 的 MediaStreams（与 Emby 外挂字幕字段完全对齐）
+		// SubtitleLocationType="External" 是播放器判断"可请求外挂字幕"的关键字段
 		for _, ms := range mediaSources {
 			source, ok := ms.(map[string]interface{})
 			if !ok {
 				continue
 			}
-			extSubs, _ := source["ExternalSubtitles"].([]interface{})
+			existingStreams, _ := source["MediaStreams"].([]interface{})
 
-			// 避免重复注入（已有 embedded 字幕则跳过）
+			// 避免重复注入
 			alreadyInjected := false
-			for _, es := range extSubs {
-				esm, ok2 := es.(map[string]interface{})
+			for _, s := range existingStreams {
+				sm, ok2 := s.(map[string]interface{})
 				if !ok2 {
 					continue
 				}
-				if url, _ := esm["DeliveryUrl"].(string); strings.Contains(url, "/Subtitles/embedded/") {
+				if url, _ := sm["DeliveryUrl"].(string); strings.Contains(url, "/Subtitles/embedded/") {
 					alreadyInjected = true
 					break
 				}
@@ -737,18 +738,40 @@ func (h *ProxyHandler) patchPlaybackInfo(resp *http.Response) error {
 				continue
 			}
 
-			injectedSub := map[string]interface{}{
-				"Codec":       subInfo.Codec,
-				"Language":    langDisplay,
-				"DisplayTitle": titleDisplay + " [内封]",
-				"Title":       titleDisplay,
-				"DeliveryUrl": deliveryURL,
-				"IsDefault":   false,
-				"IsForced":    false,
+			// 计算 Index
+			maxIdx := 0
+			for _, s := range existingStreams {
+				sm, ok2 := s.(map[string]interface{})
+				if !ok2 {
+					continue
+				}
+				if idx, ok3 := sm["Index"].(float64); ok3 && int(idx) > maxIdx {
+					maxIdx = int(idx)
+				}
 			}
-			source["ExternalSubtitles"] = append(extSubs, injectedSub)
-			logger.Infof("[PlaybackInfo] 注入内封字幕到 ExternalSubtitles: item_id=%s ext=%s lang=%s title=%s",
-				itemID, streamExt, langDisplay, titleDisplay)
+
+			injectedStream := map[string]interface{}{
+				"Codec":                  embyCodec,
+				"Type":                   "Subtitle",
+				"IsExternal":             true,
+				"IsTextSubtitleStream":   true,
+				"IsForced":               false,
+				"IsDefault":              false,
+				"Language":               langDisplay,
+				"DisplayTitle":           titleDisplay + " [内封]",
+				"Title":                  titleDisplay,
+				"DeliveryMethod":         "External",
+				"DeliveryUrl":            deliveryURL,
+				"IsExternalUrl":          false,
+				"SupportsExternalStream": true,
+				"SubtitleLocationType":   "External",
+				"Index":                  maxIdx + 1,
+			}
+			source["MediaStreams"] = append(existingStreams, injectedStream)
+			// 同时删除之前错误注入的 ExternalSubtitles（如果有）
+			delete(source, "ExternalSubtitles")
+			logger.Infof("[PlaybackInfo] 注入内封字幕: item_id=%s codec=%s ext=%s lang=%s DeliveryUrl=%s",
+				itemID, embyCodec, streamExt, langDisplay, deliveryURL)
 			break // 只注入第一个 MediaSource
 		}
 	}

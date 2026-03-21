@@ -158,6 +158,36 @@ async def process_embedded_sub_with_font_in_ass(
         return None
 
 
+async def process_subtitle_bytes(
+    sub_bytes: bytes,
+    item_id: str = "",
+    path_hint: str = "",
+) -> Optional[tuple[int, bytes, dict]]:
+    """
+    统一字幕子集化入口：支持外置 fontInAss 和内置 fonttools 引擎。
+    供内封字幕命中缓存时调用，与外挂字幕走同一套引擎逻辑。
+
+    Returns:
+        (status_code, body, headers) 或 None（引擎未启用）
+    """
+    cfg = await _load_config()
+    if cfg.get("font_in_ass_enabled", "").lower() != "true":
+        logger.info("[subtitle] 字幕子集化未启用，返回原始内容: item_id=%s", item_id)
+        return None
+
+    engine = cfg.get("subtitle_engine", "external").strip().lower()
+    logger.info("[subtitle] 子集化引擎=%s item_id=%s size=%d bytes", engine, item_id, len(sub_bytes))
+
+    if engine == "builtin":
+        return await _process_with_builtin(sub_bytes, path_hint or f"embedded/{item_id}")
+
+    base_url = (cfg.get("font_in_ass_url") or "").rstrip("/")
+    if not base_url:
+        logger.warning("[subtitle] 外置引擎未配置 font_in_ass_url，返回原始内容: item_id=%s", item_id)
+        return None
+    return await _process_with_external(sub_bytes, path_hint or f"embedded/{item_id}", base_url)
+
+
 # ── 公开接口：fontInAss 转发（nginx 模式）─────────────────────────────────────
 
 async def proxy_to_font_in_ass(
