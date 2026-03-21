@@ -49,10 +49,12 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
 
 
 # ==================== 阶段 3: 获取静态 ffmpeg ====================
-# 从 Docker Hub 自有镜像取预编译静态二进制，零外部网络依赖，秒完成。
-# 镜像制作方式见 README（本地下载 johnvansickle 构建后推送到 Docker Hub）。
-# 完全静态链接，无任何 .so 运行时依赖，支持全格式字幕提取。
-FROM --platform=$TARGETPLATFORM l429609201/ffmpeg-static:latest AS ffmpeg-fetcher
+# 二进制来自仓库 ffmpeg-image/{amd64,arm64}/（John Van Sickle 静态构建）
+# 完全静态链接，无任何 .so 运行时依赖，支持全格式字幕提取，约 40~76MB
+FROM scratch AS ffmpeg-fetcher
+ARG TARGETARCH
+COPY ffmpeg-image/${TARGETARCH}/ffmpeg  /ffmpeg
+COPY ffmpeg-image/${TARGETARCH}/ffprobe /ffprobe
 
 
 # ==================== 阶段 4: Python 依赖编译 ====================
