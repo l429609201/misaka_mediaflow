@@ -8,7 +8,6 @@
 package handler
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -95,49 +94,78 @@ func (h *RedirectHandler) HandleVideoStream(c *gin.Context) {
 
 	c.Redirect(http.StatusFound, cdnURL)
 
-	// ⭐ 302 成功后，fire-and-forget 通知 Python 触发内封字幕提取
-	// 只在 MKV/MKS 文件时触发（字幕通常在 MKV 容器中）
-	// 异步查询 item_type（Movie/Episode），由 Python 端决定是否跳过电影
+	// ⭐ 302 成功后，goroutine 预热内封字幕（等待提取完成）
+	// 提取完成后向客户端推 Emby 消息，引导用户重新选择字幕
+	// 不阻塞 302 响应：goroutine 在后台运行
 	go func() {
-		// 查询 item 类型（复用 CheckStrm 接口，附带返回 item_type）
+		// 查询 item 类型
 		_, itemType, err := h.pyClient.CheckStrm(itemID, apiKeyStr)
 		if err != nil {
-			itemType = "" // 查询失败时留空，Python 端兼容空值（不过滤）
+			itemType = ""
 		}
-		h.triggerEmbeddedSubExtraction(itemID, result.URL, userAgent, itemType)
+		// warmup：触发提取并等待最多 5 秒
+		warmed := h.pyClient.WarmupEmbeddedSub(itemID, result.URL, userAgent, itemType, 5*time.Second)
+		if warmed == nil || !warmed.Cached {
+			// 无内封字幕或提取失败，什么都不做
+			return
+		}
+		logger.Infof("[subtitle] 内封字幕就绪，item_id=%s lang=%s，通知 Emby 刷新字幕", itemID, warmed.Lang)
+		// 通知 Emby 会话刷新：发送 DisplayMessage 让播放器弹提示
+		h.notifyEmbeddedSubReady(itemID, warmed.Lang, apiKeyStr)
 	}()
 }
 
-// triggerEmbeddedSubExtraction 异步通知 Python 触发内封字幕提取
-// 在独立 goroutine 中执行，302 响应不等待此结果
-// 注意：不在 Go 端做格式过滤，115 CDN 直链可能不含扩展名；
-// 由 Python 端 ffprobe 探测是否存在字幕轨道，无轨道则写负缓存。
-func (h *RedirectHandler) triggerEmbeddedSubExtraction(itemID, cdnURL, userAgent, itemType string) {
-	pyBase := strings.TrimRight(h.pyClient.BaseURL(), "/")
-	pyURL := pyBase + "/internal/subtitle/trigger"
-
-	payload := map[string]string{
-		"item_id":    itemID,
-		"cdn_url":    cdnURL,
-		"user_agent": userAgent,
-		"item_type":  itemType, // Movie / Episode / 空(兼容旧版)
-	}
-	body, _ := json.Marshal(payload)
-
-	req, err := http.NewRequest(http.MethodPost, pyURL, bytes.NewReader(body))
-	if err != nil {
+// notifyEmbeddedSubReady 内封字幕就绪后，通过 Emby API 向所有活跃 session 发送消息
+// 提示用户字幕已就绪，下次切换或重新选字幕时生效
+func (h *RedirectHandler) notifyEmbeddedSubReady(itemID, lang, apiKey string) {
+	embyHost := strings.TrimRight(h.cfg.MediaServer.Host, "/")
+	if embyHost == "" || apiKey == "" {
 		return
 	}
-	req.Header.Set("Content-Type", "application/json")
+
+	// 查询所有 Session，找到正在播放 itemID 的会话
+	sessURL := fmt.Sprintf("%s/emby/Sessions?api_key=%s", embyHost, apiKey)
+	resp, err := (&http.Client{Timeout: 3 * time.Second}).Get(sessURL)
+	if err != nil {
+		logger.Debugf("[subtitle] 查询 Emby Sessions 失败: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	sessBody, _ := io.ReadAll(resp.Body)
+
+	var sessions []map[string]interface{}
+	if err := json.Unmarshal(sessBody, &sessions); err != nil {
+		return
+	}
 
 	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		logger.Debugf("[subtitle] 触发内封字幕提取失败: %v", err)
-		return
+	notified := 0
+	for _, sess := range sessions {
+		// 找正在播放目标 item 的 session
+		nowPlaying, _ := sess["NowPlayingItem"].(map[string]interface{})
+		if nowPlaying == nil {
+			continue
+		}
+		playingID := fmt.Sprintf("%v", nowPlaying["Id"])
+		if playingID != itemID {
+			continue
+		}
+		sessID := fmt.Sprintf("%v", sess["Id"])
+		// 发送 DisplayMessage 通知
+		msgURL := fmt.Sprintf("%s/emby/Sessions/%s/Message?api_key=%s", embyHost, sessID, apiKey)
+		msgBody := fmt.Sprintf(`{"Header":"字幕已就绪","Text":"内封字幕(%s)已提取，请重新点击播放以加载字幕。","TimeoutMs":8000}`, lang)
+		req, _ := http.NewRequest(http.MethodPost, msgURL, strings.NewReader(msgBody))
+		req.Header.Set("Content-Type", "application/json")
+		r, err := client.Do(req)
+		if err == nil {
+			r.Body.Close()
+			notified++
+			logger.Infof("[subtitle] ✅ 已通知 session=%s 字幕就绪 lang=%s", sessID, lang)
+		}
 	}
-	resp.Body.Close()
-	logger.Debugf("[subtitle] 触发内封字幕提取: item_id=%s status=%d", itemID, resp.StatusCode)
+	if notified == 0 {
+		logger.Debugf("[subtitle] 未找到正在播放 item_id=%s 的活跃 session", itemID)
+	}
 }
 
 // proxyFallback 透传到 Emby

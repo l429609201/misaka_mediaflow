@@ -144,35 +144,9 @@ async def subtitle_trigger(request: Request):
     return {"accepted": True, "item_id": item_id}
 
 
-@router.get("/subtitle/embedded/{item_id}")
-async def subtitle_embedded(item_id: str):
-    """
-    返回已缓存的内封字幕（供 Go 字幕路由调用）。
-    未命中返回 404，Go 回退到透传 Emby。
-    """
-    data = get_cached_embedded_sub(item_id)
-    if data is None:
-        return JSONResponse({"cached": False}, status_code=404)
-
-    return Response(
-        content=data,
-        status_code=200,
-        media_type="text/plain; charset=utf-8",
-        headers={
-            "X-Subtitle-Source": "embedded-cache",
-            "Cache-Control": "no-cache",
-        },
-    )
-
-@router.get("/subtitle/embedded/{item_id}/status")
-async def subtitle_embedded_status(item_id: str):
-    """返回内封字幕缓存/提取状态，供 Go 在 PlaybackInfo 阶段轮询等待。"""
-    return JSONResponse(get_embedded_sub_status(item_id))
-
-
 @router.post("/subtitle/embedded/warmup")
 async def subtitle_embedded_warmup(request: Request):
-    """同步预热内封字幕，供 Go 在 PlaybackInfo 阶段调用。"""
+    """同步预热内封字幕，供 Go 在 302 触发后异步调用。"""
     try:
         body = await request.json()
     except Exception:
@@ -195,6 +169,33 @@ async def subtitle_embedded_warmup(request: Request):
         wait_timeout=wait_timeout,
     )
     return JSONResponse(status)
+
+
+@router.get("/subtitle/embedded/status/{item_id}")
+async def subtitle_embedded_status(item_id: str):
+    """返回内封字幕缓存/提取状态，供 Go 在 PlaybackInfo 阶段轮询等待。"""
+    return JSONResponse(get_embedded_sub_status(item_id))
+
+
+@router.get("/subtitle/embedded/{item_id}")
+async def subtitle_embedded(item_id: str):
+    """
+    返回已缓存的内封字幕（供 Go 字幕路由调用）。
+    未命中返回 404，Go 回退到透传 Emby。
+    """
+    data = get_cached_embedded_sub(item_id)
+    if data is None:
+        return JSONResponse({"cached": False}, status_code=404)
+
+    return Response(
+        content=data,
+        status_code=200,
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "X-Subtitle-Source": "embedded-cache",
+            "Cache-Control": "no-cache",
+        },
+    )
 
 
 @router.get("/subtitle/config")
