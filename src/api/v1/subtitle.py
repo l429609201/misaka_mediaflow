@@ -52,9 +52,11 @@ async def get_font_status():
     返回字体目录当前状态。
     包括：字体目录路径、DB 中已索引字体文件数量、face 总数、字体列表（前200条）。
     """
+    import json as _json
+    from sqlalchemy import select, func
     from src.services.font_index_service import _FONTS_ROOT, _FONTS_DOWNLOAD, _last_sync_at
     from src.db import get_async_session_local
-    from sqlalchemy import text
+    from src.db.models import FontFile, FontFace
 
     result = {
         "fonts_root": str(_FONTS_ROOT),
@@ -67,27 +69,27 @@ async def get_font_status():
 
     try:
         async with get_async_session_local() as db:
-            # 文件总数
-            row = await db.execute(text("SELECT COUNT(*) FROM font_file"))
-            result["file_count"] = row.scalar() or 0
+            result["file_count"] = (
+                await db.execute(select(func.count()).select_from(FontFile))
+            ).scalar() or 0
 
-            # face 总数
-            row = await db.execute(text("SELECT COUNT(*) FROM font_face"))
-            result["face_count"] = row.scalar() or 0
+            result["face_count"] = (
+                await db.execute(select(func.count()).select_from(FontFace))
+            ).scalar() or 0
 
-            # 字体列表（文件 + face 信息，前200）
-            rows = await db.execute(text(
-                "SELECT ff.path, ff.file_size, "
-                "       fc.face_index, fc.family_names, fc.full_names, "
-                "       fc.weight, fc.is_bold, fc.is_italic, fc.scanned_at "
-                "FROM font_face fc "
-                "JOIN font_file ff ON fc.file_id = ff.id "
-                "ORDER BY ff.path, fc.face_index "
-                "LIMIT 200"
-            ))
-            import json as _json
+            # 字体列表（join，前200条，按路径+face_index排序）
+            stmt = (
+                select(
+                    FontFile.path, FontFile.file_size,
+                    FontFace.face_index, FontFace.family_names, FontFace.full_names,
+                    FontFace.weight, FontFace.is_bold, FontFace.is_italic, FontFace.scanned_at,
+                )
+                .join(FontFace, FontFace.file_id == FontFile.id)
+                .order_by(FontFile.path, FontFace.face_index)
+                .limit(200)
+            )
             fonts = []
-            for r in rows.fetchall():
+            for r in (await db.execute(stmt)).fetchall():
                 try:
                     family = _json.loads(r.family_names) if r.family_names else []
                 except Exception:
