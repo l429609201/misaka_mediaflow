@@ -50,7 +50,7 @@ class CacheConfig(BaseModel):
     redis_url: str = ""                # Redis 连接地址，如 redis://:password@host:6379/0（仅 redis 模式需要）
     key_prefix: str = "mmf:"           # Redis key 前缀
     memory_maxsize: int = 10000        # 内存缓存最大条目数
-    memory_default_ttl: int = 600      # 默认缓存 TTL（秒），10 分钟
+    memory_default_ttl: int = 300      # 默认缓存 TTL（秒），5 分钟
 
 
 class RedisConfig(BaseModel):

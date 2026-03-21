@@ -23,7 +23,7 @@ import (
 
 const (
 	// 302 缓存上限（秒）：即使 CDN 直链有效期更长，浏览器也最多缓存这么久
-	redirectCacheMaxSec     = 600
+	redirectCacheMaxSec     = 300
 	// 当 Python 端未返回 expires_in 时的默认缓存时长
 	redirectCacheDefaultSec = 300
 )
