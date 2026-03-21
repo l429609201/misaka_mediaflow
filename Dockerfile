@@ -107,12 +107,6 @@ COPY --from=py-builder /install /usr/local/lib/python3.12/site-packages
 # 验证关键依赖能正常 import（构建时就发现问题，而不是运行时才报错）
 RUN python -c "import uvicorn; import fastapi; import p115client; print('All imports OK')"
 
-# 静态 ffmpeg/ffprobe（John Van Sickle 构建，完全静态，无运行时 .so 依赖）
-COPY --chmod=755 --from=ffmpeg-fetcher /ffmpeg  /usr/local/bin/ffmpeg
-COPY --chmod=755 --from=ffmpeg-fetcher /ffprobe /usr/local/bin/ffprobe
-RUN ffmpeg  -version 2>&1 | head -1 \
-    && ffprobe -version 2>&1 | head -1
-
 # 应用代码
 COPY src/ ./src/
 
