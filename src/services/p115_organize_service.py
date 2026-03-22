@@ -1,5 +1,18 @@
 # src/services/p115_organize_service.py
 # 115 文件整理分类服务（将网盘指定目录文件移动到分类目录）
+#
+# 分类规则数据结构（新版，支持关键词/正则/目录名匹配）：
+# categories: [
+#   {
+#     "name": "动漫",          # 分类名称
+#     "target_dir": "动漫",    # 目标子目录（相对于 target_root）
+#     "match_all": false,      # true=AND 全部规则匹配，false=OR 任一规则匹配
+#     "rules": [               # 匹配规则列表（空=兜底分类）
+#       {"type": "keyword", "field": "filename", "value": "动漫"},
+#       {"type": "regex",   "field": "dirname",  "value": "(?i)anime"},
+#     ]
+#   }
+# ]
 
 import asyncio
 import json
@@ -17,49 +30,106 @@ logger = logging.getLogger(__name__)
 _ORGANIZE_CONFIG_KEY = "p115_organize_config"
 _ORGANIZE_STATUS_KEY = "p115_organize_status"
 
-# 115 文件管理 API
 _115_MOVE_URL = "https://webapi.115.com/files/move"
 _115_MKDIR_URL = "https://webapi.115.com/files/add_folder"
 
-# 主分类关键词识别规则（正则匹配文件名）
-_CATEGORY_RULES = [
+# 默认分类规则配置（列表结构，支持关键词/正则/目录名匹配）
+_DEFAULT_CATEGORIES = [
     {
         "name": "动漫",
-        "patterns": [
-            r"(?i)(anime|动漫|动画|番剧|OVA|OAD|剧场版(?!.*电影))",
-            r"(?i)\[(动漫|动画|Anime)\]",
-        ]
+        "target_dir": "动漫",
+        "match_all": False,
+        "rules": [
+            {"type": "keyword", "field": "filename", "value": "动漫"},
+            {"type": "keyword", "field": "filename", "value": "动画"},
+            {"type": "keyword", "field": "filename", "value": "番剧"},
+            {"type": "keyword", "field": "dirname",  "value": "动漫"},
+            {"type": "keyword", "field": "dirname",  "value": "番剧"},
+            {"type": "regex",   "field": "filename", "value": r"(?i)(anime|OVA|OAD)"},
+        ],
     },
     {
         "name": "纪录片",
-        "patterns": [
-            r"(?i)(documentary|纪录片|纪录|记录片|自然|探索)",
-        ]
+        "target_dir": "纪录片",
+        "match_all": False,
+        "rules": [
+            {"type": "keyword", "field": "filename", "value": "纪录片"},
+            {"type": "keyword", "field": "filename", "value": "纪录"},
+            {"type": "keyword", "field": "dirname",  "value": "纪录片"},
+            {"type": "regex",   "field": "filename", "value": r"(?i)documentary"},
+        ],
     },
     {
         "name": "综艺",
-        "patterns": [
-            r"(?i)(variety|综艺|真人秀|reality|show)",
-        ]
+        "target_dir": "综艺",
+        "match_all": False,
+        "rules": [
+            {"type": "keyword", "field": "filename", "value": "综艺"},
+            {"type": "keyword", "field": "filename", "value": "真人秀"},
+            {"type": "keyword", "field": "dirname",  "value": "综艺"},
+            {"type": "regex",   "field": "filename", "value": r"(?i)(variety|reality)"},
+        ],
     },
     {
         "name": "剧集",
-        "patterns": [
-            r"(?i)(S\d+E\d+|Season\s*\d+|第\s*\d+\s*集|第\s*\d+\s*话|EP\d+|E\d+)",
-            r"(?i)\d{4}\.\d{2}\.\d{2}",  # 日播节目格式
-        ]
+        "target_dir": "剧集",
+        "match_all": False,
+        "rules": [
+            {"type": "regex",   "field": "filename", "value": r"(?i)(S\d+E\d+|Season\s*\d+)"},
+            {"type": "regex",   "field": "filename", "value": r"(?i)(第\s*\d+\s*[集话]|EP\d+)"},
+            {"type": "regex",   "field": "filename", "value": r"\d{4}\.\d{2}\.\d{2}"},
+            {"type": "keyword", "field": "dirname",  "value": "剧集"},
+            {"type": "keyword", "field": "dirname",  "value": "电视剧"},
+        ],
     },
-    # 默认 → 电影
+    {
+        "name": "电影",
+        "target_dir": "电影",
+        "match_all": False,
+        "rules": [],  # 空规则 = 默认兜底
+    },
 ]
 
 
-def _detect_category(filename: str) -> str:
-    """根据文件名检测分类"""
-    for rule in _CATEGORY_RULES:
-        for pattern in rule["patterns"]:
-            if re.search(pattern, filename):
-                return rule["name"]
-    return "电影"
+def _match_rule(rule: dict, filename: str, dirname: str) -> bool:
+    """执行单条规则匹配"""
+    field = rule.get("field", "filename")
+    text = filename if field == "filename" else dirname
+    value = rule.get("value", "")
+    if not value:
+        return False
+    try:
+        if rule.get("type") == "regex":
+            return bool(re.search(value, text))
+        else:  # keyword — 大小写不敏感包含
+            return value.lower() in text.lower()
+    except Exception:
+        return False
+
+
+def _detect_category(filename: str, dirname: str, categories: list) -> Optional[str]:
+    """
+    按顺序用可配置规则匹配分类，返回分类名。
+    - 空规则分类作为兜底（fallback），取最后一个空规则分类
+    - 无任何匹配且无兜底时返回 None
+    """
+    fallback = None
+    for cat in categories:
+        rules = cat.get("rules", [])
+        cat_name = cat.get("name", "")
+        if not cat_name:
+            continue
+        if not rules:
+            fallback = cat_name
+            continue
+        match_all = cat.get("match_all", False)
+        if match_all:
+            matched = all(_match_rule(r, filename, dirname) for r in rules)
+        else:
+            matched = any(_match_rule(r, filename, dirname) for r in rules)
+        if matched:
+            return cat_name
+    return fallback
 
 
 def _get_manager():
@@ -76,17 +146,10 @@ class P115OrganizeService:
 
     async def get_config(self) -> dict:
         defaults = {
-            "source_paths": [],        # 待整理的源目录（网盘路径）
-            "target_root": "",         # 目标根目录（分类后存放的根目录）
-            "categories": {            # 分类配置（分类名 → 子目录）
-                "电影": "电影",
-                "剧集": "剧集",
-                "动漫": "动漫",
-                "纪录片": "纪录片",
-                "综艺": "综艺",
-            },
-            "enable_region": False,    # 是否启用地区二级分类
-            "dry_run": False,          # 试运行（不实际移动）
+            "source_paths": [],
+            "target_root": "",
+            "categories": _DEFAULT_CATEGORIES,
+            "dry_run": False,
         }
         async with get_async_session_local() as db:
             result = await db.execute(
@@ -96,6 +159,13 @@ class P115OrganizeService:
             if cfg and cfg.value:
                 try:
                     saved = json.loads(cfg.value)
+                    # 向后兼容：旧格式 categories 是 dict，自动迁移为新列表结构
+                    if isinstance(saved.get("categories"), dict):
+                        old_cats = saved["categories"]
+                        saved["categories"] = [
+                            {"name": k, "target_dir": v, "match_all": False, "rules": []}
+                            for k, v in old_cats.items()
+                        ]
                     return {**defaults, **saved}
                 except Exception:
                     pass
@@ -113,7 +183,11 @@ class P115OrganizeService:
                 cfg.value = value
                 cfg.updated_at = tm.now()
             else:
-                cfg = SystemConfig(key=_ORGANIZE_CONFIG_KEY, value=value, description="115 整理分类配置")
+                cfg = SystemConfig(
+                    key=_ORGANIZE_CONFIG_KEY,
+                    value=value,
+                    description="115 整理分类配置",
+                )
                 db.add(cfg)
             await db.commit()
         return True
@@ -161,11 +235,25 @@ class P115OrganizeService:
                 return
 
             dry_run = config.get("dry_run", False)
-            categories = config.get("categories", {})
+            categories = config.get("categories", _DEFAULT_CATEGORIES)
+            if isinstance(categories, dict):
+                categories = [
+                    {"name": k, "target_dir": v, "match_all": False, "rules": []}
+                    for k, v in categories.items()
+                ]
+
             # 预先创建分类目录，得到 cid 映射
             cat_cid_map = {}
-            for cat_name, sub_dir in categories.items():
-                cid = await self._ensure_dir(manager, f"{config.get('target_root', '')}/{sub_dir}", parent_id=target_root_id)
+            for cat in categories:
+                cat_name = cat.get("name", "")
+                sub_dir = cat.get("target_dir", cat_name)
+                if not cat_name or not sub_dir:
+                    continue
+                cid = await self._ensure_dir(
+                    manager,
+                    f"{config.get('target_root', '')}/{sub_dir}",
+                    parent_id=target_root_id,
+                )
                 if cid:
                     cat_cid_map[cat_name] = cid
 
@@ -178,7 +266,12 @@ class P115OrganizeService:
                 for entry in entries:
                     if entry.is_dir:
                         continue
-                    category = _detect_category(entry.name)
+                    dirname = source_path.rstrip("/").rsplit("/", 1)[-1]
+                    category = _detect_category(entry.name, dirname, categories)
+                    if not category:
+                        stats["skipped"] += 1
+                        logger.debug("[整理] 无匹配分类，跳过: %s", entry.name)
+                        continue
                     target_cid = cat_cid_map.get(category)
                     if not target_cid:
                         stats["skipped"] += 1
@@ -216,7 +309,11 @@ class P115OrganizeService:
                     cfg.value = value
                     cfg.updated_at = tm.now()
                 else:
-                    cfg = SystemConfig(key=_ORGANIZE_STATUS_KEY, value=value, description="115 整理分类状态")
+                    cfg = SystemConfig(
+                        key=_ORGANIZE_STATUS_KEY,
+                        value=value,
+                        description="115 整理分类状态",
+                    )
                     db.add(cfg)
                 await db.commit()
             self._running = False
@@ -224,19 +321,19 @@ class P115OrganizeService:
             logger.info("[整理] 完成: %s 耗时 %.1fs", stats, elapsed)
 
     async def _ensure_dir(self, manager, path: str, parent_id: str = "") -> str:
-        """确保目录存在，返回 cid（不存在则尝试创建）"""
-        # 通过 list_files 查找目录（简单实现：遍历父目录找同名子目录）
+        """确保目录存在，返回 cid（不存在则返回空串）"""
         try:
             entries = await manager.adapter.list_files(path, cid=parent_id or "0")
+            target_name = path.rstrip("/").rsplit("/", 1)[-1]
             for e in entries:
-                if e.is_dir and e.name == path.rstrip("/").rsplit("/", 1)[-1]:
+                if e.is_dir and e.name == target_name:
                     return e.file_id
         except Exception:
             pass
         return ""
 
     async def _move_file(self, manager, file_id: str, target_cid: str) -> bool:
-        """移动文件到目标目录（调用115 API）"""
+        """移动文件到目标目录（调用 115 API）"""
         try:
             import httpx
             async with httpx.AsyncClient(timeout=15) as client:
@@ -250,4 +347,3 @@ class P115OrganizeService:
         except Exception as e:
             logger.error("[整理] 移动文件失败 fid=%s: %s", file_id, e)
             return False
-

@@ -7,7 +7,7 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import {
   Card, Descriptions, Tag, Button, Input, InputNumber, Modal, message,
   Space, Alert, Row, Col, Spin, Typography, Form, Select, QRCode,
-  Avatar, Progress, Divider, Tabs, Switch, Badge,
+  Avatar, Progress, Divider, Tabs, Switch, Badge, Collapse, Tooltip,
 } from 'antd'
 import {
   CheckCircleOutlined, CloseCircleOutlined, CloudSyncOutlined,
@@ -16,7 +16,7 @@ import {
   NodeIndexOutlined, FolderOpenOutlined, UserOutlined,
   ThunderboltOutlined, SyncOutlined, PlayCircleOutlined,
   PauseCircleOutlined, FolderAddOutlined, PlusOutlined, DeleteOutlined,
-  ClockCircleOutlined,
+  ClockCircleOutlined, ArrowUpOutlined, ArrowDownOutlined,
 } from '@ant-design/icons'
 import { useTranslation } from 'react-i18next'
 import { p115Api, storageApi, p115StrmApi } from '@/apis'
@@ -91,7 +91,7 @@ export const Drive115 = () => {
   // ── 整理分类 ──────────────────────────────────────────────────────────
   const [orgCfg,     setOrgCfg]     = useState({
     source_paths: [], target_root: '', dry_run: false,
-    categories: { 电影: '电影', 剧集: '剧集', 动漫: '动漫', 纪录片: '纪录片', 综艺: '综艺' },
+    categories: [],  // 新结构：数组，每项 {name, target_dir, match_all, rules:[]}
   })
   const [orgStatus,  setOrgStatus]  = useState({})
   const [orgPaths,   setOrgPaths]   = useState([])
@@ -663,14 +663,18 @@ export const Drive115 = () => {
       {/* ── 右列：整理分类 ── */}
       <Col xs={24} lg={8} style={{ display: 'flex', flexDirection: 'column' }}>
         <Card title={<Space><FolderAddOutlined />{t('p115.organizeTitle')}</Space>}
-          style={{ flex: 1 }}
+          style={{ flex: 1, overflow: 'auto' }}
           extra={
             <Space>
-              <Button icon={<SyncOutlined />} onClick={fetchOrganizeAll} />
-              <Button type="primary" icon={<FolderAddOutlined />} loading={orgRunning || orgStatus.running} onClick={handleOrgRun}>{t('p115.startOrganize')}</Button>
+              <Button icon={<SyncOutlined />} size="small" onClick={fetchOrganizeAll} />
+              <Button type="primary" size="small" icon={<FolderAddOutlined />}
+                loading={orgRunning || orgStatus.running} onClick={handleOrgRun}>
+                {t('p115.startOrganize')}
+              </Button>
             </Space>
           }
         >
+          {/* 状态/上次结果 */}
           {orgStatus.last_organize && (
             <Alert style={{ marginBottom: 8 }} type="info" showIcon
               message={<Space size={4} wrap>
@@ -682,6 +686,8 @@ export const Drive115 = () => {
           )}
           {orgStatus.running && <Alert style={{ marginBottom: 8 }} type="info" showIcon message={t('p115.organizeInProgress')} />}
           <Alert style={{ marginBottom: 12 }} type="warning" showIcon message={t('p115.organizeWarning')} />
+
+          {/* 基础配置 */}
           <Form layout="vertical" size="small">
             <Form.Item label={t('p115.organizeTargetRoot')} tooltip={t('p115.organizeTargetRootHint')}>
               <Input value={orgCfg.target_root} placeholder={t('p115.organizeTargetRootHint')}
@@ -695,22 +701,148 @@ export const Drive115 = () => {
               <Row gutter={8} key={idx} style={{ marginBottom: 8 }} align="middle">
                 <Col flex="1"><Input placeholder={t('p115.sourceDirPlaceholder')} value={p}
                   onChange={e => setOrgPaths(prev => prev.map((v, i) => i === idx ? e.target.value : v))} /></Col>
-                <Col><Button danger icon={<DeleteOutlined />} onClick={() => setOrgPaths(prev => prev.filter((_, i) => i !== idx))} /></Col>
+                <Col><Button danger icon={<DeleteOutlined />} size="small" onClick={() => setOrgPaths(prev => prev.filter((_, i) => i !== idx))} /></Col>
               </Row>
             ))}
-            <Button icon={<PlusOutlined />} onClick={() => setOrgPaths(p => [...p, ''])} style={{ marginBottom: 12 }}>{t('p115.addSourcePath')}</Button>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{t('p115.categoryRules')}</div>
-            {Object.entries(orgCfg.categories || {}).map(([cat, sub]) => (
-              <Row gutter={8} key={cat} style={{ marginBottom: 8 }} align="middle">
-                <Col span={6}><Tag color="blue">{cat}</Tag></Col>
-                <Col flex="1"><Input value={sub}
-                  onChange={e => setOrgCfg(c => ({ ...c, categories: { ...c.categories, [cat]: e.target.value } }))} /></Col>
-              </Row>
-            ))}
-            <Button type="primary" icon={<CheckCircleOutlined />} onClick={handleOrgSave} loading={orgSaving} style={{ marginTop: 8 }}>
-              {t('p115.saveOrganizeConfig')}
+            <Button icon={<PlusOutlined />} size="small" onClick={() => setOrgPaths(p => [...p, ''])} style={{ marginBottom: 16 }}>
+              {t('p115.addSourcePath')}
             </Button>
           </Form>
+
+          {/* 分类规则 */}
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{t('p115.orgCategoryRuleTitle')}</div>
+          <div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>{t('p115.orgPriority')}</div>
+
+          {(orgCfg.categories || []).map((cat, catIdx) => {
+            const cats = orgCfg.categories || []
+            const updateCat = (patch) => setOrgCfg(c => ({
+              ...c, categories: c.categories.map((v, i) => i === catIdx ? { ...v, ...patch } : v)
+            }))
+            const updateRule = (rIdx, patch) => updateCat({
+              rules: cat.rules.map((r, i) => i === rIdx ? { ...r, ...patch } : r)
+            })
+            const addRule = () => updateCat({ rules: [...(cat.rules || []), { type: 'keyword', field: 'filename', value: '' }] })
+            const delRule = (rIdx) => updateCat({ rules: cat.rules.filter((_, i) => i !== rIdx) })
+            const isDefault = !cat.rules || cat.rules.length === 0
+
+            return (
+              <Collapse key={catIdx} size="small" style={{ marginBottom: 8 }}
+                items={[{
+                  key: String(catIdx),
+                  label: (
+                    <Row align="middle" gutter={4} wrap={false}>
+                      <Col flex="1">
+                        <Space size={4}>
+                          <Tag color="blue" style={{ margin: 0 }}>{cat.name || `分类${catIdx + 1}`}</Tag>
+                          <Text type="secondary" style={{ fontSize: 11 }}>→ {cat.target_dir || '—'}</Text>
+                          {isDefault && <Tag color="orange" style={{ fontSize: 11, margin: 0 }}>{t('p115.orgCategoryDefault')}</Tag>}
+                        </Space>
+                      </Col>
+                      <Col>
+                        <Space size={2} onClick={e => e.stopPropagation()}>
+                          <Tooltip title={t('p115.orgMoveUp')}>
+                            <Button size="small" icon={<ArrowUpOutlined />} disabled={catIdx === 0}
+                              onClick={() => {
+                                const arr = [...cats]
+                                ;[arr[catIdx - 1], arr[catIdx]] = [arr[catIdx], arr[catIdx - 1]]
+                                setOrgCfg(c => ({ ...c, categories: arr }))
+                              }} />
+                          </Tooltip>
+                          <Tooltip title={t('p115.orgMoveDown')}>
+                            <Button size="small" icon={<ArrowDownOutlined />} disabled={catIdx === cats.length - 1}
+                              onClick={() => {
+                                const arr = [...cats]
+                                ;[arr[catIdx], arr[catIdx + 1]] = [arr[catIdx + 1], arr[catIdx]]
+                                setOrgCfg(c => ({ ...c, categories: arr }))
+                              }} />
+                          </Tooltip>
+                          <Tooltip title={t('p115.orgDeleteCategory')}>
+                            <Button size="small" danger icon={<DeleteOutlined />}
+                              onClick={() => setOrgCfg(c => ({ ...c, categories: c.categories.filter((_, i) => i !== catIdx) }))} />
+                          </Tooltip>
+                        </Space>
+                      </Col>
+                    </Row>
+                  ),
+                  children: (
+                    <div style={{ fontSize: 12 }}>
+                      {/* 分类名 + 目标目录 */}
+                      <Row gutter={8} style={{ marginBottom: 8 }}>
+                        <Col span={11}>
+                          <div style={{ color: '#888', marginBottom: 2 }}>{t('p115.orgCategoryName')}</div>
+                          <Input size="small" value={cat.name} onChange={e => updateCat({ name: e.target.value })} />
+                        </Col>
+                        <Col span={11}>
+                          <div style={{ color: '#888', marginBottom: 2 }}>{t('p115.orgCategoryTargetDir')}</div>
+                          <Input size="small" value={cat.target_dir} onChange={e => updateCat({ target_dir: e.target.value })} />
+                        </Col>
+                      </Row>
+                      {/* AND/OR */}
+                      <Row style={{ marginBottom: 8 }} align="middle">
+                        <Col><Text type="secondary" style={{ marginRight: 8 }}>逻辑：</Text></Col>
+                        <Col>
+                          <Switch size="small" checked={cat.match_all}
+                            checkedChildren="AND" unCheckedChildren="OR"
+                            onChange={v => updateCat({ match_all: v })} />
+                        </Col>
+                        <Col><Text type="secondary" style={{ marginLeft: 8, fontSize: 11 }}>
+                          {cat.match_all ? t('p115.orgCategoryMatchAll') : t('p115.orgCategoryMatchAny')}
+                        </Text></Col>
+                      </Row>
+                      {/* 规则列表 */}
+                      {isDefault
+                        ? <div style={{ color: '#aaa', fontStyle: 'italic', marginBottom: 8 }}>{t('p115.orgNoRules')}</div>
+                        : (cat.rules || []).map((rule, rIdx) => (
+                          <Row key={rIdx} gutter={4} style={{ marginBottom: 6 }} align="middle" wrap={false}>
+                            <Col style={{ width: 88, flexShrink: 0 }}>
+                              <Select size="small" style={{ width: '100%' }} value={rule.field}
+                                onChange={v => updateRule(rIdx, { field: v })}
+                                options={[
+                                  { value: 'filename', label: t('p115.orgRuleFieldFilename') },
+                                  { value: 'dirname',  label: t('p115.orgRuleFieldDirname') },
+                                ]} />
+                            </Col>
+                            <Col style={{ width: 90, flexShrink: 0 }}>
+                              <Select size="small" style={{ width: '100%' }} value={rule.type}
+                                onChange={v => updateRule(rIdx, { type: v })}
+                                options={[
+                                  { value: 'keyword', label: t('p115.orgRuleTypeKeyword') },
+                                  { value: 'regex',   label: t('p115.orgRuleTypeRegex') },
+                                ]} />
+                            </Col>
+                            <Col flex="1">
+                              <Input size="small" value={rule.value}
+                                placeholder={t('p115.orgRuleValuePlaceholder')}
+                                onChange={e => updateRule(rIdx, { value: e.target.value })} />
+                            </Col>
+                            <Col><Button danger size="small" icon={<DeleteOutlined />} onClick={() => delRule(rIdx)} /></Col>
+                          </Row>
+                        ))
+                      }
+                      <Button size="small" icon={<PlusOutlined />} onClick={addRule} style={{ marginTop: 4 }}>
+                        {t('p115.orgAddRule')}
+                      </Button>
+                    </div>
+                  ),
+                }]}
+              />
+            )
+          })}
+
+          {/* 新增分类 */}
+          <Button icon={<PlusOutlined />} size="small" style={{ marginBottom: 12 }}
+            onClick={() => setOrgCfg(c => ({
+              ...c,
+              categories: [...(c.categories || []), { name: '', target_dir: '', match_all: false, rules: [] }],
+            }))}>
+            {t('p115.orgAddCategory')}
+          </Button>
+
+          <div>
+            <Button type="primary" icon={<CheckCircleOutlined />} onClick={handleOrgSave} loading={orgSaving} block>
+              {t('p115.saveOrganizeConfig')}
+            </Button>
+          </div>
         </Card>
       </Col>
 
