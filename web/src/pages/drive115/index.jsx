@@ -8,7 +8,7 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import {
   Card, Descriptions, Tag, Button, Input, InputNumber, Modal, message,
   Space, Alert, Row, Col, Spin, Typography, Form, Select, QRCode,
-  Avatar, Progress, Divider, Tabs, Switch, Badge, Table,
+  Avatar, Progress, Divider, Tabs, Switch, Badge,
 } from 'antd'
 import {
   CheckCircleOutlined, CloseCircleOutlined, CloudSyncOutlined,
@@ -444,51 +444,41 @@ export const Drive115 = () => {
           </Form.Item>
         </Form>
 
-        {/* STRM 生成 */}
-        <Divider orientation="left"><ThunderboltOutlined /> {t('p115.strmGeneration')}</Divider>
-        <Row gutter={16} style={{ marginBottom: 12 }}>
-          <Col span={12}>
-            <div style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>{t('p115.lastFullSync')}</div>
-            <div style={{ fontWeight: 600, marginBottom: 4 }}>{strmStatus.last_full_sync ? new Date(strmStatus.last_full_sync * 1000).toLocaleString() : '—'}</div>
-            <Space size={4} wrap>
-              <StatTag value={fullStats.created} label={t('p115.statGenerated')} color="green" />
-              <StatTag value={fullStats.skipped} label={t('p115.statSkipped')} color="default" />
-              <StatTag value={fullStats.errors}  label={t('p115.statFailed')} color="red" />
-            </Space>
-          </Col>
-          <Col span={12}>
-            <div style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>{t('p115.lastIncSync')}</div>
-            <div style={{ fontWeight: 600, marginBottom: 4 }}>{strmStatus.last_inc_sync ? new Date(strmStatus.last_inc_sync * 1000).toLocaleString() : '—'}</div>
-            <Space size={4} wrap>
-              <StatTag value={incStats.created} label={t('p115.statGenerated')} color="green" />
-              <StatTag value={incStats.skipped} label={t('p115.statSkipped')} color="default" />
-              <StatTag value={incStats.errors}  label={t('p115.statFailed')} color="red" />
-            </Space>
-          </Col>
-        </Row>
-        {strmStatus.running && (
-          <Alert style={{ marginBottom: 12 }} type="info" showIcon
-            message={t('p115.syncInProgress', { count: strmProgress.created || 0 })} />
-        )}
-        <Space style={{ marginBottom: 16 }}>
-          <Button type="primary" icon={<ThunderboltOutlined />} loading={strmSyncing || strmStatus.running} onClick={handleFullSync}>{t('p115.fullSync')}</Button>
-          <Button icon={<SyncOutlined />} loading={strmSyncing || strmStatus.running} onClick={handleIncSync}>{t('p115.incSync')}</Button>
-          <Button icon={<SyncOutlined spin={strmStatus.running} />} onClick={fetchStrmAll}>{t('p115.refreshStatus')}</Button>
-        </Space>
-        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{t('p115.syncPairs')}</div>
-        {syncPairs.map((pair, idx) => (
-          <Row gutter={8} key={idx} style={{ marginBottom: 8 }} align="middle">
-            <Col flex="1"><Input placeholder={t('p115.sourcePath115Placeholder')} value={pair.cloud_path}
-              onChange={e => setSyncPairs(p => p.map((v, i) => i === idx ? { ...v, cloud_path: e.target.value } : v))} /></Col>
-            <Col flex="1"><Input placeholder={t('p115.strmOutputPlaceholder')} value={pair.strm_path}
-              onChange={e => setSyncPairs(p => p.map((v, i) => i === idx ? { ...v, strm_path: e.target.value } : v))} /></Col>
-            <Col><Button danger icon={<DeleteOutlined />} onClick={() => setSyncPairs(p => p.filter((_, i) => i !== idx))} /></Col>
+        {/* 生活事件监控 小卡片 */}
+        <Card size="small" title={<Space><ClockCircleOutlined />{t('p115.monitorStatusTitle')}</Space>}
+          style={{ marginTop: 16 }}
+          extra={<Button icon={<SyncOutlined />} size="small" onClick={fetchMonitorAll}>{t('common.refresh')}</Button>}
+        >
+          <Row gutter={16} align="middle" wrap>
+            <Col><Badge status={monitorStatus.running ? 'processing' : 'default'} text={monitorStatus.running ? t('p115.monitorRunning') : t('p115.monitorStopped')} /></Col>
+            <Col><Text type="secondary">{t('p115.lastEvent')}: {monitorStatus.last_event_time ? new Date(monitorStatus.last_event_time * 1000).toLocaleString() : '—'}</Text></Col>
+            <Col>
+              <Button type={monitorStatus.running ? 'default' : 'primary'} size="small"
+                icon={monitorStatus.running ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
+                onClick={handleMonitorToggle}>
+                {monitorStatus.running ? t('p115.stopMonitor') : t('p115.startMonitor')}
+              </Button>
+            </Col>
           </Row>
-        ))}
-        <Space style={{ marginTop: 4 }}>
-          <Button icon={<PlusOutlined />} onClick={() => setSyncPairs(p => [...p, { cloud_path: '', strm_path: '' }])}>{t('p115.addSyncPair')}</Button>
-          <Button type="primary" icon={<CheckCircleOutlined />} onClick={handleStrmSaveCfg} loading={strmCfgSaving}>{t('p115.saveSyncConfig')}</Button>
-        </Space>
+          <Row gutter={16} style={{ marginTop: 10 }} align="middle">
+            <Col><Text type="secondary">{t('p115.pollInterval')}:</Text></Col>
+            <Col>
+              <InputNumber size="small" min={10} max={3600} value={monitorCfg.poll_interval}
+                onChange={v => setMonitorCfg(c => ({ ...c, poll_interval: v }))} />
+            </Col>
+            <Col><Text type="secondary">{t('p115.autoIncSync')}:</Text></Col>
+            <Col>
+              <Switch size="small" checked={monitorCfg.auto_inc_sync}
+                onChange={v => setMonitorCfg(c => ({ ...c, auto_inc_sync: v }))} />
+            </Col>
+            <Col>
+              <Button size="small" type="primary" icon={<CheckCircleOutlined />}
+                onClick={handleMonitorSave} loading={monitorSaving}>
+                {t('common.save')}
+              </Button>
+            </Col>
+          </Row>
+        </Card>
       </Card>
     </Spin>
   )
@@ -546,109 +536,110 @@ export const Drive115 = () => {
         </Spin>
       </Col>
 
-      {/* 整理分类 */}
+      {/* 整理分类 + STRM 生成 */}
       <Col xs={24} lg={12}>
-        <Card title={<Space><FolderAddOutlined />{t('p115.organizeTitle')}</Space>}
-          extra={
-            <Space>
-              <Button icon={<SyncOutlined />} onClick={fetchOrganizeAll} />
-              <Button type="primary" icon={<FolderAddOutlined />} loading={orgRunning || orgStatus.running} onClick={handleOrgRun}>{t('p115.startOrganize')}</Button>
+        <Space direction="vertical" style={{ width: '100%' }} size="middle">
+          {/* 整理分类卡片 */}
+          <Card title={<Space><FolderAddOutlined />{t('p115.organizeTitle')}</Space>}
+            extra={
+              <Space>
+                <Button icon={<SyncOutlined />} onClick={fetchOrganizeAll} />
+                <Button type="primary" icon={<FolderAddOutlined />} loading={orgRunning || orgStatus.running} onClick={handleOrgRun}>{t('p115.startOrganize')}</Button>
+              </Space>
+            }
+          >
+            {orgStatus.last_organize && (
+              <Alert style={{ marginBottom: 8 }} type="info" showIcon
+                message={<Space size={4} wrap>
+                  <span>{t('p115.lastOrganize')}: {new Date(orgStatus.last_organize * 1000).toLocaleString()}</span>
+                  <StatTag value={orgStatus.last_organize_stats?.moved}   label={t('p115.statMoved')}    color="green" />
+                  <StatTag value={orgStatus.last_organize_stats?.skipped} label={t('p115.statSkipped')}  color="default" />
+                  <StatTag value={orgStatus.last_organize_stats?.errors}  label={t('p115.statFailed')}   color="red" />
+                </Space>} />
+            )}
+            {orgStatus.running && <Alert style={{ marginBottom: 8 }} type="info" showIcon message={t('p115.organizeInProgress')} />}
+            <Alert style={{ marginBottom: 12 }} type="warning" showIcon message={t('p115.organizeWarning')} />
+            <Form layout="vertical" size="small">
+              <Form.Item label={t('p115.organizeTargetRoot')} tooltip={t('p115.organizeTargetRootHint')}>
+                <Input value={orgCfg.target_root} placeholder={t('p115.organizeTargetRootHint')}
+                  onChange={e => setOrgCfg(c => ({ ...c, target_root: e.target.value }))} />
+              </Form.Item>
+              <Form.Item label={t('p115.dryRun')} tooltip={t('p115.dryRunHint')}>
+                <Switch checked={orgCfg.dry_run} onChange={v => setOrgCfg(c => ({ ...c, dry_run: v }))} />
+              </Form.Item>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{t('p115.sourcePaths')}</div>
+              {orgPaths.map((p, idx) => (
+                <Row gutter={8} key={idx} style={{ marginBottom: 8 }} align="middle">
+                  <Col flex="1"><Input placeholder={t('p115.sourceDirPlaceholder')} value={p}
+                    onChange={e => setOrgPaths(prev => prev.map((v, i) => i === idx ? e.target.value : v))} /></Col>
+                  <Col><Button danger icon={<DeleteOutlined />} onClick={() => setOrgPaths(prev => prev.filter((_, i) => i !== idx))} /></Col>
+                </Row>
+              ))}
+              <Button icon={<PlusOutlined />} onClick={() => setOrgPaths(p => [...p, ''])} style={{ marginBottom: 12 }}>{t('p115.addSourcePath')}</Button>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{t('p115.categoryRules')}</div>
+              {Object.entries(orgCfg.categories || {}).map(([cat, sub]) => (
+                <Row gutter={8} key={cat} style={{ marginBottom: 8 }} align="middle">
+                  <Col span={6}><Tag color="blue">{cat}</Tag></Col>
+                  <Col flex="1"><Input value={sub}
+                    onChange={e => setOrgCfg(c => ({ ...c, categories: { ...c.categories, [cat]: e.target.value } }))} /></Col>
+                </Row>
+              ))}
+              <Button type="primary" icon={<CheckCircleOutlined />} onClick={handleOrgSave} loading={orgSaving} style={{ marginTop: 8 }}>
+                {t('p115.saveOrganizeConfig')}
+              </Button>
+            </Form>
+          </Card>
+
+          {/* STRM 生成卡片 */}
+          <Card title={<Space><ThunderboltOutlined />{t('p115.strmGeneration')}</Space>}
+            extra={<Button icon={<SyncOutlined spin={strmStatus.running} />} onClick={fetchStrmAll}>{t('p115.refreshStatus')}</Button>}
+          >
+            <Row gutter={16} style={{ marginBottom: 12 }}>
+              <Col span={12}>
+                <div style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>{t('p115.lastFullSync')}</div>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>{strmStatus.last_full_sync ? new Date(strmStatus.last_full_sync * 1000).toLocaleString() : '—'}</div>
+                <Space size={4} wrap>
+                  <StatTag value={fullStats.created} label={t('p115.statGenerated')} color="green" />
+                  <StatTag value={fullStats.skipped} label={t('p115.statSkipped')} color="default" />
+                  <StatTag value={fullStats.errors}  label={t('p115.statFailed')} color="red" />
+                </Space>
+              </Col>
+              <Col span={12}>
+                <div style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>{t('p115.lastIncSync')}</div>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>{strmStatus.last_inc_sync ? new Date(strmStatus.last_inc_sync * 1000).toLocaleString() : '—'}</div>
+                <Space size={4} wrap>
+                  <StatTag value={incStats.created} label={t('p115.statGenerated')} color="green" />
+                  <StatTag value={incStats.skipped} label={t('p115.statSkipped')} color="default" />
+                  <StatTag value={incStats.errors}  label={t('p115.statFailed')} color="red" />
+                </Space>
+              </Col>
+            </Row>
+            {strmStatus.running && (
+              <Alert style={{ marginBottom: 12 }} type="info" showIcon
+                message={t('p115.syncInProgress', { count: strmProgress.created || 0 })} />
+            )}
+            <Space style={{ marginBottom: 16 }}>
+              <Button type="primary" icon={<ThunderboltOutlined />} loading={strmSyncing || strmStatus.running} onClick={handleFullSync}>{t('p115.fullSync')}</Button>
+              <Button icon={<SyncOutlined />} loading={strmSyncing || strmStatus.running} onClick={handleIncSync}>{t('p115.incSync')}</Button>
             </Space>
-          }
-        >
-          {orgStatus.last_organize && (
-            <Alert style={{ marginBottom: 8 }} type="info" showIcon
-              message={<Space size={4} wrap>
-                <span>{t('p115.lastOrganize')}: {new Date(orgStatus.last_organize * 1000).toLocaleString()}</span>
-                <StatTag value={orgStatus.last_organize_stats?.moved}   label={t('p115.statMoved')}    color="green" />
-                <StatTag value={orgStatus.last_organize_stats?.skipped} label={t('p115.statSkipped')}  color="default" />
-                <StatTag value={orgStatus.last_organize_stats?.errors}  label={t('p115.statFailed')}   color="red" />
-              </Space>} />
-          )}
-          {orgStatus.running && <Alert style={{ marginBottom: 8 }} type="info" showIcon message={t('p115.organizeInProgress')} />}
-          <Alert style={{ marginBottom: 12 }} type="warning" showIcon message={t('p115.organizeWarning')} />
-          <Form layout="vertical" size="small">
-            <Form.Item label={t('p115.organizeTargetRoot')} tooltip={t('p115.organizeTargetRootHint')}>
-              <Input value={orgCfg.target_root} placeholder={t('p115.organizeTargetRootHint')}
-                onChange={e => setOrgCfg(c => ({ ...c, target_root: e.target.value }))} />
-            </Form.Item>
-            <Form.Item label={t('p115.dryRun')} tooltip={t('p115.dryRunHint')}>
-              <Switch checked={orgCfg.dry_run} onChange={v => setOrgCfg(c => ({ ...c, dry_run: v }))} />
-            </Form.Item>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{t('p115.sourcePaths')}</div>
-            {orgPaths.map((p, idx) => (
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{t('p115.syncPairs')}</div>
+            {syncPairs.map((pair, idx) => (
               <Row gutter={8} key={idx} style={{ marginBottom: 8 }} align="middle">
-                <Col flex="1"><Input placeholder={t('p115.sourceDirPlaceholder')} value={p}
-                  onChange={e => setOrgPaths(prev => prev.map((v, i) => i === idx ? e.target.value : v))} /></Col>
-                <Col><Button danger icon={<DeleteOutlined />} onClick={() => setOrgPaths(prev => prev.filter((_, i) => i !== idx))} /></Col>
+                <Col flex="1"><Input placeholder={t('p115.sourcePath115Placeholder')} value={pair.cloud_path}
+                  onChange={e => setSyncPairs(p => p.map((v, i) => i === idx ? { ...v, cloud_path: e.target.value } : v))} /></Col>
+                <Col flex="1"><Input placeholder={t('p115.strmOutputPlaceholder')} value={pair.strm_path}
+                  onChange={e => setSyncPairs(p => p.map((v, i) => i === idx ? { ...v, strm_path: e.target.value } : v))} /></Col>
+                <Col><Button danger icon={<DeleteOutlined />} onClick={() => setSyncPairs(p => p.filter((_, i) => i !== idx))} /></Col>
               </Row>
             ))}
-            <Button icon={<PlusOutlined />} onClick={() => setOrgPaths(p => [...p, ''])} style={{ marginBottom: 12 }}>{t('p115.addSourcePath')}</Button>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{t('p115.categoryRules')}</div>
-            {Object.entries(orgCfg.categories || {}).map(([cat, sub]) => (
-              <Row gutter={8} key={cat} style={{ marginBottom: 8 }} align="middle">
-                <Col span={6}><Tag color="blue">{cat}</Tag></Col>
-                <Col flex="1"><Input value={sub}
-                  onChange={e => setOrgCfg(c => ({ ...c, categories: { ...c.categories, [cat]: e.target.value } }))} /></Col>
-              </Row>
-            ))}
-            <Button type="primary" icon={<CheckCircleOutlined />} onClick={handleOrgSave} loading={orgSaving} style={{ marginTop: 8 }}>
-              {t('p115.saveOrganizeConfig')}
-            </Button>
-          </Form>
-        </Card>
+            <Space style={{ marginTop: 4 }}>
+              <Button icon={<PlusOutlined />} onClick={() => setSyncPairs(p => [...p, { cloud_path: '', strm_path: '' }])}>{t('p115.addSyncPair')}</Button>
+              <Button type="primary" icon={<CheckCircleOutlined />} onClick={handleStrmSaveCfg} loading={strmCfgSaving}>{t('p115.saveSyncConfig')}</Button>
+            </Space>
+          </Card>
+        </Space>
       </Col>
     </Row>
-  )
-
-  // ===================================================================
-  //  Tab 3 — 生活事件监控
-  // ===================================================================
-  const evTypeMap = {
-    0: t('p115.evType0'), 1: t('p115.evType1'), 2: t('p115.evType2'),
-    4: t('p115.evType4'), 5: t('p115.evType5'),
-  }
-  const tab3 = (
-    <Space direction="vertical" style={{ width: '100%' }} size="middle">
-      <Card size="small" title={t('p115.monitorStatusTitle')}>
-        <Row gutter={16} align="middle" wrap>
-          <Col><Badge status={monitorStatus.running ? 'processing' : 'default'} text={monitorStatus.running ? t('p115.monitorRunning') : t('p115.monitorStopped')} /></Col>
-          <Col><Text type="secondary">{t('p115.lastEvent')}: {monitorStatus.last_event_time ? new Date(monitorStatus.last_event_time * 1000).toLocaleString() : '—'}</Text></Col>
-          <Col>
-            <Button type={monitorStatus.running ? 'default' : 'primary'}
-              icon={monitorStatus.running ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
-              onClick={handleMonitorToggle}>
-              {monitorStatus.running ? t('p115.stopMonitor') : t('p115.startMonitor')}
-            </Button>
-          </Col>
-          <Col><Button icon={<SyncOutlined />} onClick={fetchMonitorAll}>{t('common.refresh')}</Button></Col>
-        </Row>
-      </Card>
-      <Card size="small" title={t('p115.monitorConfig')}>
-        <Form layout="vertical" size="small">
-          <Form.Item label={t('p115.pollInterval')}>
-            <InputNumber min={10} max={3600} value={monitorCfg.poll_interval}
-              onChange={v => setMonitorCfg(c => ({ ...c, poll_interval: v }))} />
-          </Form.Item>
-          <Form.Item label={t('p115.autoIncSync')}>
-            <Switch checked={monitorCfg.auto_inc_sync} onChange={v => setMonitorCfg(c => ({ ...c, auto_inc_sync: v }))} />
-          </Form.Item>
-          <Button type="primary" icon={<CheckCircleOutlined />} onClick={handleMonitorSave} loading={monitorSaving}>{t('p115.saveMonitorConfig')}</Button>
-        </Form>
-      </Card>
-      <Card size="small" title={t('p115.recentEvents', { count: (monitorStatus.recent_events || []).length })}>
-        <Table
-          dataSource={monitorStatus.recent_events || []} rowKey={(_, i) => i} size="small"
-          pagination={{ pageSize: 10, size: 'small' }} locale={{ emptyText: t('p115.noEvents') }}
-          columns={[
-            { title: t('common.type'),     dataIndex: 'type',      key: 'type',      width: 100, render: v => evTypeMap[v] || v },
-            { title: t('p115.fileName'),   dataIndex: 'file_name', key: 'file_name', ellipsis: true },
-            { title: t('common.time'),     dataIndex: 'time',      key: 'time',      width: 180,
-              render: v => v ? new Date(v * 1000).toLocaleString() : '—' },
-          ]}
-        />
-      </Card>
-    </Space>
   )
 
   // ===================================================================
@@ -658,9 +649,8 @@ export const Drive115 = () => {
     <div style={{ padding: 24 }}>
       <Tabs
         items={[
-          { key: 'p115',     label: <Space><CloudSyncOutlined />{t('p115.tabDriveStrm')}</Space>,    children: tab1 },
-          { key: 'organize', label: <Space><FolderAddOutlined />{t('p115.tabOrganizePath')}</Space>,  children: tab2 },
-          { key: 'monitor',  label: <Space><ClockCircleOutlined />{t('p115.tabLifeMonitor')}</Space>, children: tab3 },
+          { key: 'p115',     label: <Space><CloudSyncOutlined />{t('p115.tabDrive')}</Space>,       children: tab1 },
+          { key: 'organize', label: <Space><FolderAddOutlined />{t('p115.tabOrganizePath')}</Space>, children: tab2 },
         ]}
       />
 
