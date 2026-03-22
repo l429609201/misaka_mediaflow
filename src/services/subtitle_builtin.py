@@ -772,11 +772,77 @@ def _uuencode_font(font_bytes: bytes, font_name: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _extract_fonts_section(ass_text: str) -> tuple:
+    """
+    从 ASS 文本中分离出 [Fonts] 段，返回 (ass_without_fonts, existing_blocks)。
+
+    existing_blocks: dict {filename_lower: raw_block_str}
+      每个 block = "filename: xxx\n<uuencoded lines>\n`\n"
+      key 是小写文件名（去扩展名），用于判断是否已内嵌。
+    ass_without_fonts: 去掉 [Fonts] 段后的其余 ASS 内容。
+    """
+    # 提取 [Fonts] 段的原始文本
+    m = re.search(r"\[Fonts\](.*?)(?=\n\[|\Z)", ass_text, flags=re.DOTALL)
+    if not m:
+        return ass_text, {}
+
+    fonts_body = m.group(1)
+    ass_without = (ass_text[:m.start()] + ass_text[m.end():]).rstrip()
+
+    # 按 "filename:" 行切分，每段是一个字体块
+    blocks: dict = {}
+    current_name: str = ""
+    current_lines: list = []
+
+    for line in fonts_body.splitlines():
+        s = line.strip()
+        if s.lower().startswith("filename:"):
+            # 保存上一个块
+            if current_name and current_lines:
+                blocks[current_name] = "\n".join(current_lines) + "\n"
+            raw_name = s[9:].strip()
+            name_lower = raw_name.lower()
+            for ext in (".ttf", ".otf", ".ttc", ".otc"):
+                if name_lower.endswith(ext):
+                    name_lower = name_lower[:-len(ext)]
+                    break
+            current_name = name_lower
+            current_lines = [line]
+        elif current_name:
+            current_lines.append(line)
+
+    # 最后一个块
+    if current_name and current_lines:
+        blocks[current_name] = "\n".join(current_lines) + "\n"
+
+    return ass_without, blocks
+
+
 def _insert_fonts_section(ass_text: str, font_entries: dict) -> str:
-    """将子集化字体写入 ASS [Fonts] 段（有则替换，无则追加）"""
-    section = "[Fonts]\n" + "".join(font_entries.values())
-    ass_text = re.sub(r"\[Fonts\].*?(?=\n\[|\Z)", "", ass_text, flags=re.DOTALL).rstrip()
-    return ass_text + "\n\n" + section
+    """
+    将子集化字体写入 ASS [Fonts] 段。
+
+    混合字幕处理（部分已内嵌、部分需子集化）：
+      - 保留原 [Fonts] 段中不在 font_entries 里的已内嵌字体块
+      - 用新子集化结果替换/追加 font_entries 中的字体块
+    这样已内嵌字体（随机名如 RM8KN26Q）不会因为写入新字体而丢失。
+    """
+    ass_without, existing_blocks = _extract_fonts_section(ass_text)
+
+    # 新 font_entries 的 key 集合（小写字体名，去扩展名）
+    new_keys: set = set()
+    for key in font_entries:
+        fname = key.rsplit("^", 1)[0] if "^" in key else key
+        new_keys.add(fname.lower())
+
+    # 保留旧块中不被新内容覆盖的已内嵌字体
+    preserved = "".join(
+        block for name, block in existing_blocks.items()
+        if name not in new_keys
+    )
+
+    section = "[Fonts]\n" + preserved + "".join(font_entries.values())
+    return ass_without + "\n\n" + section
 
 
 # ═══════════════════════════════════════════════════════════
@@ -786,34 +852,10 @@ def _insert_fonts_section(ass_text: str, font_entries: dict) -> str:
 def _get_embedded_font_names(ass_text: str) -> set:
     """
     提取 ASS [Fonts] 段中已内嵌字体的文件名集合（小写，去扩展名）。
-
-    fontInAss 子集化后的字幕：
-      - 把字体名替换为随机 8 位大写字母（如 RM8KN26Q）
-      - 把子集化字体以 UUEncoded 格式写入 [Fonts] 段，每段开头是
-        "filename: RM8KN26Q"（无扩展名）
-
-    返回的集合用于快速判断某个字体名是否已内嵌，无需再查找/下载。
+    直接复用 _extract_fonts_section 的解析结果，避免重复遍历。
     """
-    embedded: set = set()
-    in_fonts = False
-    for line in ass_text.splitlines():
-        s = line.strip()
-        if s.startswith("["):
-            in_fonts = (s.lower() == "[fonts]")
-            continue
-        if not in_fonts:
-            continue
-        if s.lower().startswith("filename:"):
-            fname = s[9:].strip()                   # "RM8KN26Q" 或 "RM8KN26Q.ttf"
-            fname_lower = fname.lower()
-            # 去掉可能的扩展名
-            for ext in (".ttf", ".otf", ".ttc", ".otc"):
-                if fname_lower.endswith(ext):
-                    fname_lower = fname_lower[: -len(ext)]
-                    break
-            if fname_lower:
-                embedded.add(fname_lower)
-    return embedded
+    _, existing_blocks = _extract_fonts_section(ass_text)
+    return set(existing_blocks.keys())
 
 
 async def _process_ass_content(ass_text: str, raw_bytes: bytes) -> tuple:
