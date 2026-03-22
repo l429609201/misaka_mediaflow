@@ -104,17 +104,18 @@ class P115LifeMonitorService:
         self._running = True
         logger.info("[生活事件] 监控已启动")
 
-        config = await self.get_config()
-        poll_interval = max(10, config.get("poll_interval", 30))
-        auto_inc_sync = config.get("auto_inc_sync", True)
-
-        # 从 strm_sync_service 懒加载
+        # 延迟导入，使用全局单例避免 _running 锁冲突
         from src.services.p115_strm_sync_service import P115StrmSyncService
         strm_svc = P115StrmSyncService()
 
         try:
             while True:
                 try:
+                    # 每轮重新读配置，保证改完配置保存后立即生效（无需重启）
+                    config = await self.get_config()
+                    poll_interval = max(10, config.get("poll_interval", 30))
+                    auto_inc_sync = config.get("auto_inc_sync", True)
+
                     new_events = await self._poll_life_events()
                     if new_events:
                         logger.info("[生活事件] 检测到 %d 个新事件", len(new_events))
@@ -127,6 +128,7 @@ class P115LifeMonitorService:
                     raise
                 except Exception as e:
                     logger.error("[生活事件] 轮询异常: %s", e)
+                    poll_interval = 30  # 异常时用默认间隔
 
                 await asyncio.sleep(poll_interval)
 

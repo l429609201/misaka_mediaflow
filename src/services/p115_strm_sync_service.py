@@ -146,6 +146,20 @@ class P115StrmSyncService:
             host = f"http://127.0.0.1:{settings.server.go_port}"
         return host
 
+    def _resolve_sync_pairs(self, config: dict, scope: str) -> list:
+        """
+        解析实际使用的路径对。
+        scope: 'full' | 'inc'
+        优先级：自定义路径(use_custom=True) > 全局 sync_pairs
+        """
+        cfg_key = f"{scope}_sync_cfg"
+        custom = config.get(cfg_key, {})
+        if custom.get("use_custom") and custom.get("cloud_path") and custom.get("strm_path"):
+            return [{"cloud_path": custom["cloud_path"].strip(),
+                     "strm_path":  custom["strm_path"].strip()}]
+        # 回退到全局 sync_pairs
+        return config.get("sync_pairs", [])
+
     async def trigger_full_sync(self) -> dict:
         """触发全量 STRM 生成（后台异步执行）"""
         if self._running:
@@ -176,10 +190,10 @@ class P115StrmSyncService:
 
             video_exts = self._get_video_exts(config)
             link_host = self._get_link_host(config)
-            sync_pairs = config.get("sync_pairs", [])
+            sync_pairs = self._resolve_sync_pairs(config, "full")
 
             if not sync_pairs:
-                logger.warning("[全量STRM] 未配置同步路径对")
+                logger.warning("[全量STRM] 未配置同步路径对（请在STRM生成卡片中保存路径配置）")
                 return
 
             for pair in sync_pairs:
@@ -246,10 +260,10 @@ class P115StrmSyncService:
 
             video_exts = self._get_video_exts(config)
             link_host = self._get_link_host(config)
-            sync_pairs = config.get("sync_pairs", [])
+            sync_pairs = self._resolve_sync_pairs(config, "inc")
 
             if not sync_pairs:
-                logger.warning("[增量STRM] 未配置同步路径对")
+                logger.warning("[增量STRM] 未配置同步路径对（请在STRM生成卡片中保存路径配置）")
                 return
 
             for pair in sync_pairs:
