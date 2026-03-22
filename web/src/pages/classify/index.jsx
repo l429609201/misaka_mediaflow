@@ -810,7 +810,7 @@ const OrgRuleModal = ({ open, rule, onOk, onCancel, storages, categories }) => {
           open={pickerState.open && pickerState.type === 'storage'}
           onClose={() => setPickerState(s => ({ ...s, open: false }))}
           onSelect={handleDirSelected}
-          storage={pickerActiveStorage} />
+          storageId={pickerActiveStorage.id} />
       )}
     </>
   )
