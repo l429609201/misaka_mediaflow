@@ -40,8 +40,7 @@ class MonitorConfigPayload(BaseModel):
 class OrganizeConfigPayload(BaseModel):
     source_paths: List[str] = []
     target_root: str = ""
-    categories: dict = {}
-    enable_region: bool = False
+    categories: list = []      # 新结构：列表，兼容旧 dict 格式（service 层自动迁移）
     dry_run: bool = False
 
 
@@ -140,8 +139,26 @@ async def get_organize_status():
     return await _organize_svc.get_status()
 
 
-@router.post("/organize/run", dependencies=[Depends(verify_token)])
-async def trigger_organize():
-    """触发整理分类任务"""
-    return await _organize_svc.trigger_organize()
+@router.get("/organize/tmdb-status", dependencies=[Depends(verify_token)])
+async def get_organize_tmdb_status():
+    """检测 TMDB API Key 是否已配置（供前端显示规则有效性提示）"""
+    try:
+        import json
+        from sqlalchemy import select
+        from src.db import get_async_session_local
+        from src.db.models.system import SystemConfig
+        async with get_async_session_local() as db:
+            row = await db.execute(
+                select(SystemConfig).where(SystemConfig.key == "metadata_tmdb")
+            )
+            cfg = row.scalars().first()
+            if cfg and cfg.value:
+                data = json.loads(cfg.value)
+                return {"available": bool(data.get("api_key", "").strip())}
+    except Exception:
+        pass
+    return {"available": False}
+
+
+
 

@@ -128,6 +128,7 @@ export const p115StrmApi = {
   saveOrganizeConfig: (payload) => api.post('/p115-strm/organize/config', payload),
   getOrganizeStatus: () => api.get('/p115-strm/organize/status'),
   runOrganize: () => api.post('/p115-strm/organize/run'),
+  getOrganizeTmdbStatus: () => api.get('/p115-strm/organize/tmdb-status'),
 }
 
 

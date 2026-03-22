@@ -89,14 +89,15 @@ export const Drive115 = () => {
   const [monitorSaving, setMonitorSaving] = useState(false)
 
   // ── 整理分类 ──────────────────────────────────────────────────────────
-  const [orgCfg,     setOrgCfg]     = useState({
+  const [orgCfg,         setOrgCfg]         = useState({
     source_paths: [], target_root: '', dry_run: false,
     categories: [],  // 新结构：数组，每项 {name, target_dir, match_all, rules:[]}
   })
-  const [orgStatus,  setOrgStatus]  = useState({})
-  const [orgPaths,   setOrgPaths]   = useState([])
-  const [orgSaving,  setOrgSaving]  = useState(false)
-  const [orgRunning, setOrgRunning] = useState(false)
+  const [orgStatus,      setOrgStatus]      = useState({})
+  const [orgPaths,       setOrgPaths]       = useState([])
+  const [orgSaving,      setOrgSaving]      = useState(false)
+  const [orgRunning,     setOrgRunning]     = useState(false)
+  const [tmdbConfigured, setTmdbConfigured] = useState(null) // null=未知, true/false
 
   // ===================================================================
   //                          数据加载
@@ -140,9 +141,14 @@ export const Drive115 = () => {
   }, [])
   const fetchOrganizeAll = useCallback(async () => {
     try {
-      const [cfgRes, stRes] = await Promise.all([p115StrmApi.getOrganizeConfig(), p115StrmApi.getOrganizeStatus()])
+      const [cfgRes, stRes, tmdbRes] = await Promise.all([
+        p115StrmApi.getOrganizeConfig(),
+        p115StrmApi.getOrganizeStatus(),
+        p115StrmApi.getOrganizeTmdbStatus(),
+      ])
       const cfg = cfgRes.data || {}
       setOrgCfg(cfg); setOrgPaths(cfg.source_paths || []); setOrgStatus(stRes.data || {})
+      setTmdbConfigured(!!tmdbRes.data?.available)
     } catch { /* ignore */ }
   }, [])
 
@@ -710,6 +716,14 @@ export const Drive115 = () => {
           </Form>
 
           {/* 分类规则 */}
+          {tmdbConfigured !== null && (
+            <Alert
+              style={{ marginBottom: 8 }}
+              type={tmdbConfigured ? 'success' : 'warning'}
+              showIcon
+              message={tmdbConfigured ? t('p115.orgTmdbHint') : t('p115.orgTmdbNoKey')}
+            />
+          )}
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{t('p115.orgCategoryRuleTitle')}</div>
           <div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>{t('p115.orgPriority')}</div>
 
@@ -779,7 +793,7 @@ export const Drive115 = () => {
                       </Row>
                       {/* AND/OR */}
                       <Row style={{ marginBottom: 8 }} align="middle">
-                        <Col><Text type="secondary" style={{ marginRight: 8 }}>逻辑：</Text></Col>
+                        <Col><Text type="secondary" style={{ marginRight: 8 }}>{t('p115.orgMatchLogic')}：</Text></Col>
                         <Col>
                           <Switch size="small" checked={cat.match_all}
                             checkedChildren="AND" unCheckedChildren="OR"
@@ -792,32 +806,56 @@ export const Drive115 = () => {
                       {/* 规则列表 */}
                       {isDefault
                         ? <div style={{ color: '#aaa', fontStyle: 'italic', marginBottom: 8 }}>{t('p115.orgNoRules')}</div>
-                        : (cat.rules || []).map((rule, rIdx) => (
-                          <Row key={rIdx} gutter={4} style={{ marginBottom: 6 }} align="middle" wrap={false}>
-                            <Col style={{ width: 88, flexShrink: 0 }}>
-                              <Select size="small" style={{ width: '100%' }} value={rule.field}
-                                onChange={v => updateRule(rIdx, { field: v })}
-                                options={[
-                                  { value: 'filename', label: t('p115.orgRuleFieldFilename') },
-                                  { value: 'dirname',  label: t('p115.orgRuleFieldDirname') },
-                                ]} />
-                            </Col>
-                            <Col style={{ width: 90, flexShrink: 0 }}>
-                              <Select size="small" style={{ width: '100%' }} value={rule.type}
-                                onChange={v => updateRule(rIdx, { type: v })}
-                                options={[
-                                  { value: 'keyword', label: t('p115.orgRuleTypeKeyword') },
-                                  { value: 'regex',   label: t('p115.orgRuleTypeRegex') },
-                                ]} />
-                            </Col>
-                            <Col flex="1">
-                              <Input size="small" value={rule.value}
-                                placeholder={t('p115.orgRuleValuePlaceholder')}
-                                onChange={e => updateRule(rIdx, { value: e.target.value })} />
-                            </Col>
-                            <Col><Button danger size="small" icon={<DeleteOutlined />} onClick={() => delRule(rIdx)} /></Col>
-                          </Row>
-                        ))
+                        : (cat.rules || []).map((rule, rIdx) => {
+                          const isTmdbType = ['genre_ids', 'origin_country', 'original_language'].includes(rule.type)
+                          const placeholderMap = {
+                            genre_ids:         t('p115.orgRuleGenreIdsHint'),
+                            origin_country:    t('p115.orgRuleOriginCountryHint'),
+                            original_language: t('p115.orgRuleOriginalLanguageHint'),
+                            keyword:           t('p115.orgRuleValuePlaceholder'),
+                            regex:             t('p115.orgRuleValuePlaceholder'),
+                          }
+                          return (
+                            <Row key={rIdx} gutter={4} style={{ marginBottom: 6 }} align="middle" wrap={false}>
+                              {/* 匹配类型 */}
+                              <Col style={{ width: 118, flexShrink: 0 }}>
+                                <Select size="small" style={{ width: '100%' }} value={rule.type}
+                                  onChange={v => updateRule(rIdx, {
+                                    type: v,
+                                    field: ['genre_ids','origin_country','original_language'].includes(v)
+                                      ? undefined : (rule.field || 'filename')
+                                  })}
+                                  options={[
+                                    { value: 'genre_ids',         label: t('p115.orgRuleTypeGenreIds') },
+                                    { value: 'origin_country',    label: t('p115.orgRuleTypeOriginCountry') },
+                                    { value: 'original_language', label: t('p115.orgRuleTypeOriginalLanguage') },
+                                    { value: 'keyword',           label: t('p115.orgRuleTypeKeyword') },
+                                    { value: 'regex',             label: t('p115.orgRuleTypeRegex') },
+                                  ]} />
+                              </Col>
+                              {/* 匹配字段（仅 keyword/regex 显示） */}
+                              {!isTmdbType && (
+                                <Col style={{ width: 78, flexShrink: 0 }}>
+                                  <Select size="small" style={{ width: '100%' }} value={rule.field || 'filename'}
+                                    onChange={v => updateRule(rIdx, { field: v })}
+                                    options={[
+                                      { value: 'filename', label: t('p115.orgRuleFieldFilename') },
+                                      { value: 'dirname',  label: t('p115.orgRuleFieldDirname') },
+                                    ]} />
+                                </Col>
+                              )}
+                              {/* 匹配值 */}
+                              <Col flex="1">
+                                <Tooltip title={placeholderMap[rule.type]}>
+                                  <Input size="small" value={rule.value}
+                                    placeholder={placeholderMap[rule.type] || t('p115.orgRuleValuePlaceholder')}
+                                    onChange={e => updateRule(rIdx, { value: e.target.value })} />
+                                </Tooltip>
+                              </Col>
+                              <Col><Button danger size="small" icon={<DeleteOutlined />} onClick={() => delRule(rIdx)} /></Col>
+                            </Row>
+                          )
+                        })
                       }
                       <Button size="small" icon={<PlusOutlined />} onClick={addRule} style={{ marginTop: 4 }}>
                         {t('p115.orgAddRule')}
