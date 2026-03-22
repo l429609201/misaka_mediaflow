@@ -8,7 +8,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import {
   Card, Row, Col, Input, Switch, Button, Select, Modal, Form,
   Space, Alert, Tooltip, Divider, message, Segmented, Tag,
-  Typography, Spin, Tabs, Collapse,
+  Typography, Spin, Tabs,
 } from 'antd'
 import {
   PlusOutlined, DeleteOutlined, SaveOutlined, ReloadOutlined,
@@ -534,6 +534,10 @@ const DEFAULT_ORG_RULE = {
   source_paths: [], target_root: '', unrecognized_dir: '', dry_run: false,
 }
 
+// 媒体类型配置
+const MEDIA_TYPE_COLOR = { all: 'default', movie: 'blue', tv: 'purple' }
+const MEDIA_TYPE_LABEL = { all: '全部', movie: '电影', tv: '剧集' }
+
 // =============================================================================
 // 刮削参数定义
 // =============================================================================
@@ -576,11 +580,10 @@ const previewFormat = (fmt, sample) => {
 }
 
 // =============================================================================
-// 目录整理 — 单条规则卡片
+// 目录整理 — 单条规则卡片（MP 风格 Card）
 // =============================================================================
 const OrgRuleCard = ({ rule, idx, total, onChange, onDelete, onMove, onRun, running }) => {
-  const [expanded, setExpanded] = useState(idx === 0)
-  const [dirPickerOpen, setDirPickerOpen]   = useState(false)
+  const [dirPickerOpen,  setDirPickerOpen]  = useState(false)
   const [dirPickerField, setDirPickerField] = useState(null)
 
   const set = (patch) => onChange({ ...rule, ...patch })
@@ -593,98 +596,208 @@ const OrgRuleCard = ({ rule, idx, total, onChange, onDelete, onMove, onRun, runn
     }
   }
 
-  const mediaTypeColors = { all: 'default', movie: 'blue', tv: 'purple' }
-  const mediaTypeLabels = { all: '全部', movie: '电影', tv: '剧集' }
+  const enabled = rule.enabled !== false
+  const mediaType = rule.media_type || 'all'
 
-  const headerExtra = (
-    <Space size={4} onClick={e => e.stopPropagation()}>
-      <Tag color={mediaTypeColors[rule.media_type || 'all']}>{mediaTypeLabels[rule.media_type || 'all']}</Tag>
+  // ── 卡头右侧操作区 ──
+  const cardExtra = (
+    <Space size={6} onClick={e => e.stopPropagation()}>
+      <Tag color={MEDIA_TYPE_COLOR[mediaType]}>{MEDIA_TYPE_LABEL[mediaType]}</Tag>
       {rule.dry_run && <Tag color="orange">试运行</Tag>}
-      <Switch size="small" checked={rule.enabled !== false}
-        onChange={v => set({ enabled: v })} checkedChildren="启用" unCheckedChildren="禁用" />
-      <Tooltip title="上移"><Button size="small" icon={<ArrowUpOutlined />} disabled={idx === 0}
-        onClick={() => onMove(-1)} /></Tooltip>
-      <Tooltip title="下移"><Button size="small" icon={<ArrowDownOutlined />} disabled={idx === total - 1}
-        onClick={() => onMove(1)} /></Tooltip>
-      <Button size="small" type="primary" icon={<PlayCircleOutlined />}
-        loading={running} onClick={onRun}>运行整理</Button>
-      <Button size="small" danger icon={<DeleteOutlined />} onClick={onDelete} />
+      <Switch
+        size="small"
+        checked={enabled}
+        onChange={v => set({ enabled: v })}
+        checkedChildren="启用"
+        unCheckedChildren="禁用"
+      />
+      <Tooltip title="上移">
+        <Button size="small" type="text" icon={<ArrowUpOutlined />}
+          disabled={idx === 0} onClick={() => onMove(-1)} />
+      </Tooltip>
+      <Tooltip title="下移">
+        <Button size="small" type="text" icon={<ArrowDownOutlined />}
+          disabled={idx === total - 1} onClick={() => onMove(1)} />
+      </Tooltip>
+      <Button
+        size="small" type="primary" icon={<PlayCircleOutlined />}
+        loading={running} onClick={onRun}
+      >运行整理</Button>
+      <Tooltip title="删除规则">
+        <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={onDelete} />
+      </Tooltip>
+    </Space>
+  )
+
+  // ── 卡头标题 ──
+  const cardTitle = (
+    <Space size={8}>
+      <span style={{ fontWeight: 700, fontSize: 14 }}>
+        {rule.name || `规则 ${idx + 1}`}
+      </span>
+      {rule.target_root && (
+        <span style={{ fontSize: 12, color: '#888', fontWeight: 400 }}>
+          → {rule.target_root}
+        </span>
+      )}
+      {rule.source_paths?.length > 0 && (
+        <Tag style={{ fontSize: 11, fontWeight: 400 }}>
+          {rule.source_paths.length} 个源目录
+        </Tag>
+      )}
     </Space>
   )
 
   return (
     <>
-      <Collapse size="small" style={{ marginBottom: 10 }}
-        activeKey={expanded ? ['0'] : []}
-        onChange={keys => setExpanded(keys.includes('0'))}
-        items={[{
-          key: '0',
-          label: (
-            <Space>
-              <span style={{ fontWeight: 600 }}>{rule.name || `规则 ${idx + 1}`}</span>
-              {rule.source_paths?.length > 0 && (
-                <Tag style={{ fontSize: 11 }}>{rule.source_paths.length} 个源目录</Tag>
-              )}
-              {rule.target_root && (
-                <span style={{ fontSize: 11, color: '#888' }}>→ {rule.target_root}</span>
-              )}
-            </Space>
-          ),
-          extra: headerExtra,
-          children: (
-            <Form layout="vertical" size="small">
-              <Row gutter={16}>
-                <Col span={12}>
-                  <Form.Item label="规则名称">
-                    <Input value={rule.name} onChange={e => set({ name: e.target.value })} placeholder="如：网盘-电影" />
-                  </Form.Item>
+      <Card
+        size="small"
+        title={cardTitle}
+        extra={cardExtra}
+        style={{
+          marginBottom: 12,
+          borderRadius: 10,
+          opacity: enabled ? 1 : 0.6,
+          borderLeft: `4px solid ${
+            mediaType === 'movie' ? '#1677ff' :
+            mediaType === 'tv'    ? '#7c3aed' : '#52c41a'
+          }`,
+          boxShadow: '0 1px 4px rgba(0,0,0,.08)',
+        }}
+        styles={{ header: { borderBottom: '1px solid var(--ant-color-border-secondary, #f0f0f0)' } }}
+      >
+        <Form layout="vertical" size="small" style={{ marginTop: 4 }}>
+          {/* 第一行：规则名称 / 媒体类型 / 试运行 */}
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item label="规则名称" style={{ marginBottom: 12 }}>
+                <Input
+                  value={rule.name}
+                  onChange={e => set({ name: e.target.value })}
+                  placeholder="如：网盘待整理"
+                />
+              </Form.Item>
+            </Col>
+            <Col span={6}>
+              <Form.Item label="媒体类型" style={{ marginBottom: 12 }}>
+                <Select
+                  value={mediaType}
+                  onChange={v => set({ media_type: v })}
+                  style={{ width: '100%' }}
+                  options={[
+                    { value: 'all',   label: '全部' },
+                    { value: 'movie', label: '电影' },
+                    { value: 'tv',    label: '剧集' },
+                  ]}
+                />
+              </Form.Item>
+            </Col>
+            <Col span={6}>
+              <Form.Item label="试运行模式" tooltip="开启后只记录日志，不实际移动文件" style={{ marginBottom: 12 }}>
+                <Switch
+                  checked={rule.dry_run}
+                  onChange={v => set({ dry_run: v })}
+                  checkedChildren="开" unCheckedChildren="关"
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          {/* 第二行：目标根目录 */}
+          <Form.Item
+            label="目标根目录"
+            tooltip="115网盘中整理后文件的存放根目录，分类结果将在此目录下创建子目录"
+            style={{ marginBottom: 12 }}
+          >
+            <Row gutter={8} align="middle">
+              <Col flex="1">
+                <Input
+                  value={rule.target_root}
+                  placeholder="/影剧"
+                  onChange={e => set({ target_root: e.target.value })}
+                />
+              </Col>
+              <Col>
+                <Button icon={<FolderOpenOutlined />} onClick={() => openPicker('target_root')}>
+                  选择目录
+                </Button>
+              </Col>
+            </Row>
+          </Form.Item>
+
+          {/* 第三行：未识别目录 */}
+          <Form.Item
+            label="未识别目录"
+            tooltip="无法匹配任何分类规则的文件将移入此目录，留空则保留在原位"
+            style={{ marginBottom: 12 }}
+          >
+            <Row gutter={8} align="middle">
+              <Col flex="1">
+                <Input
+                  value={rule.unrecognized_dir}
+                  placeholder="/未识别（选填）"
+                  onChange={e => set({ unrecognized_dir: e.target.value })}
+                />
+              </Col>
+              <Col>
+                <Button icon={<FolderOpenOutlined />} onClick={() => openPicker('unrecognized_dir')}>
+                  选择目录
+                </Button>
+              </Col>
+            </Row>
+          </Form.Item>
+
+          {/* 第四行：源目录列表 */}
+          <Form.Item
+            label="源目录（待整理目录）"
+            tooltip="115网盘中存放待整理文件的目录，支持添加多个"
+            style={{ marginBottom: 0 }}
+          >
+            {(rule.source_paths || []).map((p, si) => (
+              <Row gutter={8} key={si} style={{ marginBottom: 8 }} align="middle">
+                <Col flex="1">
+                  <Input
+                    value={p}
+                    placeholder="/待整理/下载"
+                    onChange={e => set({
+                      source_paths: rule.source_paths.map((v, i) => i === si ? e.target.value : v)
+                    })}
+                  />
                 </Col>
-                <Col span={6}>
-                  <Form.Item label="媒体类型">
-                    <Select value={rule.media_type || 'all'} onChange={v => set({ media_type: v })}
-                      options={[{ value: 'all', label: '全部' }, { value: 'movie', label: '电影' }, { value: 'tv', label: '剧集' }]} />
-                  </Form.Item>
-                </Col>
-                <Col span={6}>
-                  <Form.Item label="试运行" tooltip="只记录日志，不实际移动文件">
-                    <Switch checked={rule.dry_run} onChange={v => set({ dry_run: v })} />
-                  </Form.Item>
+                <Col>
+                  <Button
+                    danger size="small" icon={<DeleteOutlined />}
+                    onClick={() => set({ source_paths: rule.source_paths.filter((_, i) => i !== si) })}
+                  />
                 </Col>
               </Row>
-              <Form.Item label="目标根目录" tooltip="115网盘中整理后的存放根目录">
-                <Input value={rule.target_root} placeholder="/影剧" onChange={e => set({ target_root: e.target.value })}
-                  addonAfter={<Button type="link" size="small" icon={<FolderOpenOutlined />}
-                    onClick={() => openPicker('target_root')} style={{ padding: 0, height: 'auto' }}>选择</Button>} />
-              </Form.Item>
-              <Form.Item label="未识别目录" tooltip="无法匹配任何分类的文件移入此目录">
-                <Input value={rule.unrecognized_dir} placeholder="/未识别（选填）" onChange={e => set({ unrecognized_dir: e.target.value })}
-                  addonAfter={<Button type="link" size="small" icon={<FolderOpenOutlined />}
-                    onClick={() => openPicker('unrecognized_dir')} style={{ padding: 0, height: 'auto' }}>选择</Button>} />
-              </Form.Item>
-              <Form.Item label="源目录（待整理目录）" tooltip="115网盘中存放待整理文件的目录，可添加多个">
-                {(rule.source_paths || []).map((p, si) => (
-                  <Row gutter={8} key={si} style={{ marginBottom: 6 }} align="middle">
-                    <Col flex="1"><Input value={p} placeholder="/待整理/下载"
-                      onChange={e => set({ source_paths: rule.source_paths.map((v, i) => i === si ? e.target.value : v) })} /></Col>
-                    <Col><Button danger size="small" icon={<DeleteOutlined />}
-                      onClick={() => set({ source_paths: rule.source_paths.filter((_, i) => i !== si) })} /></Col>
-                  </Row>
-                ))}
-                <Space style={{ marginTop: 4 }}>
-                  <Button size="small" icon={<PlusOutlined />}
-                    onClick={() => set({ source_paths: [...(rule.source_paths || []), ''] })}>手动输入</Button>
-                  <Button size="small" icon={<FolderOpenOutlined />}
-                    onClick={() => openPicker('__src__')}>从网盘选择</Button>
-                </Space>
-              </Form.Item>
-            </Form>
-          ),
-        }]}
+            ))}
+            <Space style={{ marginTop: rule.source_paths?.length ? 0 : 4 }}>
+              <Button
+                size="small" icon={<PlusOutlined />}
+                onClick={() => set({ source_paths: [...(rule.source_paths || []), ''] })}
+              >
+                手动输入
+              </Button>
+              <Button
+                size="small" icon={<FolderOpenOutlined />}
+                onClick={() => openPicker('__src__')}
+              >
+                从网盘选择
+              </Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </Card>
+      <DirPickerModal
+        open={dirPickerOpen}
+        onClose={() => setDirPickerOpen(false)}
+        onSelect={handleDirSelected}
       />
-      <DirPickerModal open={dirPickerOpen} onClose={() => setDirPickerOpen(false)} onSelect={handleDirSelected} />
     </>
   )
 }
+
 
 // =============================================================================
 // Tab1 — 目录整理
@@ -749,20 +862,33 @@ const OrganizeTab = () => {
 
   return (
     <Spin spinning={loading}>
-      {/* 页头操作栏 */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <Space>
-          <Tag color="blue">{rules.length} 条规则</Tag>
-          {orgStatus.running && <Tag color="processing" icon={<SyncOutlined spin />}>整理进行中</Tag>}
-          {orgStatus.last_organize && (
+      {/* ── 顶部工具栏 ── */}
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        marginBottom: 14,
+      }}>
+        {/* 左：规则数 + 运行状态 */}
+        <Space size={8} wrap>
+          <Tag color="blue" style={{ fontSize: 13, padding: '2px 10px' }}>
+            {rules.length} 条规则
+          </Tag>
+          {orgStatus.running && (
+            <Tag color="processing" icon={<SyncOutlined spin />}>整理进行中</Tag>
+          )}
+          {!orgStatus.running && orgStatus.last_organize && (
             <span style={{ fontSize: 12, color: '#888' }}>
-              上次整理：{new Date(orgStatus.last_organize * 1000).toLocaleString()}
+              上次：{new Date(orgStatus.last_organize * 1000).toLocaleString()}
               {orgStatus.last_organize_stats && (
-                <> · 移动 <b>{orgStatus.last_organize_stats.moved ?? 0}</b> · 失败 <b>{orgStatus.last_organize_stats.errors ?? 0}</b></>
+                <> &nbsp;·&nbsp;移动 <b>{orgStatus.last_organize_stats.moved ?? 0}</b>
+                  &nbsp;·&nbsp;失败 <b style={{ color: orgStatus.last_organize_stats.errors ? '#f5222d' : 'inherit' }}>
+                    {orgStatus.last_organize_stats.errors ?? 0}
+                  </b>
+                </>
               )}
             </span>
           )}
         </Space>
+        {/* 右：操作按钮 */}
         <Space>
           <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>刷新</Button>
           <Button icon={<PlusOutlined />} onClick={addRule}>添加规则</Button>
@@ -770,18 +896,30 @@ const OrganizeTab = () => {
         </Space>
       </div>
 
-      {/* 说明 */}
-      <Alert type="info" showIcon style={{ marginBottom: 16 }}
-        message="目录整理：将源目录中的文件按「分类规则」（Tab2）自动移动到目标根目录下的对应子目录，支持多条规则独立配置和运行。"
+      {/* ── 说明条 ── */}
+      <Alert
+        type="info" showIcon style={{ marginBottom: 16, borderRadius: 8 }}
+        message="将源目录中的文件按「分类规则」（Tab2）自动整理到目标根目录下的对应子目录，支持多条规则独立配置和运行。"
       />
 
-      {rules.length === 0
-        ? <div style={{ padding: '60px 0', textAlign: 'center', color: '#bbb', fontSize: 14,
-            border: '2px dashed #e5e7eb', borderRadius: 10 }}>
-            暂无整理规则，点击「添加规则」开始配置
-          </div>
-        : rules.map((rule, idx) => (
-          <OrgRuleCard key={idx} rule={rule} idx={idx} total={rules.length}
+      {/* ── 规则卡片列表 ── */}
+      {rules.length === 0 ? (
+        <div style={{
+          padding: '64px 0', textAlign: 'center',
+          color: '#bbb', fontSize: 14,
+          border: '2px dashed #e5e7eb', borderRadius: 10,
+          background: 'var(--ant-color-fill-quaternary, rgba(0,0,0,.02))',
+        }}>
+          <FolderAddOutlined style={{ fontSize: 36, marginBottom: 12, display: 'block' }} />
+          暂无整理规则，点击「添加规则」开始配置
+        </div>
+      ) : (
+        rules.map((rule, idx) => (
+          <OrgRuleCard
+            key={idx}
+            rule={rule}
+            idx={idx}
+            total={rules.length}
             onChange={r => updateRule(idx, r)}
             onDelete={() => deleteRule(idx)}
             onMove={dir => moveRule(idx, dir)}
@@ -789,7 +927,7 @@ const OrganizeTab = () => {
             running={!!running[idx]}
           />
         ))
-      }
+      )}
     </Spin>
   )
 }
