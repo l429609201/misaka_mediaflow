@@ -225,9 +225,11 @@ function parseYamlCfg(text) {
 
 // ── YAML 序列化（uiCats → YAML 文本）────────────────────────────────────────
 function uiCatsToYaml(cats) {
-  // all 类型只归入 movie 段（不重复进 tv），避免两段重复
-  const movieCats = cats.filter(c => c.media_type === 'movie' || c.media_type === 'all')
+  // 严格按 media_type 分组，all 单独成段，不混入 movie 段
+  // 这样反向解析时 parseYamlCfg 能正确还原各分类的 media_type
+  const movieCats = cats.filter(c => c.media_type === 'movie')
   const tvCats    = cats.filter(c => c.media_type === 'tv')
+  const allCats   = cats.filter(c => !c.media_type || c.media_type === 'all')
 
   function renderCat(cat, section) {
     const lines = [`  ${cat.name}:`]
@@ -239,7 +241,7 @@ function uiCatsToYaml(cats) {
     if (cat.genre_ids?.length)
       lines.push(`    genre_ids: '${cat.genre_ids.join(',')}'`)
     if (cat.country?.length) {
-      // 电影用 production_countries，剧集用 origin_country
+      // 电影用 production_countries，剧集用 origin_country，all 用 origin_country
       const key = section === 'movie' ? 'production_countries' : 'origin_country'
       lines.push(`    ${key}: '${cat.country.join(',')}'`)
     }
@@ -266,10 +268,9 @@ function uiCatsToYaml(cats) {
     sections.push(...tvCats.map(c => renderCat(c, 'tv')))
     sections.push('')
   }
-  // 纯 all 且没有 movie/tv 的边缘情况
-  if (!movieCats.length && !tvCats.length && cats.length) {
+  if (allCats.length) {
     sections.push('all:')
-    sections.push(...cats.map(c => renderCat(c, 'all')))
+    sections.push(...allCats.map(c => renderCat(c, 'all')))
     sections.push('')
   }
 

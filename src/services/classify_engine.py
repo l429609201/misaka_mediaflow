@@ -196,6 +196,7 @@ def detect_category(
     dirname: str,
     tmdb_info: dict,
     categories: list,
+    is_movie: Optional[bool] = None,
 ) -> Optional[str]:
     """
     对单个文件执行分类规则匹配。
@@ -205,19 +206,34 @@ def detect_category(
         dirname:    所在目录名
         tmdb_info:  TMDB 元数据 dict（可为空 {}）
         categories: 分类规则列表（来自 get_config()["categories"]）
+        is_movie:   文件类型（True=电影, False=剧集, None=未知/不过滤）
+                    用于跳过 media_type 不匹配的分类，避免 TV 文件命中电影兜底规则。
 
     Returns:
         命中的分类名；如果有兜底分类则返回兜底名；否则返回 None。
     """
     fallback: Optional[str] = None
     for cat in categories:
-        name  = cat.get("name", "")
-        rules = cat.get("rules", [])
+        name       = cat.get("name", "")
+        rules      = cat.get("rules", [])
+        media_type = cat.get("media_type", "all") or "all"
+
         if not name:
             continue
+
+        # ── media_type 过滤：跳过与当前文件类型不符的分类 ──
+        # is_movie=None 表示无法判断，此时不过滤（向后兼容）
+        if is_movie is not None:
+            if media_type == "movie" and not is_movie:
+                continue   # 电影规则 跳过 剧集文件
+            if media_type == "tv" and is_movie:
+                continue   # 剧集规则 跳过 电影文件
+        # media_type == "all" 始终参与匹配
+
         if not rules:
-            fallback = name   # 无规则 → 兜底
+            fallback = name   # 无规则 → 该 media_type 下的兜底
             continue
+
         match_all = cat.get("match_all", False)
         if match_all:
             matched = all(_match_rule(r, filename, dirname, tmdb_info) for r in rules)

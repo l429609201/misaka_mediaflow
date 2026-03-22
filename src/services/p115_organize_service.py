@@ -145,7 +145,7 @@ class P115OrganizeService:
                         tmdb_info = await classify_engine.fetch_meta_info(title, False, year)
                 else:
                     tmdb_info = await classify_engine.fetch_meta_info(title, is_movie, year)
-            category = classify_engine.detect_category(filename, dirname, tmdb_info, categories)
+            category = classify_engine.detect_category(filename, dirname, tmdb_info, categories, is_movie=is_movie)
             if not category or not cat_cid_map.get(category):
                 if unrecognized_cid:
                     if dry_run:
