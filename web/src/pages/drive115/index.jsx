@@ -8,7 +8,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import {
   Card, Descriptions, Tag, Button, Input, InputNumber, Modal, message,
   Space, Alert, Row, Col, Spin, Typography, Form, Select, QRCode,
-  Avatar, Progress, Divider, Switch, Badge, Tooltip,
+  Avatar, Progress, Divider, Switch, Badge, Tooltip, theme,
 } from 'antd'
 import {
   CheckCircleOutlined, CloseCircleOutlined, CloudSyncOutlined,
@@ -49,6 +49,7 @@ const StatTag = ({ value, label, color }) => (
 
 export const Drive115 = () => {
   const { t } = useTranslation()
+  const { token } = theme.useToken()
 
   const [status,  setStatus]  = useState({})
   const [loading, setLoading] = useState(true)
@@ -857,11 +858,14 @@ export const Drive115 = () => {
             <Divider style={{ margin: '12px 0' }} />
 
             {/* STRM URL 模板 */}
+            <Divider orientation="left" orientationMargin={0} style={{ margin: '0 0 12px', fontSize: 13, fontWeight: 600 }}>
+              <Space size={6}><CodeOutlined />STRM URL 模板</Space>
+            </Divider>
             <Alert type="info" showIcon style={{ marginBottom: 12 }}
               message="使用 Jinja2 语法拼接 STRM 文件内容。点击下方参数按钮可将其插入至光标所在位置。" />
             <div style={{ marginBottom: 10 }}>
               <Text type="secondary" style={{ display: 'block', marginBottom: 6, fontSize: 12 }}>
-                <CodeOutlined style={{ marginRight: 4 }} />可选参数（点击插入）
+                可选参数（点击插入）
               </Text>
               <Space wrap size={[6, 6]}>
                 {TEMPLATE_PARAMS.map(p => (
@@ -879,10 +883,12 @@ export const Drive115 = () => {
               spellCheck={false}
               style={{
                 width: '100%', padding: '8px 12px', fontFamily: 'monospace', fontSize: 12,
-                border: '1px solid #d9d9d9', borderRadius: 6, resize: 'vertical',
-                outline: 'none', lineHeight: 1.6, boxSizing: 'border-box',
-                background: 'var(--ant-color-bg-container, #fff)',
-                color: 'var(--ant-color-text, #000)',
+                border: `1px solid ${token.colorBorder}`,
+                borderRadius: token.borderRadius,
+                resize: 'vertical', outline: 'none', lineHeight: 1.6, boxSizing: 'border-box',
+                background: token.colorBgContainer,
+                color: token.colorText,
+                transition: 'border-color .2s',
               }}
             />
             <Space style={{ marginTop: 10 }}>
