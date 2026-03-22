@@ -35,6 +35,10 @@ class MonitorConfigPayload(BaseModel):
     poll_interval: int = 30
     monitor_paths: List[str] = []
     auto_inc_sync: bool = True
+    # 自定义目录配置（use_custom_dir=False 时后端忽略 monitor_dir/strm_dir）
+    use_custom_dir: bool = False
+    monitor_dir: Optional[str] = ""
+    strm_dir: Optional[str] = ""
 
 
 class OrganizeRunPayload(BaseModel):

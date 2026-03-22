@@ -43,6 +43,9 @@ class P115LifeMonitorService:
             "poll_interval": 30,           # 轮询间隔（秒）
             "monitor_paths": [],           # 监控的网盘路径（空=全部）
             "auto_inc_sync": True,         # 检测到新文件时自动触发增量同步
+            "use_custom_dir": False,       # 是否使用自定义目录（否则沿用全局路径映射）
+            "monitor_dir": "",             # 自定义监控目录（115网盘路径）
+            "strm_dir": "",                # 自定义STRM输出目录（本地路径）
         }
         async with get_async_session_local() as db:
             result = await db.execute(

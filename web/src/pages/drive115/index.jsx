@@ -507,6 +507,12 @@ export const Drive115 = () => {
                   <Space size="small">
                     <Button icon={<SyncOutlined />} size="small" onClick={fetchMonitorAll}>{t('common.refresh')}</Button>
                     <Button
+                      type="primary" icon={<SaveOutlined />} size="small"
+                      loading={monitorSaving} onClick={handleMonitorSave}
+                    >
+                      {t('common.save')}
+                    </Button>
+                    <Button
                       size="small"
                       type={monitorStatus.running ? 'default' : 'primary'}
                       danger={monitorStatus.running}
@@ -599,10 +605,6 @@ export const Drive115 = () => {
                     <Switch checked={monitorCfg.auto_inc_sync}
                       onChange={v => setMonitorCfg(c => ({ ...c, auto_inc_sync: v }))} />
                   </Form.Item>
-                  <Button type="primary" icon={<CheckCircleOutlined />}
-                    onClick={handleMonitorSave} loading={monitorSaving} block>
-                    {t('common.save')}
-                  </Button>
                 </Form>
                 {(monitorStatus.recent_events || []).length > 0 && (
                   <>
