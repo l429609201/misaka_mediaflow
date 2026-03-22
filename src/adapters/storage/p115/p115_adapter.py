@@ -12,7 +12,7 @@ from urllib.parse import parse_qsl, unquote, urlsplit
 
 import httpx
 
-from src.adapters.storage.base import StorageAdapter, DirectLink, FileEntry
+from src.adapters.storage.base import StorageAdapter, DirectLink, FileEntry, FieldSpec
 from src.adapters.storage.p115.p115_rate import P115RateLimiter
 from src.adapters.storage.p115.p115_auth import P115AuthService
 from src.adapters.storage.p115.p115_cache import P115IdPathCache
@@ -36,7 +36,17 @@ _115_USER_URL = "https://my.115.com/?ct=ajax&ac=nav"
 class P115StorageAdapter(StorageAdapter):
     """115 网盘存储适配器"""
 
-    CONFIG_FIELDS = []
+    CONFIG_FIELDS = [
+        FieldSpec(
+            key="_info",
+            label="",
+            type="info",
+            hint=(
+                "此存储源直接复用「115网盘」模块中已登录的 Cookie，无需重复配置。\n"
+                "请确保已在「115网盘」页面完成登录（Cookie 或扫码），添加后即可使用。"
+            ),
+        ),
+    ]
 
     def __init__(
         self,

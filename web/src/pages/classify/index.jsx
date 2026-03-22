@@ -18,8 +18,10 @@ import {
   FolderAddOutlined, FolderOpenOutlined, NodeIndexOutlined,
   PlayCircleOutlined, SyncOutlined,
 } from '@ant-design/icons'
-import { classifyApi, p115Api, p115StrmApi } from '@/apis'
+import { classifyApi, p115Api, p115StrmApi, storageApi } from '@/apis'
 import DirPickerModal from '@/components/DirPickerModal'
+import LocalDirPickerModal from '@/components/LocalDirPickerModal'
+import StorageDirPickerModal from '@/components/StorageDirPickerModal'
 
 const { Text } = Typography
 const { TextArea } = Input
@@ -531,6 +533,7 @@ tv:
 // =============================================================================
 const DEFAULT_ORG_RULE = {
   name: '新规则', enabled: true, media_type: 'all',
+  source_storage: 'local',   // 'local' | 存储源 ID（字符串）| 'p115'
   source_paths: [], target_root: '', unrecognized_dir: '', dry_run: false,
 }
 
@@ -584,12 +587,28 @@ const previewFormat = (fmt, sample) => {
 // 收起：固定宽220px竖卡，显示规则名+媒体类型+操作图标
 // 展开：宽度自适应剩余空间，显示完整配置表单
 // =============================================================================
-const OrgRuleCard = ({ rule, idx, total, expanded, onToggle, onChange, onDelete, onMove, onRun, running }) => {
-  const [dirPickerOpen,  setDirPickerOpen]  = useState(false)
-  const [dirPickerField, setDirPickerField] = useState(null)
+const OrgRuleCard = ({ rule, idx, total, expanded, onToggle, onChange, onDelete, onMove, onRun, running, storages }) => {
+  const [dirPickerOpen,     setDirPickerOpen]     = useState(false)
+  const [localPickerOpen,   setLocalPickerOpen]   = useState(false)
+  const [storagePickerOpen, setStoragePickerOpen] = useState(false)
+  const [dirPickerField,    setDirPickerField]    = useState(null)
 
   const set = (patch) => onChange({ ...rule, ...patch })
-  const openPicker = (field) => { setDirPickerField(field); setDirPickerOpen(true) }
+
+  const sourceStorage = rule.source_storage || 'local'
+  const activeStorage = storages.find(s => String(s.id) === String(sourceStorage)) || null
+
+  const openPicker = (field) => {
+    setDirPickerField(field)
+    if (sourceStorage === 'local') {
+      setLocalPickerOpen(true)
+    } else if (activeStorage?.type === 'p115') {
+      setDirPickerOpen(true)
+    } else {
+      setStoragePickerOpen(true)
+    }
+  }
+
   const handleDirSelected = (p) => {
     if (dirPickerField === '__src__') {
       set({ source_paths: [...(rule.source_paths || []), p] })
@@ -602,28 +621,32 @@ const OrgRuleCard = ({ rule, idx, total, expanded, onToggle, onChange, onDelete,
   const mediaType = rule.media_type || 'all'
   const accentColor = mediaType === 'movie' ? '#1677ff' : mediaType === 'tv' ? '#7c3aed' : '#52c41a'
 
+  const storageOptions = [
+    { value: 'local', label: '本地' },
+    ...storages.map(s => ({ value: String(s.id), label: s.name || s.type })),
+  ]
+
+  const pickerBtnLabel = sourceStorage === 'local' ? '从本地选择'
+    : activeStorage?.type === 'p115' ? '从网盘选择' : '从存储选择'
+
   // ── 收起态：竖向窄卡片 ──
   if (!expanded) {
     return (
       <div
         onClick={onToggle}
         style={{
-          width: 180, flexShrink: 0,
-          borderRadius: 10,
+          width: 180, flexShrink: 0, borderRadius: 10,
           border: `1px solid var(--ant-color-border, #e5e7eb)`,
           borderTop: `3px solid ${accentColor}`,
           background: 'var(--ant-color-bg-container, #fff)',
           boxShadow: '0 1px 4px rgba(0,0,0,.07)',
-          cursor: 'pointer',
-          opacity: enabled ? 1 : 0.55,
+          cursor: 'pointer', opacity: enabled ? 1 : 0.55,
           display: 'flex', flexDirection: 'column',
-          transition: 'box-shadow .2s',
-          userSelect: 'none',
+          transition: 'box-shadow .2s', userSelect: 'none',
         }}
         onMouseEnter={e => e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,.13)'}
         onMouseLeave={e => e.currentTarget.style.boxShadow = '0 1px 4px rgba(0,0,0,.07)'}
       >
-        {/* 卡片主体：规则名 + 摘要 */}
         <div style={{ padding: '14px 14px 10px', flex: 1 }}>
           <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6, wordBreak: 'break-all' }}>
             {rule.name || `规则 ${idx + 1}`}
@@ -632,8 +655,11 @@ const OrgRuleCard = ({ rule, idx, total, expanded, onToggle, onChange, onDelete,
             {MEDIA_TYPE_LABEL[mediaType]}
           </Tag>
           {rule.dry_run && <Tag color="orange" style={{ fontSize: 11 }}>试运行</Tag>}
+          <div style={{ fontSize: 11, color: '#888', marginTop: 4 }}>
+            {storageOptions.find(o => o.value === sourceStorage)?.label || '本地'}
+          </div>
           {rule.target_root && (
-            <div style={{ fontSize: 11, color: '#888', marginTop: 4, wordBreak: 'break-all' }}>
+            <div style={{ fontSize: 11, color: '#888', marginTop: 2, wordBreak: 'break-all' }}>
               → {rule.target_root}
             </div>
           )}
@@ -643,21 +669,15 @@ const OrgRuleCard = ({ rule, idx, total, expanded, onToggle, onChange, onDelete,
             </div>
           )}
         </div>
-        {/* 底部操作栏 */}
         <div style={{
           borderTop: '1px solid var(--ant-color-border-secondary, #f0f0f0)',
-          padding: '6px 10px',
-          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '6px 10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         }}>
           <Space size={2} onClick={e => e.stopPropagation()}>
-            <Tooltip title="上移">
-              <Button size="small" type="text" icon={<ArrowUpOutlined />}
-                disabled={idx === 0} onClick={() => onMove(-1)} />
-            </Tooltip>
-            <Tooltip title="下移">
-              <Button size="small" type="text" icon={<ArrowDownOutlined />}
-                disabled={idx === total - 1} onClick={() => onMove(1)} />
-            </Tooltip>
+            <Tooltip title="上移"><Button size="small" type="text" icon={<ArrowUpOutlined />}
+              disabled={idx === 0} onClick={() => onMove(-1)} /></Tooltip>
+            <Tooltip title="下移"><Button size="small" type="text" icon={<ArrowDownOutlined />}
+              disabled={idx === total - 1} onClick={() => onMove(1)} /></Tooltip>
           </Space>
           <Space size={2} onClick={e => e.stopPropagation()}>
             <Tooltip title="删除">
@@ -673,15 +693,13 @@ const OrgRuleCard = ({ rule, idx, total, expanded, onToggle, onChange, onDelete,
   return (
     <>
       <div style={{
-        flex: 1, minWidth: 480,
-        borderRadius: 10,
+        flex: 1, minWidth: 480, borderRadius: 10,
         border: `1px solid ${accentColor}`,
         borderTop: `3px solid ${accentColor}`,
         background: 'var(--ant-color-bg-container, #fff)',
         boxShadow: '0 2px 8px rgba(0,0,0,.1)',
         opacity: enabled ? 1 : 0.7,
       }}>
-        {/* 展开态卡头 */}
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           padding: '10px 14px',
@@ -696,14 +714,10 @@ const OrgRuleCard = ({ rule, idx, total, expanded, onToggle, onChange, onDelete,
           <Space size={6} onClick={e => e.stopPropagation()}>
             <Switch size="small" checked={enabled} onChange={v => set({ enabled: v })}
               checkedChildren="启用" unCheckedChildren="禁用" />
-            <Tooltip title="上移">
-              <Button size="small" type="text" icon={<ArrowUpOutlined />}
-                disabled={idx === 0} onClick={() => onMove(-1)} />
-            </Tooltip>
-            <Tooltip title="下移">
-              <Button size="small" type="text" icon={<ArrowDownOutlined />}
-                disabled={idx === total - 1} onClick={() => onMove(1)} />
-            </Tooltip>
+            <Tooltip title="上移"><Button size="small" type="text" icon={<ArrowUpOutlined />}
+              disabled={idx === 0} onClick={() => onMove(-1)} /></Tooltip>
+            <Tooltip title="下移"><Button size="small" type="text" icon={<ArrowDownOutlined />}
+              disabled={idx === total - 1} onClick={() => onMove(1)} /></Tooltip>
             <Button size="small" type="primary" icon={<PlayCircleOutlined />}
               loading={running} onClick={onRun}>运行整理</Button>
             <Tooltip title="删除规则">
@@ -711,8 +725,6 @@ const OrgRuleCard = ({ rule, idx, total, expanded, onToggle, onChange, onDelete,
             </Tooltip>
           </Space>
         </div>
-
-        {/* 展开态表单 */}
         <div style={{ padding: '14px 16px' }}>
           <Form layout="vertical" size="small">
             <Row gutter={16}>
@@ -733,6 +745,10 @@ const OrgRuleCard = ({ rule, idx, total, expanded, onToggle, onChange, onDelete,
                 </Form.Item>
               </Col>
             </Row>
+            <Form.Item label="源存储器" tooltip="待整理文件所在的存储位置" style={{ marginBottom: 12 }}>
+              <Select value={sourceStorage} onChange={v => set({ source_storage: v, source_paths: [] })}
+                style={{ width: '100%' }} options={storageOptions} />
+            </Form.Item>
             <Form.Item label="目标根目录" tooltip="整理后文件的存放根目录，分类结果将在此目录下创建子目录" style={{ marginBottom: 12 }}>
               <Row gutter={8} align="middle">
                 <Col flex="1"><Input value={rule.target_root} placeholder="/影剧" onChange={e => set({ target_root: e.target.value })} /></Col>
@@ -762,13 +778,18 @@ const OrgRuleCard = ({ rule, idx, total, expanded, onToggle, onChange, onDelete,
                 <Button size="small" icon={<PlusOutlined />}
                   onClick={() => set({ source_paths: [...(rule.source_paths || []), ''] })}>手动输入</Button>
                 <Button size="small" icon={<FolderOpenOutlined />}
-                  onClick={() => openPicker('__src__')}>从网盘选择</Button>
+                  onClick={() => openPicker('__src__')}>{pickerBtnLabel}</Button>
               </Space>
             </Form.Item>
           </Form>
         </div>
       </div>
       <DirPickerModal open={dirPickerOpen} onClose={() => setDirPickerOpen(false)} onSelect={handleDirSelected} />
+      <LocalDirPickerModal open={localPickerOpen} onClose={() => setLocalPickerOpen(false)} onSelect={handleDirSelected} />
+      {activeStorage && (
+        <StorageDirPickerModal open={storagePickerOpen} onClose={() => setStoragePickerOpen(false)}
+          onSelect={handleDirSelected} storage={activeStorage} />
+      )}
     </>
   )
 }
@@ -778,23 +799,30 @@ const OrgRuleCard = ({ rule, idx, total, expanded, onToggle, onChange, onDelete,
 // Tab1 — 目录整理
 // =============================================================================
 const OrganizeTab = () => {
-  const [rules,      setRules]      = useState([])
-  const [saving,     setSaving]     = useState(false)
-  const [loading,    setLoading]    = useState(true)
-  const [running,    setRunning]    = useState({})      // { ruleIdx: bool }
-  const [orgStatus,  setOrgStatus]  = useState({})
-  const [expandedIdx, setExpandedIdx] = useState(null)  // 当前展开的规则下标
+  const [rules,       setRules]       = useState([])
+  const [saving,      setSaving]      = useState(false)
+  const [loading,     setLoading]     = useState(true)
+  const [running,     setRunning]     = useState({})
+  const [orgStatus,   setOrgStatus]   = useState({})
+  const [expandedIdx, setExpandedIdx] = useState(null)
+  const [storages,    setStorages]    = useState([])   // 已配置的存储源列表
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [rulesRes, stRes] = await Promise.all([
+      const [rulesRes, stRes, storageRes] = await Promise.all([
         classifyApi.getOrganizeRules(),
         p115StrmApi.getOrganizeStatus(),
+        storageApi.list(),
       ])
       const rulesData = rulesRes.data?.rules || rulesRes.data || []
       setRules(Array.isArray(rulesData) ? rulesData : [])
       setOrgStatus(stRes.data || {})
+      // 只取已启用的存储源
+      const storageList = Array.isArray(storageRes.data?.items)
+        ? storageRes.data.items.filter(s => s.is_active !== 0)
+        : Array.isArray(storageRes.data) ? storageRes.data.filter(s => s.is_active !== 0) : []
+      setStorages(storageList)
     } catch { message.error('加载整理配置失败') }
     finally { setLoading(false) }
   }, [])
@@ -901,6 +929,7 @@ const OrganizeTab = () => {
               onMove={dir => moveRule(idx, dir)}
               onRun={() => runRule(idx)}
               running={!!running[idx]}
+              storages={storages}
             />
           ))}
         </div>

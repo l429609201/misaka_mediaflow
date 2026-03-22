@@ -13,17 +13,19 @@ class FieldSpec:
     适配器通过类属性 CONFIG_FIELDS 声明自己需要哪些字段，
     API /storage/meta 接口把这些规格返回给前端，
     前端据此动态渲染表单，无需任何硬编码。
+
+    type='info' 时为只读提示块，前端渲染为 Alert，不产生表单值。
     """
-    key: str                                                    # config JSON 里的键名
-    label: str                                                  # 前端显示标签
-    type: Literal['text', 'password', 'textarea', 'select']    # 输入组件类型
-    required: bool = False                                      # 是否必填
-    secret: bool = False                                        # True → 读取时脱敏
-    placeholder: str = ""                                       # 输入框占位文字
-    hint: str = ""                                              # 字段下方帮助文字
-    default: str = ""                                           # 默认值
-    options: list = field(default_factory=list)                  # select 类型的选项 [{"value":"x","label":"X"},...]
-    show_when: dict = field(default_factory=dict)                # 条件显示 {"auth_mode":"token"} → 仅 auth_mode=token 时显示
+    key: str                                                             # config JSON 里的键名
+    label: str                                                           # 前端显示标签
+    type: Literal['text', 'password', 'textarea', 'select', 'info']     # 输入组件类型
+    required: bool = False                                               # 是否必填
+    secret: bool = False                                                 # True → 读取时脱敏
+    placeholder: str = ""                                                # 输入框占位文字
+    hint: str = ""                                                       # 字段下方帮助文字
+    default: str = ""                                                    # 默认值
+    options: list = field(default_factory=list)                          # select 类型的选项
+    show_when: dict = field(default_factory=dict)                        # 条件显示
 
     def to_dict(self) -> dict:
         d = {

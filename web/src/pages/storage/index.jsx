@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react'
 import {
   Row, Col, Card, Button, Modal, Form, Input, Select,
-  message, Popconfirm, Tag, Tooltip, Typography, Empty, Spin, Divider, Progress,
+  message, Popconfirm, Tag, Tooltip, Typography, Empty, Spin, Divider, Progress, Alert,
 } from 'antd'
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, ApiOutlined,
@@ -219,7 +219,10 @@ export const Storage = () => {
           <Form.Item name="type" label={t('storage.storageType')} rules={[{ required: true }]}>
             <Select options={typeOptions} onChange={handleTypeChange} />
           </Form.Item>
-          <Form.Item name="host" label={t('storage.host')} rules={[{ required: true }]}>
+          <Form.Item name="host" label={t('storage.host')}
+            rules={modalType === 'p115' ? [] : [{ required: true }]}
+            style={modalType === 'p115' ? { display: 'none' } : {}}
+          >
             <Input placeholder="http://127.0.0.1:19798" />
           </Form.Item>
 
@@ -264,9 +267,21 @@ function DynamicField({ field, isEditing, onFieldChange }) {
   const formName = `config__${field.key}`
   const isSecret = field.type === 'password' || field.secret
 
-  const extra = field.hint
+  const extra = field.hint && field.type !== 'info'
     ? <span style={{ fontSize: 12, color: '#999' }}>{field.hint}</span>
     : null
+
+  // info 类型：只读提示块，不产生表单值
+  if (field.type === 'info') {
+    return (
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message={field.hint || field.label}
+      />
+    )
+  }
 
   // select 类型：渲染为下拉选择框
   if (field.type === 'select') {
