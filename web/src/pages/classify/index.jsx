@@ -8,7 +8,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import {
   Card, Row, Col, Input, Switch, Button, Select, Modal, Form,
   Space, Alert, Tooltip, Divider, message, Segmented, Tag,
-  Typography, Spin, Tabs,
+  Typography, Spin, Tabs, theme,
 } from 'antd'
 import {
   PlusOutlined, DeleteOutlined, SaveOutlined, ReloadOutlined,
@@ -404,41 +404,43 @@ const EditCategoryModal = ({ open, cat, onOk, onCancel }) => {
 // 分类卡片（列表项）
 // =============================================================================
 const CategoryItem = ({ cat, idx, total, color, onEdit, onDelete, onMove }) => {
+  const { token } = theme.useToken()
   const hasRules = (cat.genre_ids?.length || cat.country?.length || cat.language?.length ||
     cat.keyword?.length || cat.keyword_dir?.length || cat.regex?.length)
   const isDefault = !hasRules
-
-  const tagStyle = { fontSize:11 }
+  const tagStyle = { fontSize: 11 }
 
   return (
     <div style={{
-      display:'flex', alignItems:'center', gap:10,
-      padding:'10px 14px',
-      borderRadius:10,
-      border:'1px solid var(--ant-color-border,#e5e7eb)',
-      marginBottom:8,
-      background:'var(--ant-color-bg-container,#fff)',
-      boxShadow:'0 1px 3px rgba(0,0,0,.05)',
-      borderLeft:`4px solid ${color}`,
-      cursor:'default',
+      display: 'flex', alignItems: 'center', gap: 10,
+      padding: '10px 14px',
+      borderRadius: 10,
+      border: `1px solid ${token.colorBorder}`,
+      marginBottom: 8,
+      background: token.colorBgContainer,
+      boxShadow: '0 1px 3px rgba(0,0,0,.05)',
+      borderLeft: `4px solid ${color}`,
+      cursor: 'default',
     }}>
       {/* 序号 */}
       <div style={{
-        width:24, height:24, borderRadius:'50%', background:color,
-        color:'#fff', display:'flex', alignItems:'center', justifyContent:'center',
-        fontSize:12, fontWeight:700, flexShrink:0,
-      }}>{idx+1}</div>
+        width: 24, height: 24, borderRadius: '50%', background: color,
+        color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: 12, fontWeight: 700, flexShrink: 0,
+      }}>{idx + 1}</div>
 
       {/* 分类名 + 目标目录 */}
-      <div style={{ flex:1, minWidth:0 }}>
-        <div style={{ fontWeight:600, fontSize:14 }}>{cat.name || <Text type="secondary">（未命名）</Text>}</div>
-        <div style={{ fontSize:12, color:'#888', marginTop:1 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 600, fontSize: 14, color: token.colorText }}>
+          {cat.name || <Text type="secondary">（未命名）</Text>}
+        </div>
+        <div style={{ fontSize: 12, color: token.colorTextSecondary, marginTop: 1 }}>
           → {cat.target_dir || <Text type="secondary">未设置目标目录</Text>}
         </div>
       </div>
 
       {/* 条件标签 */}
-      <div style={{ display:'flex', flexWrap:'wrap', gap:4, flex:2, minWidth:0 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, flex: 2, minWidth: 0 }}>
         {isDefault
           ? <Tag color="orange" style={tagStyle}>⚡ 兜底</Tag>
           : <>
@@ -456,15 +458,15 @@ const CategoryItem = ({ cat, idx, total, color, onEdit, onDelete, onMove }) => {
       </div>
 
       {/* 逻辑标签 */}
-      <Tag style={{ flexShrink:0, fontSize:11, color:'#888' }}>
+      <Tag style={{ flexShrink: 0, fontSize: 11, color: token.colorTextSecondary }}>
         {cat.match_all ? 'AND' : 'OR'}
       </Tag>
 
       {/* 操作 */}
-      <Space size={2} style={{ flexShrink:0 }}>
+      <Space size={2} style={{ flexShrink: 0 }}>
         <Tooltip title="编辑"><Button type="primary" ghost size="small" icon={<EditOutlined />} onClick={onEdit} /></Tooltip>
-        <Tooltip title="上移"><Button size="small" type="text" icon={<ArrowUpOutlined />} disabled={idx===0} onClick={()=>onMove(-1)} /></Tooltip>
-        <Tooltip title="下移"><Button size="small" type="text" icon={<ArrowDownOutlined />} disabled={idx===total-1} onClick={()=>onMove(1)} /></Tooltip>
+        <Tooltip title="上移"><Button size="small" type="text" icon={<ArrowUpOutlined />} disabled={idx === 0} onClick={() => onMove(-1)} /></Tooltip>
+        <Tooltip title="下移"><Button size="small" type="text" icon={<ArrowDownOutlined />} disabled={idx === total - 1} onClick={() => onMove(1)} /></Tooltip>
         <Tooltip title="删除"><Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={onDelete} /></Tooltip>
       </Space>
     </div>
@@ -474,7 +476,9 @@ const CategoryItem = ({ cat, idx, total, color, onEdit, onDelete, onMove }) => {
 // =============================================================================
 // 代码模式面板
 // =============================================================================
-const CodePanel = ({ value, onChange }) => (
+const CodePanel = ({ value, onChange }) => {
+  const { token } = theme.useToken()
+  return (
   <Row gutter={16}>
     <Col xs={24} lg={16}>
       <Card size="small" title={
@@ -484,16 +488,16 @@ const CodePanel = ({ value, onChange }) => (
           <Tag color="blue">YAML 格式 · 参考 MP</Tag>
         </Space>
       }>
-        <TextArea value={value} onChange={e=>onChange(e.target.value)}
-          autoSize={{ minRows:24, maxRows:50 }}
-          style={{ fontFamily:'monospace', fontSize:12, lineHeight:1.7 }}
+        <TextArea value={value} onChange={e => onChange(e.target.value)}
+          autoSize={{ minRows: 24, maxRows: 50 }}
+          style={{ fontFamily: 'monospace', fontSize: 12, lineHeight: 1.7 }}
         />
       </Card>
     </Col>
     <Col xs={24} lg={8}>
-      <Card size="small" title="格式说明" style={{ position:'sticky', top:24, fontSize:12, lineHeight:2 }}>
-        <div style={{ fontWeight:600, marginBottom:4 }}>格式示例（YAML）</div>
-        <pre style={{ fontSize:11, background:'rgba(0,0,0,.04)', borderRadius:6, padding:'8px 10px', margin:'0 0 10px', whiteSpace:'pre', overflowX:'auto' }}>{
+      <Card size="small" title="格式说明" style={{ position: 'sticky', top: 24, fontSize: 12, lineHeight: 2 }}>
+        <div style={{ fontWeight: 600, marginBottom: 4 }}>格式示例（YAML）</div>
+        <pre style={{ fontSize: 11, background: token.colorFillTertiary, borderRadius: 6, padding: '8px 10px', margin: '0 0 10px', whiteSpace: 'pre', overflowX: 'auto' }}>{
 `movie:
   动漫电影:
     genre_ids: '16'
@@ -510,7 +514,7 @@ tv:
   电视剧:
   # 无字段 = 兜底分类`
         }</pre>
-        <Divider style={{ margin:'8px 0' }} />
+        <Divider style={{ margin: '8px 0' }} />
         <div><Text code>genre_ids</Text> TMDB 类型 ID（字符串）</div>
         <div><Text code>origin_country</Text> 产地（剧集）如 <Text code>'JP,CN'</Text></div>
         <div><Text code>production_countries</Text> 产地（电影）</div>
@@ -518,15 +522,16 @@ tv:
         <div><Text code>keyword</Text> 文件名关键词（逗号分隔）</div>
         <div><Text code>keyword_dir</Text> 目录名关键词</div>
         <div><Text code>regex</Text> 正则（匹配文件名）</div>
-        <Divider style={{ margin:'8px 0' }} />
-        <div style={{ color:'#888' }}>· 无任何字段 = 兜底分类</div>
-        <div style={{ color:'#888' }}>· # 开头行为注释</div>
-        <div style={{ color:'#888' }}>· movie/tv 下分类继承适用对象</div>
-        <div style={{ color:'#888' }}>· 多值用英文逗号分隔，外加引号</div>
+        <Divider style={{ margin: '8px 0' }} />
+        <div style={{ color: token.colorTextSecondary }}>· 无任何字段 = 兜底分类</div>
+        <div style={{ color: token.colorTextSecondary }}>· # 开头行为注释</div>
+        <div style={{ color: token.colorTextSecondary }}>· movie/tv 下分类继承适用对象</div>
+        <div style={{ color: token.colorTextSecondary }}>· 多值用英文逗号分隔，外加引号</div>
       </Card>
     </Col>
   </Row>
-)
+  )
+}
 
 // =============================================================================
 // 目录整理 — 默认规则结构
