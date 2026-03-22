@@ -279,25 +279,46 @@ function uiCatsToYaml(cats) {
 // ── UI 内部格式 ↔ 后端 API 格式 ──────────────────────────────────────────────
 function uiCatToApiCat(cat) {
   const rules = []
-  if (cat.genre_ids?.length)   rules.push({ type:'genre_ids',         value: cat.genre_ids.join(',') })
-  if (cat.country?.length)     rules.push({ type:'origin_country',    value: cat.country.join(',') })
-  if (cat.language?.length)    rules.push({ type:'original_language', value: cat.language.join(',') })
-  for (const k of (cat.keyword     || [])) rules.push({ type:'keyword', field:'filename', value:k })
-  for (const k of (cat.keyword_dir || [])) rules.push({ type:'keyword', field:'dirname',  value:k })
-  for (const r of (cat.regex       || [])) rules.push({ type:'regex',   field:'filename', value:r })
-  return { name: cat.name, target_dir: cat.target_dir, match_all: cat.match_all, rules }
+  if (cat.genre_ids?.length)   rules.push({ type: 'genre_ids',          value: cat.genre_ids.join(',') })
+  if (cat.country?.length) {
+    // 电影用 production_countries，剧集用 origin_country
+    const countryType = (cat.media_type === 'tv') ? 'origin_country' : 'production_countries'
+    rules.push({ type: countryType, value: cat.country.join(',') })
+  }
+  if (cat.language?.length)    rules.push({ type: 'original_language',  value: cat.language.join(',') })
+  for (const k of (cat.keyword     || [])) rules.push({ type: 'keyword', field: 'filename', value: k })
+  for (const k of (cat.keyword_dir || [])) rules.push({ type: 'keyword', field: 'dirname',  value: k })
+  for (const r of (cat.regex       || [])) rules.push({ type: 'regex',   field: 'filename', value: r })
+  return {
+    name:       cat.name,
+    target_dir: cat.target_dir,
+    media_type: cat.media_type || 'all',   // ← 必须保存，否则下次加载无法区分 TV/Movie
+    match_all:  cat.match_all,
+    rules,
+  }
 }
 
 function apiCatToUiCat(cat) {
   const ui = {
-    name: cat.name, target_dir: cat.target_dir||'', media_type:'all',
-    match_all:!!cat.match_all, genre_ids:[], country:[], language:[],
-    keyword:[], keyword_dir:[], regex:[],
+    name:        cat.name,
+    target_dir:  cat.target_dir || '',
+    media_type:  cat.media_type || 'all',  // ← 从后端读取 media_type，不再硬编码 'all'
+    match_all:   !!cat.match_all,
+    genre_ids:   [],
+    country:     [],
+    language:    [],
+    keyword:     [],
+    keyword_dir: [],
+    regex:       [],
   }
   for (const r of (cat.rules || [])) {
-    if (r.type === 'genre_ids')              ui.genre_ids.push(...(r.value||'').split(',').map(s=>s.trim()).filter(Boolean))
-    else if (r.type === 'origin_country')    ui.country.push(...(r.value||'').split(',').map(s=>s.trim()).filter(Boolean))
-    else if (r.type === 'original_language') ui.language.push(...(r.value||'').split(',').map(s=>s.trim()).filter(Boolean))
+    if (r.type === 'genre_ids')
+      ui.genre_ids.push(...(r.value || '').split(',').map(s => s.trim()).filter(Boolean))
+    // 两种 country 字段类型都映射到 ui.country
+    else if (r.type === 'origin_country' || r.type === 'production_countries')
+      ui.country.push(...(r.value || '').split(',').map(s => s.trim()).filter(Boolean))
+    else if (r.type === 'original_language')
+      ui.language.push(...(r.value || '').split(',').map(s => s.trim()).filter(Boolean))
     else if (r.type === 'keyword' && r.field === 'dirname') ui.keyword_dir.push(r.value)
     else if (r.type === 'keyword')  ui.keyword.push(r.value)
     else if (r.type === 'regex')    ui.regex.push(r.value)
