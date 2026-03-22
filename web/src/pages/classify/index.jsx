@@ -532,9 +532,21 @@ tv:
 // 目录整理 — 默认规则结构
 // =============================================================================
 const DEFAULT_ORG_RULE = {
-  name: '新规则', enabled: true, media_type: 'all',
-  source_storage: 'local',   // 'local' | 存储源 ID（字符串）| 'p115'
-  source_paths: [], target_root: '', unrecognized_dir: '', dry_run: false,
+  name: '新规则',
+  enabled: true,
+  media_type: 'all',
+  // 源（待整理）
+  source_storage: 'local',
+  source_paths: [],
+  // 目标（整理后存放）
+  target_storage: 'local',
+  target_root: '',
+  // 未识别
+  unrecognized_dir: '',
+  // 自动整理
+  auto_organize: 'monitor',   // 'monitor' | 'none'
+  monitor_mode: 'compatibility', // 'compatibility' | 'performance'
+  dry_run: false,
 }
 
 // 媒体类型配置
@@ -583,44 +595,66 @@ const previewFormat = (fmt, sample) => {
 }
 
 // =============================================================================
-// 目录整理 — 规则编辑 Modal（点击小卡片上的编辑图标弹出）
+// 目录整理 — 规则编辑 Modal（MP 同款：【存储器】【路径】两列布局）
 // =============================================================================
+
+// 通用"存储器+路径"行组件
+const StoragePathRow = ({ label, tooltip, storageVal, pathVal, storageOptions,
+  onStorageChange, onPathChange, onBrowse, browseLabel }) => (
+  <Form.Item label={label} tooltip={tooltip} style={{ marginBottom: 12 }}>
+    <Row gutter={8} align="middle">
+      <Col flex="0 0 140px">
+        <Select value={storageVal} onChange={onStorageChange}
+          style={{ width: '100%' }} options={storageOptions} />
+      </Col>
+      <Col flex="1">
+        <Input value={pathVal} placeholder="输入路径" onChange={e => onPathChange(e.target.value)} />
+      </Col>
+      <Col>
+        <Button icon={<FolderOpenOutlined />} onClick={onBrowse}>{browseLabel || '浏览'}</Button>
+      </Col>
+    </Row>
+  </Form.Item>
+)
+
 const OrgRuleModal = ({ open, rule, onOk, onCancel, storages }) => {
   const [draft, setDraft] = useState(rule)
-  const [dirPickerOpen,     setDirPickerOpen]     = useState(false)
-  const [localPickerOpen,   setLocalPickerOpen]   = useState(false)
-  const [storagePickerOpen, setStoragePickerOpen] = useState(false)
-  const [dirPickerField,    setDirPickerField]    = useState(null)
+  // 目录选择器：src用源存储，target/unrecognized用目标存储
+  const [pickerState, setPickerState] = useState({ open: false, type: null, field: null })
+  // type: 'p115' | 'local' | 'storage'
 
   useEffect(() => { if (open) setDraft(rule) }, [rule, open])
 
   const set = (patch) => setDraft(d => ({ ...d, ...patch }))
-
-  const sourceStorage = draft?.source_storage || 'local'
-  const activeStorage = storages.find(s => String(s.id) === String(sourceStorage)) || null
 
   const storageOptions = [
     { value: 'local', label: '本地' },
     ...storages.map(s => ({ value: String(s.id), label: s.name || s.type })),
   ]
 
-  const openPicker = (field) => {
-    setDirPickerField(field)
-    if (sourceStorage === 'local') setLocalPickerOpen(true)
-    else if (activeStorage?.type === 'p115') setDirPickerOpen(true)
-    else setStoragePickerOpen(true)
+  // 根据存储ID推断picker类型
+  const pickerType = (storageId) => {
+    if (!storageId || storageId === 'local') return 'local'
+    const s = storages.find(x => String(x.id) === String(storageId))
+    return s?.type === 'p115' ? 'p115' : 'storage'
+  }
+
+  const openPicker = (field, storageId) => {
+    setPickerState({ open: true, type: pickerType(storageId), field, storageId })
   }
 
   const handleDirSelected = (p) => {
-    if (dirPickerField === '__src__') {
-      set({ source_paths: [...(draft.source_paths || []), p] })
-    } else if (dirPickerField) {
-      set({ [dirPickerField]: p })
-    }
+    const { field } = pickerState
+    if (field === '__src__') set({ source_paths: [...(draft.source_paths || []), p] })
+    else if (field) set({ [field]: p })
+    setPickerState(s => ({ ...s, open: false }))
   }
 
-  const pickerBtnLabel = sourceStorage === 'local' ? '从本地选择'
-    : activeStorage?.type === 'p115' ? '从网盘选择' : '从存储选择'
+  const pickerActiveStorage = pickerState.storageId
+    ? storages.find(s => String(s.id) === String(pickerState.storageId)) || null
+    : null
+
+  const tgtBrowseLabel = pickerType(draft?.target_storage) === 'p115' ? '网盘' : '浏览'
 
   if (!draft) return null
 
@@ -628,69 +662,148 @@ const OrgRuleModal = ({ open, rule, onOk, onCancel, storages }) => {
     <>
       <Modal open={open} title={`编辑规则 — ${draft.name || ''}`}
         onOk={() => onOk(draft)} onCancel={onCancel}
-        okText="确定" cancelText="取消" width={600} destroyOnHidden>
+        okText="确定" cancelText="取消" width={660} destroyOnHidden>
         <Form layout="vertical" size="small" style={{ marginTop: 8 }}>
+
+          {/* ── 行1：规则别名 / 媒体类型 ── */}
           <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item label="规则名称" style={{ marginBottom: 12 }}>
+            <Col span={14}>
+              <Form.Item label="规则别名" style={{ marginBottom: 12 }}>
                 <Input value={draft.name} onChange={e => set({ name: e.target.value })} placeholder="如：网盘待整理" />
               </Form.Item>
             </Col>
-            <Col span={6}>
+            <Col span={10}>
               <Form.Item label="媒体类型" style={{ marginBottom: 12 }}>
                 <Select value={draft.media_type || 'all'} onChange={v => set({ media_type: v })} style={{ width: '100%' }}
                   options={[{ value: 'all', label: '全部' }, { value: 'movie', label: '电影' }, { value: 'tv', label: '剧集' }]} />
               </Form.Item>
             </Col>
-            <Col span={6}>
-              <Form.Item label="试运行" tooltip="只记录日志，不实际移动文件" style={{ marginBottom: 12 }}>
-                <Switch checked={draft.dry_run} onChange={v => set({ dry_run: v })} checkedChildren="开" unCheckedChildren="关" />
-              </Form.Item>
-            </Col>
           </Row>
-          <Form.Item label="源存储器" tooltip="待整理文件所在的存储位置" style={{ marginBottom: 12 }}>
-            <Select value={sourceStorage} onChange={v => set({ source_storage: v, source_paths: [] })}
-              style={{ width: '100%' }} options={storageOptions} />
-          </Form.Item>
-          <Form.Item label="目标根目录" tooltip="整理后文件的存放根目录，分类规则子目录将在此创建" style={{ marginBottom: 12 }}>
-            <Row gutter={8} align="middle">
-              <Col flex="1"><Input value={draft.target_root} placeholder="/影剧" onChange={e => set({ target_root: e.target.value })} /></Col>
-              <Col><Button icon={<FolderOpenOutlined />} onClick={() => openPicker('target_root')}>选择</Button></Col>
-            </Row>
-          </Form.Item>
-          <Form.Item label="未识别目录" tooltip="无法匹配分类规则的文件移入此目录，留空则保留在原位" style={{ marginBottom: 12 }}>
-            <Row gutter={8} align="middle">
-              <Col flex="1"><Input value={draft.unrecognized_dir} placeholder="/未识别（选填）" onChange={e => set({ unrecognized_dir: e.target.value })} /></Col>
-              <Col><Button icon={<FolderOpenOutlined />} onClick={() => openPicker('unrecognized_dir')}>选择</Button></Col>
-            </Row>
-          </Form.Item>
-          <Form.Item label="源目录（待整理目录）" tooltip="存放待整理文件的目录，支持添加多个" style={{ marginBottom: 0 }}>
+
+          {/* ── 源目录（待整理目录，支持多条）── */}
+          <Form.Item label="源目录（待整理目录）" tooltip="存放待整理文件的目录，支持添加多个；每条独立配置存储器和路径" style={{ marginBottom: 12 }}>
             {(draft.source_paths || []).map((p, si) => (
-              <Row gutter={8} key={si} style={{ marginBottom: 8 }} align="middle">
+              <Row gutter={8} key={si} style={{ marginBottom: 6 }} align="middle">
+                <Col flex="0 0 140px">
+                  <Select
+                    value={draft.source_storages?.[si] || draft.source_storage || 'local'}
+                    onChange={v => {
+                      const ss = [...(draft.source_storages || draft.source_paths.map(() => draft.source_storage || 'local'))]
+                      ss[si] = v
+                      set({ source_storages: ss })
+                    }}
+                    style={{ width: '100%' }} options={storageOptions} />
+                </Col>
                 <Col flex="1">
                   <Input value={p} placeholder="/待整理/下载"
                     onChange={e => set({ source_paths: draft.source_paths.map((v, i) => i === si ? e.target.value : v) })} />
                 </Col>
                 <Col>
+                  <Button icon={<FolderOpenOutlined />}
+                    onClick={() => openPicker('__src__', draft.source_storages?.[si] || draft.source_storage)} />
+                </Col>
+                <Col>
                   <Button danger size="small" icon={<DeleteOutlined />}
-                    onClick={() => set({ source_paths: draft.source_paths.filter((_, i) => i !== si) })} />
+                    onClick={() => {
+                      set({
+                        source_paths: draft.source_paths.filter((_, i) => i !== si),
+                        source_storages: (draft.source_storages || []).filter((_, i) => i !== si),
+                      })
+                    }} />
                 </Col>
               </Row>
             ))}
-            <Space style={{ marginTop: 4 }}>
-              <Button size="small" icon={<PlusOutlined />}
-                onClick={() => set({ source_paths: [...(draft.source_paths || []), ''] })}>手动输入</Button>
-              <Button size="small" icon={<FolderOpenOutlined />}
-                onClick={() => openPicker('__src__')}>{pickerBtnLabel}</Button>
-            </Space>
+            <Button size="small" icon={<PlusOutlined />} style={{ marginTop: 4 }}
+              onClick={() => set({ source_paths: [...(draft.source_paths || []), ''] })}>
+              添加源目录
+            </Button>
           </Form.Item>
+
+          {/* ── 目标目录 ── */}
+          <StoragePathRow
+            label="目标目录" tooltip="整理后文件的存放根目录，分类子目录将在此创建"
+            storageVal={draft.target_storage || 'local'}
+            pathVal={draft.target_root}
+            storageOptions={storageOptions}
+            onStorageChange={v => set({ target_storage: v })}
+            onPathChange={v => set({ target_root: v })}
+            onBrowse={() => openPicker('target_root', draft.target_storage)}
+            browseLabel={tgtBrowseLabel}
+          />
+
+          {/* ── 未识别目录 ── */}
+          <StoragePathRow
+            label="未识别目录" tooltip="无法匹配分类规则的文件移入此目录，留空则保留在原位"
+            storageVal={draft.target_storage || 'local'}
+            pathVal={draft.unrecognized_dir}
+            storageOptions={storageOptions}
+            onStorageChange={v => set({ target_storage: v })}
+            onPathChange={v => set({ unrecognized_dir: v })}
+            onBrowse={() => openPicker('unrecognized_dir', draft.target_storage)}
+            browseLabel={tgtBrowseLabel}
+          />
+
+          {/* ── 自动整理 + 监控模式 ── */}
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item label="自动整理" tooltip="选择自动整理触发方式" style={{ marginBottom: 12 }}>
+                <Select value={draft.auto_organize || 'monitor'} onChange={v => set({ auto_organize: v })}
+                  style={{ width: '100%' }}
+                  options={[
+                    { value: 'monitor', label: '目录监控' },
+                    { value: 'none',    label: '不整理' },
+                  ]} />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item label="监控模式"
+                tooltip="兼容模式：轮询检测，稳定但有延迟；性能模式：系统事件驱动，实时但对部分网络盘不兼容"
+                style={{ marginBottom: 12 }}>
+                <Select
+                  value={draft.monitor_mode || 'compatibility'}
+                  onChange={v => set({ monitor_mode: v })}
+                  disabled={draft.auto_organize === 'none'}
+                  style={{ width: '100%' }}
+                  options={[
+                    { value: 'compatibility', label: '兼容模式' },
+                    { value: 'performance',   label: '性能模式' },
+                  ]} />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          {/* ── 底部开关 ── */}
+          <Row gutter={24}>
+            <Col>
+              <Form.Item label="试运行" tooltip="只记录日志，不实际移动文件" style={{ marginBottom: 0 }}>
+                <Switch checked={draft.dry_run} onChange={v => set({ dry_run: v })} checkedChildren="开" unCheckedChildren="关" />
+              </Form.Item>
+            </Col>
+            <Col>
+              <Form.Item label="启用规则" style={{ marginBottom: 0 }}>
+                <Switch checked={draft.enabled !== false} onChange={v => set({ enabled: v })} checkedChildren="是" unCheckedChildren="否" />
+              </Form.Item>
+            </Col>
+          </Row>
+
         </Form>
       </Modal>
-      <DirPickerModal open={dirPickerOpen} onClose={() => setDirPickerOpen(false)} onSelect={handleDirSelected} />
-      <LocalDirPickerModal open={localPickerOpen} onClose={() => setLocalPickerOpen(false)} onSelect={handleDirSelected} />
-      {activeStorage && (
-        <StorageDirPickerModal open={storagePickerOpen} onClose={() => setStoragePickerOpen(false)}
-          onSelect={handleDirSelected} storage={activeStorage} />
+
+      {/* 目录选择器：根据存储类型切换 */}
+      <DirPickerModal
+        open={pickerState.open && pickerState.type === 'p115'}
+        onClose={() => setPickerState(s => ({ ...s, open: false }))}
+        onSelect={handleDirSelected} />
+      <LocalDirPickerModal
+        open={pickerState.open && pickerState.type === 'local'}
+        onClose={() => setPickerState(s => ({ ...s, open: false }))}
+        onSelect={handleDirSelected} />
+      {pickerActiveStorage && (
+        <StorageDirPickerModal
+          open={pickerState.open && pickerState.type === 'storage'}
+          onClose={() => setPickerState(s => ({ ...s, open: false }))}
+          onSelect={handleDirSelected}
+          storage={pickerActiveStorage} />
       )}
     </>
   )
