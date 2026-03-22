@@ -226,3 +226,60 @@ async def save_p115_settings(payload: P115SettingsPayload):
 async def browse_dir_tree(cid: str = "0"):
     """浏览 115 目录树 — 只返回文件夹，用于路径选择器"""
     return await _p115_service.browse_dir_tree(cid)
+
+
+# ──────────────────── 刮削重命名配置 ────────────────────
+
+_SCRAPE_CONFIG_KEY = "p115_scrape_config"
+
+_SCRAPE_DEFAULTS = {
+    "enabled": False,
+    "movie_format":  "{title} ({year})/{title} ({year})",
+    "tv_format":     "{title} ({year})/Season {season:02d}/{title} - {season_episode} - {episode_title}",
+}
+
+
+class ScrapeConfigPayload(BaseModel):
+    enabled: bool = False
+    movie_format: str = "{title} ({year})/{title} ({year})"
+    tv_format:    str = "{title} ({year})/Season {season:02d}/{title} - {season_episode} - {episode_title}"
+
+
+@router.get("/scrape-config", dependencies=[Depends(verify_token)])
+async def get_scrape_config():
+    """获取刮削重命名配置"""
+    async with get_async_session_local() as db:
+        result = await db.execute(
+            select(SystemConfig).where(SystemConfig.key == _SCRAPE_CONFIG_KEY)
+        )
+        cfg = result.scalars().first()
+        if cfg and cfg.value:
+            try:
+                return {**_SCRAPE_DEFAULTS, **_json.loads(cfg.value)}
+            except (ValueError, TypeError):
+                pass
+    return {**_SCRAPE_DEFAULTS}
+
+
+@router.post("/scrape-config", dependencies=[Depends(verify_token)])
+async def save_scrape_config(payload: ScrapeConfigPayload):
+    """保存刮削重命名配置"""
+    value = _json.dumps(payload.model_dump(), ensure_ascii=False)
+    async with get_async_session_local() as db:
+        result = await db.execute(
+            select(SystemConfig).where(SystemConfig.key == _SCRAPE_CONFIG_KEY)
+        )
+        cfg = result.scalars().first()
+        if cfg:
+            cfg.value = value
+            cfg.updated_at = tm.now()
+        else:
+            cfg = SystemConfig(
+                key=_SCRAPE_CONFIG_KEY,
+                value=value,
+                description="115 刮削重命名配置",
+                updated_at=tm.now(),
+            )
+            db.add(cfg)
+        await db.commit()
+    return {"success": True}

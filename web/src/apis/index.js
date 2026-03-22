@@ -107,6 +107,9 @@ export const p115Api = {
   // 高级设置
   getSettings: () => api.get('/p115/settings'),
   saveSettings: (payload) => api.post('/p115/settings', payload),
+  // 刮削重命名配置
+  getScrapeConfig: () => api.get('/p115/scrape-config'),
+  saveScrapeConfig: (payload) => api.post('/p115/scrape-config', payload),
 }
 
 // ==================== 115 STRM 同步 + 监控 + 整理 ====================
