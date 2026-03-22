@@ -109,3 +109,25 @@ export const p115Api = {
   saveSettings: (payload) => api.post('/p115/settings', payload),
 }
 
+// ==================== 115 STRM 同步 + 监控 + 整理 ====================
+export const p115StrmApi = {
+  // STRM 同步配置
+  getSyncConfig: () => api.get('/p115-strm/sync/config'),
+  saveSyncConfig: (payload) => api.post('/p115-strm/sync/config', payload),
+  getSyncStatus: () => api.get('/p115-strm/sync/status'),
+  fullSync: () => api.post('/p115-strm/sync/full'),
+  incSync: () => api.post('/p115-strm/sync/inc'),
+  // 生活事件监控
+  getMonitorConfig: () => api.get('/p115-strm/monitor/config'),
+  saveMonitorConfig: (payload) => api.post('/p115-strm/monitor/config', payload),
+  getMonitorStatus: () => api.get('/p115-strm/monitor/status'),
+  startMonitor: () => api.post('/p115-strm/monitor/start'),
+  stopMonitor: () => api.post('/p115-strm/monitor/stop'),
+  // 整理分类
+  getOrganizeConfig: () => api.get('/p115-strm/organize/config'),
+  saveOrganizeConfig: (payload) => api.post('/p115-strm/organize/config', payload),
+  getOrganizeStatus: () => api.get('/p115-strm/organize/status'),
+  runOrganize: () => api.post('/p115-strm/organize/run'),
+}
+
+
