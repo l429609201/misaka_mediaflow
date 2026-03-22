@@ -30,6 +30,7 @@ class RuleItem(BaseModel):
 class CategoryItem(BaseModel):
     name: str
     target_dir: str = ""
+    media_type: str = "all"   # ← movie / tv / all，必须保存否则下次加载丢失
     match_all: bool = False
     rules: List[RuleItem] = []
 

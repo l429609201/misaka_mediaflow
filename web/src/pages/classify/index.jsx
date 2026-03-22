@@ -144,14 +144,24 @@ const YAML_HEADER = `####### 整理分类配置 #######
 `
 
 // ── 简易 YAML 解析（只支持本配置所需的子集）─────────────────────────────────
+// MP 格式：顶层只有 movie: 和 tv: 两段，all 类型的分类会同时出现在两段中
+// 解析规则：
+//   1. 分类出现在 movie: 段 → media_type = 'movie'（临时）
+//   2. 分类出现在 tv: 段：
+//      - 如果同名分类已存在（来自 movie: 段）→ 说明是 all 类型，更新为 'all'
+//      - 否则 → media_type = 'tv'
+//   3. 顶层为 all: 段时（老格式兼容）→ media_type = 'all'
 function parseYamlCfg(text) {
   const lines = text.split('\n')
   const categories = []
-  let mediaType = 'all'   // 当前顶层 key
+  let mediaType = 'movie'  // 当前顶层 key
   let cur = null
 
   const strVal = s => (s || '').replace(/^['"]|['"]$/g, '').trim()
   const listVal = s => strVal(s).split(',').map(x => x.trim()).filter(Boolean)
+
+  // 按分类名查找已存在的分类（用于检测 all 类型）
+  const findExisting = name => categories.findIndex(c => c.name === name)
 
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i]
@@ -168,14 +178,27 @@ function parseYamlCfg(text) {
       continue
     }
 
-    // 二级 key（缩进2~4，格式 "分类名:"）
+    // 二级 key（缩进2~6，格式 "分类名:"）
     if (indent >= 2 && indent <= 6) {
       const catMatch = content.match(/^([^:]+):\s*$/)
       if (catMatch) {
         if (cur) categories.push(cur)
+        const catName = catMatch[1].trim()
+        // 如果当前是 tv 段，且该分类名已经在 movie 段出现过 → all 类型
+        if (mediaType === 'tv') {
+          const existIdx = findExisting(catName)
+          if (existIdx >= 0) {
+            // 已存在（来自 movie 段），标记为 all；不新建，将其作为 cur 继续收集字段
+            categories[existIdx].media_type = 'all'
+            cur = categories[existIdx]
+            // 从 categories 中暂时移出，等循环结束后重新 push（避免重复）
+            categories.splice(existIdx, 1)
+            continue
+          }
+        }
         cur = {
-          name: catMatch[1].trim(),
-          target_dir: catMatch[1].trim(),
+          name: catName,
+          target_dir: catName,
           media_type: mediaType,
           match_all: false,
           genre_ids: [], country: [], language: [],
@@ -225,11 +248,13 @@ function parseYamlCfg(text) {
 
 // ── YAML 序列化（uiCats → YAML 文本）────────────────────────────────────────
 function uiCatsToYaml(cats) {
-  // 严格按 media_type 分组，all 单独成段，不混入 movie 段
-  // 这样反向解析时 parseYamlCfg 能正确还原各分类的 media_type
-  const movieCats = cats.filter(c => c.media_type === 'movie')
-  const tvCats    = cats.filter(c => c.media_type === 'tv')
-  const allCats   = cats.filter(c => !c.media_type || c.media_type === 'all')
+  // 完全遵循 MP category.yaml 格式：只有 movie: 和 tv: 两个顶层段，不存在 all: 段
+  //   media_type='movie' → 只出现在 movie: 段
+  //   media_type='tv'    → 只出现在 tv: 段
+  //   media_type='all'   → 同时出现在 movie: 和 tv: 两段
+  // 反向解析时：同名分类在两段都出现 → media_type 恢复为 'all'
+  const movieCats = cats.filter(c => c.media_type === 'movie' || c.media_type === 'all' || !c.media_type)
+  const tvCats    = cats.filter(c => c.media_type === 'tv'    || c.media_type === 'all' || !c.media_type)
 
   function renderCat(cat, section) {
     const lines = [`  ${cat.name}:`]
@@ -241,7 +266,7 @@ function uiCatsToYaml(cats) {
     if (cat.genre_ids?.length)
       lines.push(`    genre_ids: '${cat.genre_ids.join(',')}'`)
     if (cat.country?.length) {
-      // 电影用 production_countries，剧集用 origin_country，all 用 origin_country
+      // 电影段用 production_countries，TV 段用 origin_country
       const key = section === 'movie' ? 'production_countries' : 'origin_country'
       lines.push(`    ${key}: '${cat.country.join(',')}'`)
     }
@@ -266,11 +291,6 @@ function uiCatsToYaml(cats) {
   if (tvCats.length) {
     sections.push('tv:')
     sections.push(...tvCats.map(c => renderCat(c, 'tv')))
-    sections.push('')
-  }
-  if (allCats.length) {
-    sections.push('all:')
-    sections.push(...allCats.map(c => renderCat(c, 'all')))
     sections.push('')
   }
 
