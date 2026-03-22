@@ -535,16 +535,14 @@ const DEFAULT_ORG_RULE = {
   name: '新规则',
   enabled: true,
   media_type: 'all',
-  // 源（待整理）
+  // 监控目录（单条）
   source_storage: 'local',
-  source_paths: [],
+  monitor_path: '',
   // 目标（整理后存放）
   target_storage: 'local',
   target_root: '',
-  // 未识别
-  unrecognized_dir: '',
   // 自动整理
-  auto_organize: 'monitor',   // 'monitor' | 'none'
+  auto_organize: 'monitor',      // 'monitor' | 'none'
   monitor_mode: 'compatibility', // 'compatibility' | 'performance'
   dry_run: false,
 }
@@ -680,44 +678,17 @@ const OrgRuleModal = ({ open, rule, onOk, onCancel, storages }) => {
             </Col>
           </Row>
 
-          {/* ── 源目录（待整理目录，支持多条）── */}
-          <Form.Item label="源目录（待整理目录）" tooltip="存放待整理文件的目录，支持添加多个；每条独立配置存储器和路径" style={{ marginBottom: 12 }}>
-            {(draft.source_paths || []).map((p, si) => (
-              <Row gutter={8} key={si} style={{ marginBottom: 6 }} align="middle">
-                <Col flex="0 0 140px">
-                  <Select
-                    value={draft.source_storages?.[si] || draft.source_storage || 'local'}
-                    onChange={v => {
-                      const ss = [...(draft.source_storages || draft.source_paths.map(() => draft.source_storage || 'local'))]
-                      ss[si] = v
-                      set({ source_storages: ss })
-                    }}
-                    style={{ width: '100%' }} options={storageOptions} />
-                </Col>
-                <Col flex="1">
-                  <Input value={p} placeholder="/待整理/下载"
-                    onChange={e => set({ source_paths: draft.source_paths.map((v, i) => i === si ? e.target.value : v) })} />
-                </Col>
-                <Col>
-                  <Button icon={<FolderOpenOutlined />}
-                    onClick={() => openPicker('__src__', draft.source_storages?.[si] || draft.source_storage)} />
-                </Col>
-                <Col>
-                  <Button danger size="small" icon={<DeleteOutlined />}
-                    onClick={() => {
-                      set({
-                        source_paths: draft.source_paths.filter((_, i) => i !== si),
-                        source_storages: (draft.source_storages || []).filter((_, i) => i !== si),
-                      })
-                    }} />
-                </Col>
-              </Row>
-            ))}
-            <Button size="small" icon={<PlusOutlined />} style={{ marginTop: 4 }}
-              onClick={() => set({ source_paths: [...(draft.source_paths || []), ''] })}>
-              添加源目录
-            </Button>
-          </Form.Item>
+          {/* ── 监控目录（单条）── */}
+          <StoragePathRow
+            label="监控目录" tooltip="需要监控并自动整理的目录"
+            storageVal={draft.source_storage || 'local'}
+            pathVal={draft.monitor_path}
+            storageOptions={storageOptions}
+            onStorageChange={v => set({ source_storage: v })}
+            onPathChange={v => set({ monitor_path: v })}
+            onBrowse={() => openPicker('monitor_path', draft.source_storage)}
+            browseLabel={pickerType(draft?.source_storage) === 'p115' ? '网盘' : '浏览'}
+          />
 
           {/* ── 目标目录 ── */}
           <StoragePathRow
@@ -728,18 +699,6 @@ const OrgRuleModal = ({ open, rule, onOk, onCancel, storages }) => {
             onStorageChange={v => set({ target_storage: v })}
             onPathChange={v => set({ target_root: v })}
             onBrowse={() => openPicker('target_root', draft.target_storage)}
-            browseLabel={tgtBrowseLabel}
-          />
-
-          {/* ── 未识别目录 ── */}
-          <StoragePathRow
-            label="未识别目录" tooltip="无法匹配分类规则的文件移入此目录，留空则保留在原位"
-            storageVal={draft.target_storage || 'local'}
-            pathVal={draft.unrecognized_dir}
-            storageOptions={storageOptions}
-            onStorageChange={v => set({ target_storage: v })}
-            onPathChange={v => set({ unrecognized_dir: v })}
-            onBrowse={() => openPicker('unrecognized_dir', draft.target_storage)}
             browseLabel={tgtBrowseLabel}
           />
 
@@ -852,9 +811,9 @@ const OrgRuleCard = ({ rule, idx, total, onEdit, onDelete, onMove, onRun, runnin
             目标：{rule.target_root}
           </div>
         )}
-        {rule.source_paths?.length > 0 && (
-          <div style={{ fontSize: 11, color: '#bbb', marginTop: 2 }}>
-            {rule.source_paths.length} 个源目录
+        {rule.monitor_path && (
+          <div style={{ fontSize: 11, color: '#bbb', marginTop: 2, wordBreak: 'break-all' }}>
+            监控：{rule.monitor_path}
           </div>
         )}
       </div>
@@ -892,26 +851,28 @@ const OrgRuleCard = ({ rule, idx, total, onEdit, onDelete, onMove, onRun, runnin
 // Tab1 — 目录整理
 // =============================================================================
 const OrganizeTab = () => {
-  const [rules,      setRules]      = useState([])
-  const [saving,     setSaving]     = useState(false)
-  const [loading,    setLoading]    = useState(true)
-  const [running,    setRunning]    = useState({})
-  const [orgStatus,  setOrgStatus]  = useState({})
-  const [editingIdx, setEditingIdx] = useState(null)
-  const [storages,   setStorages]   = useState([])
+  const [rules,       setRules]       = useState([])
+  const [saving,      setSaving]      = useState(false)
+  const [loading,     setLoading]     = useState(true)
+  const [running,     setRunning]     = useState({})
+  const [orgStatus,   setOrgStatus]   = useState({})
+  const [editingIdx,  setEditingIdx]  = useState(null)
+  const [storages,    setStorages]    = useState([])
+  const [unrecognizedDir, setUnrecognizedDir] = useState('')  // 只读，来自 path-mapping
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [rulesRes, stRes, storageRes] = await Promise.all([
+      const [rulesRes, stRes, storageRes, pmRes] = await Promise.all([
         classifyApi.getOrganizeRules(),
         p115StrmApi.getOrganizeStatus(),
         storageApi.list(),
+        p115Api.getPathMapping(),
       ])
       const rulesData = rulesRes.data?.rules || rulesRes.data || []
       setRules(Array.isArray(rulesData) ? rulesData : [])
       setOrgStatus(stRes.data || {})
-      // 只取已启用的存储源
+      setUnrecognizedDir(pmRes.data?.organize_unrecognized || '')
       const storageList = Array.isArray(storageRes.data?.items)
         ? storageRes.data.items.filter(s => s.is_active !== 0)
         : Array.isArray(storageRes.data) ? storageRes.data.filter(s => s.is_active !== 0) : []
@@ -935,7 +896,7 @@ const OrganizeTab = () => {
     setRunning(r => ({ ...r, [idx]: true }))
     try {
       const rule = rules[idx]
-      const r = await p115StrmApi.runOrganize(rule.source_paths?.length ? rule.source_paths : undefined)
+      const r = await p115StrmApi.runOrganize(rule.monitor_path ? [rule.monitor_path] : undefined)
       r.data?.success ? message.success('整理任务已启动') : message.warning(r.data?.message || '启动失败')
       setTimeout(async () => {
         try { const s = await p115StrmApi.getOrganizeStatus(); setOrgStatus(s.data || {}) } catch { /* ignore */ }
@@ -988,9 +949,15 @@ const OrganizeTab = () => {
         </Space>
       </div>
 
-      {/* ── 说明条 ── */}
-      <Alert type="info" showIcon style={{ marginBottom: 16, borderRadius: 8 }}
-        message="将源目录中的文件按「分类规则」（Tab2）自动整理到目标根目录下的对应子目录，支持多条规则独立配置和运行。" />
+      {/* ── 说明条 + 未识别目录只读提示 ── */}
+      <Alert type="info" showIcon style={{ marginBottom: 12, borderRadius: 8 }}
+        message={
+          <span>
+            将监控目录中的文件按「分类规则」（Tab2）自动整理到目标目录下对应子目录。
+            未识别目录：<b>{unrecognizedDir || '（未设置，保留原位）'}</b>
+            ——可在「115网盘 → 整理与路径」中修改。
+          </span>
+        } />
 
       {/* ── 横向小卡片列（MP 风格）── */}
       {rules.length === 0 ? (
