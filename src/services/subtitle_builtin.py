@@ -519,20 +519,53 @@ def find_downloaded_font(name: str, subfamily: str = _VARIANT_REGULAR) -> Option
 
 def _parse_online_index(raw) -> dict:
     """
-    解析 onlineFonts.json，兼容新旧两种格式，返回 {小写字体名: entry_dict}。
+    解析 onlineFonts.json，兼容新旧两种格式。
 
     旧格式（已废弃）: [{"name": "...", "url": "..."}, ...]
-    新格式（当前）:   [["baseUrl1", "baseUrl2"], {"字体名小写": [idx,...], ...}]
-      → 新格式目前无法直接下载单字体，直接返回空字典，不报错。
+      → 返回 {小写字体名: {"name": ..., "url": ..., "_fmt": "old"}}
+
+    新格式（当前）:   [hosts_list, name_index_map, font_data_list]
+      hosts_list    : ["https://cdn1.../", "https://cdn2.../"]
+      name_index_map: {"字体名小写": [行号, ...], ...}  ← onlineMapIndex
+      font_data_list: [{"path": "相对路径", "index": face_idx, "weight": ...,
+                        "bold": bool, "italic": bool, ...}, ...]
+      → 返回 {小写字体名: {"_fmt": "new", "_hosts": [...], "_candidates": [data_item,...]}}
+
+    下载逻辑在 download_font() 中处理。
     """
     if not isinstance(raw, list) or len(raw) == 0:
         return {}
-    # 旧格式：第一个元素是 dict 且含 "name" key
+
+    # ── 旧格式：第一个元素是 dict 且含 "name" key ────────────────────────────
     if isinstance(raw[0], dict) and "name" in raw[0]:
-        return {e["name"].strip().lower(): e for e in raw if isinstance(e, dict) and e.get("name")}
-    # 新格式：第一个元素是 list（CDN URL 数组），暂不支持下载
-    logger.debug("[builtin] onlineFonts.json 为新格式（CDN索引），在线下载暂不支持，跳过")
-    return {}
+        return {e["name"].strip().lower(): {**e, "_fmt": "old"}
+                for e in raw if isinstance(e, dict) and e.get("name")}
+
+    # ── 新格式：第一个元素是 list（CDN hosts）────────────────────────────────
+    # 结构：raw[0]=hosts, raw[1]=name_index_map, raw[2]=font_data_list
+    if not (isinstance(raw[0], list) and len(raw) >= 3
+            and isinstance(raw[1], dict) and isinstance(raw[2], list)):
+        logger.debug("[builtin] onlineFonts.json 格式无法识别，跳过")
+        return {}
+
+    hosts: list = raw[0]
+    name_index_map: dict = raw[1]
+    font_data_list: list = raw[2]
+
+    result: dict = {}
+    for name_lower, row_indices in name_index_map.items():
+        candidates = []
+        for idx in row_indices:
+            if 0 <= idx < len(font_data_list):
+                candidates.append(font_data_list[idx])
+        if candidates:
+            result[name_lower] = {
+                "_fmt": "new",
+                "_hosts": hosts,
+                "_candidates": candidates,
+            }
+    logger.debug("[builtin] onlineFonts.json 新格式解析完成: %d 个字体可供下载", len(result))
+    return result
 
 
 async def _load_online_index() -> dict:
@@ -572,45 +605,121 @@ async def _load_online_index() -> dict:
     return _online_index
 
 
-async def download_font(font_name: str) -> Optional[tuple]:
-    """从在线字体库下载字体到 downloads 目录，返回 (path, 0) 或 None。"""
+def _select_best_candidate(candidates: list, is_bold: bool = False,
+                           is_italic: bool = False) -> Optional[dict]:
+    """
+    从候选字体列表中选出最匹配 bold/italic 的 face。
+    优先精确匹配，次选 Regular。
+    """
+    if not candidates:
+        return None
+    # 精确匹配 bold + italic
+    for c in candidates:
+        if bool(c.get("bold")) == is_bold and bool(c.get("italic")) == is_italic:
+            return c
+    # Regular fallback（bold=False, italic=False）
+    for c in candidates:
+        if not c.get("bold") and not c.get("italic"):
+            return c
+    # 返回第一个
+    return candidates[0]
+
+
+async def download_font(font_name: str, is_bold: bool = False,
+                        is_italic: bool = False) -> Optional[tuple]:
+    """
+    从在线字体库下载字体到 downloads 目录，返回 (path, face_index) 或 None。
+
+    支持新格式（CDN 索引）和旧格式（直接 URL）。
+    新格式：从 onlineFonts.json 中根据字体名查候选 face，选最匹配 bold/italic 的，
+            从 CDN hosts 依次尝试下载；下载后保存到 downloads 子目录（保留相对路径）。
+    旧格式：直接用 entry["url"] 下载。
+    """
     db = await _load_online_index()
     key = font_name.lower().strip().lstrip("@")
     entry = db.get(key)
     if not entry:
+        # 前缀模糊匹配（兼容旧行为）
         for k, v in db.items():
             if k.startswith(key) or key.startswith(k):
                 entry = v
                 break
-    if not entry or not entry.get("url"):
+    if not entry:
         return None
 
     _FONTS_DOWNLOAD.mkdir(parents=True, exist_ok=True)
-    safe = re.sub(r"[^\w\-.]", "_", entry["name"])
-    for ext in (".ttf", ".otf", ".ttc"):
-        dst = _FONTS_DOWNLOAD / f"{safe}{ext}"
-        if dst.exists():
-            logger.debug("[builtin] downloads 缓存命中: %s", dst.name)
-            return str(dst), 0
 
-    try:
-        logger.info("[builtin] 下载字体: %s → %s", font_name, entry["url"])
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            resp = await client.get(entry["url"])
-        if resp.status_code != 200:
-            logger.warning("[builtin] 字体下载失败 HTTP %d: %s", resp.status_code, font_name)
+    # ── 旧格式 ────────────────────────────────────────────────────────────────
+    if entry.get("_fmt") == "old":
+        if not entry.get("url"):
             return None
-        ct = resp.headers.get("content-type", "")
-        ext = ".otf" if ("otf" in ct or entry["url"].lower().endswith(".otf")) else (
-              ".ttc" if ("ttc" in ct or entry["url"].lower().endswith(".ttc")) else ".ttf")
-        dst = _FONTS_DOWNLOAD / f"{safe}{ext}"
-        dst.write_bytes(resp.content)
-        logger.info("[builtin] 字体已保存: %s (%d KB)", dst.name, len(resp.content) // 1024)
-        _invalidate_downloads_db()   # 使 downloads 缓存立即失效，下次查找能感知到新字体
-        return str(dst), 0
-    except Exception as e:
-        logger.warning("[builtin] 字体下载异常: %s → %s", font_name, e)
+        safe = re.sub(r"[^\w\-.]", "_", entry.get("name", font_name))
+        for ext in (".ttf", ".otf", ".ttc"):
+            dst = _FONTS_DOWNLOAD / f"{safe}{ext}"
+            if dst.exists():
+                logger.debug("[builtin] downloads 缓存命中: %s", dst.name)
+                return str(dst), 0
+        try:
+            logger.info("[builtin] 下载字体（旧格式）: %s → %s", font_name, entry["url"])
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+                resp = await client.get(entry["url"])
+            if resp.status_code != 200:
+                logger.warning("[builtin] 字体下载失败 HTTP %d: %s", resp.status_code, font_name)
+                return None
+            ct = resp.headers.get("content-type", "")
+            url_lower = entry["url"].lower()
+            ext = (".otf" if ("otf" in ct or url_lower.endswith(".otf")) else
+                   ".ttc" if ("ttc" in ct or url_lower.endswith(".ttc")) else ".ttf")
+            dst = _FONTS_DOWNLOAD / f"{safe}{ext}"
+            dst.write_bytes(resp.content)
+            logger.info("[builtin] 字体已保存: %s (%d KB)", dst.name, len(resp.content) // 1024)
+            _invalidate_downloads_db()
+            return str(dst), 0
+        except Exception as e:
+            logger.warning("[builtin] 字体下载异常: %s → %s", font_name, e)
+            return None
+
+    # ── 新格式（CDN 索引）────────────────────────────────────────────────────
+    hosts: list = entry.get("_hosts", [])
+    candidates: list = entry.get("_candidates", [])
+    if not hosts or not candidates:
         return None
+
+    best = _select_best_candidate(candidates, is_bold=is_bold, is_italic=is_italic)
+    if not best:
+        return None
+
+    rel_path: str = best.get("path", "")
+    face_idx: int = best.get("index", 0) or 0
+    if not rel_path:
+        return None
+
+    # 检查本地缓存（按相对路径在 downloads 下保留完整目录结构）
+    local_dst = _FONTS_DOWNLOAD / rel_path
+    if local_dst.exists():
+        logger.debug("[builtin] downloads 缓存命中（新格式）: %s", rel_path)
+        return str(local_dst), face_idx
+
+    # 依次尝试各 CDN host 下载
+    local_dst.parent.mkdir(parents=True, exist_ok=True)
+    for host in hosts:
+        url = f"{host}{rel_path}"
+        try:
+            logger.info("[builtin] 下载字体（新格式）: %s → %s", font_name, url)
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+                resp = await client.get(url)
+            if resp.status_code == 200:
+                local_dst.write_bytes(resp.content)
+                logger.info("[builtin] 字体已保存: %s (%d KB) face=%d",
+                            rel_path, len(resp.content) // 1024, face_idx)
+                _invalidate_downloads_db()
+                return str(local_dst), face_idx
+            logger.debug("[builtin] CDN 下载失败 HTTP %d: %s", resp.status_code, url)
+        except Exception as e:
+            logger.debug("[builtin] CDN 下载异常，尝试下一个: %s → %s", url, e)
+
+    logger.warning("[builtin] 字体所有 CDN 均下载失败: %s", font_name)
+    return None
 
 
 # ═══════════════════════════════════════════════════════════
@@ -714,7 +823,7 @@ async def _process_ass_content(ass_text: str, raw_bytes: bytes) -> tuple:
         if not loc:
             loc = find_downloaded_font(fname, subfamily)
         if not loc:
-            loc = await download_font(fname)
+            loc = await download_font(fname, is_bold=is_bold, is_italic=is_italic)
 
         if loc:
             font_resolved[key] = loc
