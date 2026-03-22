@@ -4,7 +4,7 @@
 //   Tab2: 整理&路径（左：路径映射，右：整理分类；下方：STRM生成三列卡片）
 // 注：刮削重命名功能已移至「整理分类刮削」页面（Tab3）
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import {
   Card, Descriptions, Tag, Button, Input, InputNumber, Modal, message,
   Space, Alert, Row, Col, Spin, Typography, Form, Select, QRCode,
