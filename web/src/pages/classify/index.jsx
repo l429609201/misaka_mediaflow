@@ -225,10 +225,11 @@ function parseYamlCfg(text) {
 
 // ── YAML 序列化（uiCats → YAML 文本）────────────────────────────────────────
 function uiCatsToYaml(cats) {
+  // all 类型只归入 movie 段（不重复进 tv），避免两段重复
   const movieCats = cats.filter(c => c.media_type === 'movie' || c.media_type === 'all')
-  const tvCats    = cats.filter(c => c.media_type === 'tv'    || c.media_type === 'all')
+  const tvCats    = cats.filter(c => c.media_type === 'tv')
 
-  function renderCat(cat) {
+  function renderCat(cat, section) {
     const lines = [`  ${cat.name}:`]
     const hasRules = cat.genre_ids?.length || cat.country?.length ||
       cat.language?.length || cat.keyword?.length ||
@@ -239,7 +240,7 @@ function uiCatsToYaml(cats) {
       lines.push(`    genre_ids: '${cat.genre_ids.join(',')}'`)
     if (cat.country?.length) {
       // 电影用 production_countries，剧集用 origin_country
-      const key = cat.media_type === 'movie' ? 'production_countries' : 'origin_country'
+      const key = section === 'movie' ? 'production_countries' : 'origin_country'
       lines.push(`    ${key}: '${cat.country.join(',')}'`)
     }
     if (cat.language?.length)
@@ -257,18 +258,18 @@ function uiCatsToYaml(cats) {
 
   if (movieCats.length) {
     sections.push('movie:')
-    sections.push(...movieCats.map(renderCat))
+    sections.push(...movieCats.map(c => renderCat(c, 'movie')))
     sections.push('')
   }
   if (tvCats.length) {
     sections.push('tv:')
-    sections.push(...tvCats.map(renderCat))
+    sections.push(...tvCats.map(c => renderCat(c, 'tv')))
     sections.push('')
   }
-  // 没有分 movie/tv 的情况（all only）
+  // 纯 all 且没有 movie/tv 的边缘情况
   if (!movieCats.length && !tvCats.length && cats.length) {
     sections.push('all:')
-    sections.push(...cats.map(renderCat))
+    sections.push(...cats.map(c => renderCat(c, 'all')))
     sections.push('')
   }
 
@@ -1333,18 +1334,56 @@ export const Classify = () => {
             <Button type="primary" icon={<PlusOutlined />} onClick={addCat}>添加分类</Button>
           </div>
 
-          {uiCats.length===0
-            ? <div style={{ padding:'60px 0', textAlign:'center', color:'#bbb', fontSize:14, border:'2px dashed #e5e7eb', borderRadius:10 }}>
+          {uiCats.length === 0
+            ? <div style={{ padding: '60px 0', textAlign: 'center', color: '#bbb', fontSize: 14, border: '2px dashed #e5e7eb', borderRadius: 10 }}>
                 暂无分类规则，点击「添加分类」开始配置
               </div>
-            : uiCats.map((cat,i)=>(
-              <CategoryItem key={i} cat={cat} idx={i} total={uiCats.length}
-                color={CAT_COLORS[i%CAT_COLORS.length]}
-                onEdit={()=>openEdit(cat,i)}
-                onDelete={()=>deleteCat(i)}
-                onMove={dir=>moveCat(i,dir)}
-              />
-            ))
+            : (() => {
+                const movieCats = uiCats.map((cat, i) => ({ cat, i })).filter(({ cat }) => cat.media_type === 'movie' || cat.media_type === 'all')
+                const tvCats    = uiCats.map((cat, i) => ({ cat, i })).filter(({ cat }) => cat.media_type === 'tv')
+                const sectionStyle = {
+                  fontSize: 12, fontWeight: 600, color: 'var(--ant-color-text-secondary)',
+                  letterSpacing: 1, padding: '4px 0 6px', marginTop: 8,
+                  display: 'flex', alignItems: 'center', gap: 6,
+                }
+                const dividerStyle = { flex: 1, height: 1, background: 'var(--ant-color-border)', marginLeft: 4 }
+                return (
+                  <>
+                    {movieCats.length > 0 && (
+                      <>
+                        <div style={sectionStyle}>
+                          🎬 电影
+                          <span style={dividerStyle} />
+                        </div>
+                        {movieCats.map(({ cat, i }) => (
+                          <CategoryItem key={i} cat={cat} idx={i} total={uiCats.length}
+                            color={CAT_COLORS[i % CAT_COLORS.length]}
+                            onEdit={() => openEdit(cat, i)}
+                            onDelete={() => deleteCat(i)}
+                            onMove={dir => moveCat(i, dir)}
+                          />
+                        ))}
+                      </>
+                    )}
+                    {tvCats.length > 0 && (
+                      <>
+                        <div style={{ ...sectionStyle, marginTop: movieCats.length > 0 ? 16 : 8 }}>
+                          📺 电视节目
+                          <span style={dividerStyle} />
+                        </div>
+                        {tvCats.map(({ cat, i }) => (
+                          <CategoryItem key={i} cat={cat} idx={i} total={uiCats.length}
+                            color={CAT_COLORS[i % CAT_COLORS.length]}
+                            onEdit={() => openEdit(cat, i)}
+                            onDelete={() => deleteCat(i)}
+                            onMove={dir => moveCat(i, dir)}
+                          />
+                        ))}
+                      </>
+                    )}
+                  </>
+                )
+              })()
           }
         </>
       ) : (
