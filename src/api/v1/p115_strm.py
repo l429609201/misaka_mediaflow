@@ -23,11 +23,21 @@ class SyncPair(BaseModel):
     strm_path: str    # 本地 STRM 输出路径（如 /data/strm/媒体库）
 
 
+class SyncDirCfg(BaseModel):
+    """全量同步 / 增量同步 各自的自定义路径配置"""
+    use_custom: bool = False   # 是否启用自定义路径（False 则沿用全局路径映射）
+    cloud_path: str = ""       # 115 网盘路径（仅 use_custom=True 时生效）
+    strm_path:  str = ""       # 本地 STRM 输出路径（仅 use_custom=True 时生效）
+
+
 class StrmSyncConfigPayload(BaseModel):
     sync_pairs: List[SyncPair] = []
     file_extensions: str = "mp4,mkv,avi,ts,iso,mov,m2ts"
     strm_link_host: str = ""
     clean_invalid: bool = True
+    # 全量 / 增量 各自的自定义路径配置
+    full_sync_cfg: SyncDirCfg = SyncDirCfg()
+    inc_sync_cfg:  SyncDirCfg = SyncDirCfg()
 
 
 class MonitorConfigPayload(BaseModel):

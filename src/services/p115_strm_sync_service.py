@@ -96,6 +96,9 @@ class P115StrmSyncService:
             "file_extensions": "mp4,mkv,avi,ts,iso,mov,m2ts",
             "strm_link_host": "",      # STRM 链接地址
             "clean_invalid": True,     # 是否清理失效 STRM
+            # 全量 / 增量 各自的自定义路径配置
+            "full_sync_cfg": {"use_custom": False, "cloud_path": "", "strm_path": ""},
+            "inc_sync_cfg":  {"use_custom": False, "cloud_path": "", "strm_path": ""},
         }
         saved = await _load_config_from_db()
         return {**defaults, **saved}

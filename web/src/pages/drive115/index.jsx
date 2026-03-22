@@ -82,6 +82,7 @@ export const Drive115 = () => {
 
   const [strmStatus,  setStrmStatus]  = useState({})
   const [strmSyncing, setStrmSyncing] = useState(false)
+  const [strmCfgSaving, setStrmCfgSaving] = useState(false)
 
   // 全量同步 / 增量同步 各自独立路径配置
   const SYNC_CFG_DEFAULTS = { use_custom: false, cloud_path: '', strm_path: '' }
@@ -100,8 +101,7 @@ export const Drive115 = () => {
   const [strmDirPickerOpen,    setStrmDirPickerOpen]    = useState(false)
 
   // STRM URL 模板
-  const [urlTemplate,    setUrlTemplate]    = useState('')
-  const [templateSaving, setTemplateSaving] = useState(false)
+  const [urlTemplate, setUrlTemplate] = useState('')
   const templateRef = useRef(null)
 
   // ----------------------------------------------------------------
@@ -145,6 +145,9 @@ export const Drive115 = () => {
       ])
       setStrmStatus(stRes.data || {})
       const cfg = cfgRes.data || {}
+      // 恢复全量/增量自定义路径配置
+      if (cfg.full_sync_cfg) setFullSyncCfg(c => ({ ...c, ...cfg.full_sync_cfg }))
+      if (cfg.inc_sync_cfg)  setIncSyncCfg(c  => ({ ...c, ...cfg.inc_sync_cfg  }))
       if (cfg.sync_pairs?.length) {
         const pair = cfg.sync_pairs[0]
         if (!mappingForm.getFieldValue('cloud_prefix') && pair.cloud_path)
@@ -314,6 +317,25 @@ export const Drive115 = () => {
     setSyncPickerState(s => ({ ...s, open: false }))
   }
 
+  // 一键保存 STRM 生成卡片所有配置（全量/增量路径 + URL模板）
+  const handleSaveStrmCfg = async () => {
+    setStrmCfgSaving(true)
+    try {
+      // 1. 保存 sync config（含全量/增量自定义路径）
+      await p115StrmApi.saveSyncConfig({
+        full_sync_cfg: fullSyncCfg,
+        inc_sync_cfg:  incSyncCfg,
+      })
+      // 2. 保存 URL 模板
+      await strmApi.saveUrlTemplate(urlTemplate)
+      message.success('STRM 配置已保存')
+    } catch {
+      message.error('保存失败')
+    } finally {
+      setStrmCfgSaving(false)
+    }
+  }
+
   const handleMonitorSave = async () => {
     setMonitorSaving(true)
     try {
@@ -357,12 +379,6 @@ export const Drive115 = () => {
     })
   }
 
-  const handleSaveTemplate = async () => {
-    setTemplateSaving(true)
-    try { await strmApi.saveUrlTemplate(urlTemplate); message.success('模板已保存') }
-    catch { message.error('保存失败') }
-    finally { setTemplateSaving(false) }
-  }
 
   // ----------------------------------------------------------------
   //  未启用
@@ -716,9 +732,17 @@ export const Drive115 = () => {
           <Card
             title={<Space><i className="iconfont icon-wenjianshengcheng" />{t('p115.strmGeneration')}</Space>}
             extra={
-              <Button icon={<SyncOutlined spin={strmStatus.running} />} size="small" onClick={fetchStrmAll}>
-                {t('p115.refreshStatus')}
-              </Button>
+              <Space size="small">
+                <Button icon={<SyncOutlined spin={strmStatus.running} />} size="small" onClick={fetchStrmAll}>
+                  {t('p115.refreshStatus')}
+                </Button>
+                <Button
+                  type="primary" icon={<SaveOutlined />} size="small"
+                  loading={strmCfgSaving} onClick={handleSaveStrmCfg}
+                >
+                  {t('common.save')}
+                </Button>
+              </Space>
             }
           >
             {/* ── 全量同步 ── */}
@@ -894,9 +918,6 @@ export const Drive115 = () => {
               }}
             />
             <Space style={{ marginTop: 10 }}>
-              <Button type="primary" icon={<SaveOutlined />} loading={templateSaving} onClick={handleSaveTemplate}>
-                保存模板
-              </Button>
               <Button onClick={() => setUrlTemplate(DEFAULT_TEMPLATE)}>恢复默认</Button>
             </Space>
           </Card>
