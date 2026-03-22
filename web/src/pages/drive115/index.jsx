@@ -537,7 +537,7 @@ export const Drive115 = () => {
       {/* ── 左列：STRM 生成 ── */}
       <Col xs={24} lg={12} style={{ display: 'flex', flexDirection: 'column' }}>
         <Card
-          title={<Space><ThunderboltOutlined />{t('p115.strmGeneration')}</Space>}
+          title={<Space><i className="iconfont icon-wenjianshengcheng" />{t('p115.strmGeneration')}</Space>}
           style={{ flex: 1 }}
           extra={<Button icon={<SyncOutlined spin={strmStatus.running} />} size="small" onClick={fetchStrmAll}>{t('p115.refreshStatus')}</Button>}
         >
