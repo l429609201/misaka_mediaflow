@@ -1352,7 +1352,7 @@ export const Classify = () => {
                     {movieCats.length > 0 && (
                       <>
                         <div style={sectionStyle}>
-                          🎬 电影
+                          <i className="iconfont icon-dianying" />电影
                           <span style={dividerStyle} />
                         </div>
                         {movieCats.map(({ cat, i }) => (
@@ -1368,7 +1368,7 @@ export const Classify = () => {
                     {tvCats.length > 0 && (
                       <>
                         <div style={{ ...sectionStyle, marginTop: movieCats.length > 0 ? 16 : 8 }}>
-                          📺 电视节目
+                          <i className="iconfont icon-dianshiju" />电视节目
                           <span style={dividerStyle} />
                         </div>
                         {tvCats.map(({ cat, i }) => (
