@@ -61,7 +61,13 @@ class MetadataService:
         return provider
 
     async def _build_provider(self, name: str) -> Optional[MetadataProvider]:
-        """从 SystemConfig 读配置并通过工厂创建 Provider 实例。"""
+        """从 SystemConfig 读配置并通过工厂创建 Provider 实例。
+
+        读取顺序：
+        1. provider_cls.CONFIG_KEY 专属 key（如 metadata_tmdb）
+        2. search_source_override[name]（搜索源页面保存的字段值）
+        两者合并，专属 key 优先。
+        """
         provider_cls = MetadataFactory.get_provider_class(name)
         if provider_cls is None:
             logger.debug("[MetadataService] 未知 Provider: %s", name)
@@ -74,15 +80,29 @@ class MetadataService:
 
         try:
             async with get_async_session_local() as db:
+                # 1. 读专属 key
                 row = await db.execute(
                     select(SystemConfig).where(SystemConfig.key == config_key)
                 )
                 cfg_row = row.scalars().first()
-                if not cfg_row or not cfg_row.value:
-                    logger.debug("[MetadataService] Provider %s 未配置", name)
-                    return None
+                cfg_data: dict = {}
+                if cfg_row and cfg_row.value:
+                    cfg_data = json.loads(cfg_row.value)
 
-                cfg_data: dict = json.loads(cfg_row.value)
+                # 2. 读搜索源页面保存的 override（search_source_override）
+                override_row = await db.execute(
+                    select(SystemConfig).where(SystemConfig.key == "search_source_override")
+                )
+                override_cfg = override_row.scalars().first()
+                if override_cfg and override_cfg.value:
+                    override_map: dict = json.loads(override_cfg.value)
+                    source_vals: dict = override_map.get(name, {})
+                    # 合并：专属 key 优先，搜索源作为补充
+                    cfg_data = {**source_vals, **cfg_data}
+
+            if not cfg_data:
+                logger.debug("[MetadataService] Provider %s 未配置", name)
+                return None
 
             # 检查必填字段（CONFIG_FIELDS 中 required=True 的字段）
             for field_spec in provider_cls.CONFIG_FIELDS:
@@ -92,8 +112,13 @@ class MetadataService:
                     )
                     return None
 
+            # 只传 __init__ 支持的参数，过滤掉多余字段（如 api_url / image_url）
+            import inspect as _inspect
+            valid_keys = set(_inspect.signature(provider_cls.__init__).parameters) - {"self"}
+            filtered = {k: v for k, v in cfg_data.items() if k in valid_keys}
+
             # 通过工厂创建实例，配置通过 kwargs 注入
-            provider = MetadataFactory.create(name, **cfg_data)
+            provider = MetadataFactory.create(name, **filtered)
             if not provider.available:
                 logger.debug("[MetadataService] Provider %s 不可用（available=False）", name)
                 return None
