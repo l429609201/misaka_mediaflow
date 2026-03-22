@@ -105,6 +105,7 @@ def _read_font_faces(path: str) -> list:
 
     try:
         if ext in (".ttc", ".otc"):
+            # 标准 TTC/OTC 集合：按扩展名直接枚举所有 face
             col = TTCollection(path)
             for i in range(len(col.fonts)):
                 font = TTFont(path, fontNumber=i, lazy=True)
@@ -113,11 +114,34 @@ def _read_font_faces(path: str) -> list:
                     results.append(rec)
                 font.close()
         else:
-            font = TTFont(path, lazy=True)
-            rec = _extract(font, 0)
-            if rec:
-                results.append(rec)
-            font.close()
+            # .ttf/.otf：大多数是单 face，但部分老式文件（尤其是包含 & 的文件名）
+            # 实际上是 TTC 集合，直接用 fontNumber=0 会报 "specify a font number
+            # between 0 and N"。策略：先尝试 TTCollection 探测 face 数量，
+            # 若成功且 face > 1 则按集合处理；否则按普通单 face 处理。
+            n_faces = 0
+            try:
+                col = TTCollection(path)
+                n_faces = len(col.fonts)
+            except Exception:
+                n_faces = 0
+
+            if n_faces > 1:
+                # 伪装成 TTC 的多 face 文件
+                for i in range(n_faces):
+                    try:
+                        font = TTFont(path, fontNumber=i, lazy=True)
+                        rec = _extract(font, i)
+                        if rec:
+                            results.append(rec)
+                        font.close()
+                    except Exception as ei:
+                        logger.debug("[font_idx] 跳过字体文件 %s#%d: %s", path, i, ei)
+            else:
+                font = TTFont(path, lazy=True)
+                rec = _extract(font, 0)
+                if rec:
+                    results.append(rec)
+                font.close()
     except Exception as e:
         logger.debug("[font_idx] 跳过字体文件 %s: %s", path, e)
 
