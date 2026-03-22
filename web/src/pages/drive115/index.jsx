@@ -82,6 +82,14 @@ export const Drive115 = () => {
   const [strmStatus,  setStrmStatus]  = useState({})
   const [strmSyncing, setStrmSyncing] = useState(false)
 
+  // 全量同步 / 增量同步 各自独立路径配置
+  const SYNC_CFG_DEFAULTS = { use_custom: false, cloud_path: '', strm_path: '' }
+  const [fullSyncCfg, setFullSyncCfg] = useState({ ...SYNC_CFG_DEFAULTS })
+  const [incSyncCfg,  setIncSyncCfg]  = useState({ ...SYNC_CFG_DEFAULTS })
+
+  // 全量/增量 目录选择器：field = 'cloud_path' | 'strm_path', scope = 'full' | 'inc'
+  const [syncPickerState, setSyncPickerState] = useState({ open: false, scope: null, field: null, type: 'cloud' })
+
   const [monitorCfg,    setMonitorCfg]    = useState({ poll_interval: 30, auto_inc_sync: true, monitor_dir: '', strm_dir: '', use_custom_dir: false })
   const [monitorStatus, setMonitorStatus] = useState({})
   const [monitorSaving, setMonitorSaving] = useState(false)
@@ -267,11 +275,11 @@ export const Drive115 = () => {
   const handleFullSync = async () => {
     setStrmSyncing(true)
     try {
-      const cloudPath = mappingForm.getFieldValue('cloud_prefix') || ''
-      const strmPath  = mappingForm.getFieldValue('strm_prefix')  || ''
-      const r = await p115StrmApi.fullSync(
-        cloudPath && strmPath ? { cloud_path: cloudPath, strm_path: strmPath } : undefined
-      )
+      // 自定义时用各自路径，全局时不传（后端用全局配置）
+      const payload = fullSyncCfg.use_custom && fullSyncCfg.cloud_path && fullSyncCfg.strm_path
+        ? { cloud_path: fullSyncCfg.cloud_path, strm_path: fullSyncCfg.strm_path }
+        : undefined
+      const r = await p115StrmApi.fullSync(payload)
       r.data?.success
         ? message.success(t('p115.syncStarted'))
         : message.warning(r.data?.message || t('p115.syncStartFailed'))
@@ -283,17 +291,26 @@ export const Drive115 = () => {
   const handleIncSync = async () => {
     setStrmSyncing(true)
     try {
-      const cloudPath = mappingForm.getFieldValue('cloud_prefix') || ''
-      const strmPath  = mappingForm.getFieldValue('strm_prefix')  || ''
-      const r = await p115StrmApi.incSync(
-        cloudPath && strmPath ? { cloud_path: cloudPath, strm_path: strmPath } : undefined
-      )
+      const payload = incSyncCfg.use_custom && incSyncCfg.cloud_path && incSyncCfg.strm_path
+        ? { cloud_path: incSyncCfg.cloud_path, strm_path: incSyncCfg.strm_path }
+        : undefined
+      const r = await p115StrmApi.incSync(payload)
       r.data?.success
         ? message.success(t('p115.syncStarted'))
         : message.warning(r.data?.message || t('p115.syncStartFailed'))
       setTimeout(fetchStrmAll, 1500)
     } catch { message.error(t('common.failed')) }
     finally { setStrmSyncing(false) }
+  }
+
+  // 同步目录选择器辅助
+  const openSyncPicker = (scope, field, type) =>
+    setSyncPickerState({ open: true, scope, field, type })
+  const handleSyncDirSelected = (p) => {
+    const { scope, field } = syncPickerState
+    if (scope === 'full') setFullSyncCfg(c => ({ ...c, [field]: p }))
+    else                  setIncSyncCfg(c  => ({ ...c, [field]: p }))
+    setSyncPickerState(s => ({ ...s, open: false }))
   }
 
   const handleMonitorSave = async () => {
@@ -485,9 +502,22 @@ export const Drive115 = () => {
             <Col span={24}>
               <Card
                 title={<Space><ClockCircleOutlined />生活事件监控</Space>}
-                extra={<Button icon={<SyncOutlined />} size="small" onClick={fetchMonitorAll}>{t('common.refresh')}</Button>}
+                extra={
+                  <Space size="small">
+                    <Button icon={<SyncOutlined />} size="small" onClick={fetchMonitorAll}>{t('common.refresh')}</Button>
+                    <Button
+                      size="small"
+                      type={monitorStatus.running ? 'default' : 'primary'}
+                      danger={monitorStatus.running}
+                      icon={monitorStatus.running ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
+                      onClick={handleMonitorToggle}
+                    >
+                      {monitorStatus.running ? t('p115.stopMonitor') : t('p115.startMonitor')}
+                    </Button>
+                  </Space>
+                }
               >
-                <div style={{ marginBottom: 16 }}>
+                <div style={{ marginBottom: 12 }}>
                   <Badge
                     status={monitorStatus.running ? 'processing' : 'default'}
                     text={<Text strong>{monitorStatus.running ? t('p115.monitorRunning') : t('p115.monitorStopped')}</Text>}
@@ -500,15 +530,6 @@ export const Drive115 = () => {
                       ? new Date(monitorStatus.last_event_time * 1000).toLocaleString()
                       : '—'}
                   </Text>
-                </div>
-                <div style={{ marginBottom: 16 }}>
-                  <Button
-                    type={monitorStatus.running ? 'default' : 'primary'}
-                    icon={monitorStatus.running ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
-                    onClick={handleMonitorToggle} block
-                  >
-                    {monitorStatus.running ? t('p115.stopMonitor') : t('p115.startMonitor')}
-                  </Button>
                 </div>
                 <Divider style={{ margin: '0 0 16px' }} />
                 <Form layout="vertical" size="small">
@@ -697,48 +718,137 @@ export const Drive115 = () => {
               </Button>
             }
           >
-            <Alert type="info" showIcon style={{ marginBottom: 16 }} message={t('p115.strmPathFromMapping')} />
-            <Form layout="vertical" size="small">
-              <Form.Item label={t('p115.cloudPrefix')}>
-                <Input disabled value={mappingForm.getFieldValue('cloud_prefix') || '—'} />
-              </Form.Item>
-              <Form.Item label={t('p115.strmPrefix')}>
-                <Input disabled value={mappingForm.getFieldValue('strm_prefix') || '—'} />
-              </Form.Item>
-            </Form>
-            <Divider style={{ margin: '12px 0' }} />
-
-            <div style={{ fontSize: 12, color: '#888', marginBottom: 2 }}>{t('p115.lastFullSync')}</div>
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>
-              {strmStatus.last_full_sync
-                ? new Date(strmStatus.last_full_sync * 1000).toLocaleString() : '—'}
+            {/* ── 全量同步 ── */}
+            <div style={{ marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Text strong style={{ fontSize: 13 }}>{t('p115.fullSync')}</Text>
+              <div style={{ fontSize: 11, color: '#888' }}>
+                {t('p115.lastFullSync')}：{strmStatus.last_full_sync
+                  ? new Date(strmStatus.last_full_sync * 1000).toLocaleString() : '—'}
+              </div>
             </div>
             <Space size={4} wrap style={{ marginBottom: 10 }}>
               <StatTag value={fullStats.created} label={t('p115.statGenerated')} color="green" />
               <StatTag value={fullStats.skipped} label={t('p115.statSkipped')}   color="default" />
               <StatTag value={fullStats.errors}  label={t('p115.statFailed')}    color="red" />
             </Space>
+            {/* 全量同步 — 全局/自定义开关 */}
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              background: fullSyncCfg.use_custom ? '#f6ffed' : '#f5f5f5',
+              border: `1px solid ${fullSyncCfg.use_custom ? '#b7eb8f' : '#d9d9d9'}`,
+              borderRadius: 8, padding: '7px 12px', marginBottom: 8, transition: 'all .25s',
+            }}>
+              <div>
+                <Text strong style={{ fontSize: 12 }}>{fullSyncCfg.use_custom ? '自定义路径' : '使用全局配置'}</Text>
+                <div style={{ fontSize: 11, color: '#888' }}>
+                  {fullSyncCfg.use_custom ? '覆盖全局路径映射' : '沿用「整理与路径映射」配置'}
+                </div>
+              </div>
+              <Switch size="small" checkedChildren="自定义" unCheckedChildren="全局"
+                checked={fullSyncCfg.use_custom}
+                onChange={v => setFullSyncCfg(c => ({ ...c, use_custom: v }))} />
+            </div>
+            <Form layout="vertical" size="small" style={{ marginBottom: 0 }}>
+              <Form.Item label="云盘路径" style={{ marginBottom: 6 }}>
+                <Input size="small"
+                  disabled={!fullSyncCfg.use_custom}
+                  placeholder={fullSyncCfg.use_custom ? '/影音' : '（全局云盘根目录）'}
+                  value={fullSyncCfg.cloud_path}
+                  onChange={e => setFullSyncCfg(c => ({ ...c, cloud_path: e.target.value }))}
+                  addonAfter={
+                    <Button type="link" size="small" icon={<FolderOpenOutlined />}
+                      disabled={!fullSyncCfg.use_custom}
+                      onClick={() => fullSyncCfg.use_custom && openSyncPicker('full', 'cloud_path', 'cloud')}
+                      style={{ padding: 0, height: 'auto' }}>选择</Button>
+                  }
+                />
+              </Form.Item>
+              <Form.Item label="STRM路径" style={{ marginBottom: 10 }}>
+                <Input size="small"
+                  disabled={!fullSyncCfg.use_custom}
+                  placeholder={fullSyncCfg.use_custom ? '/data/strm' : '（全局STRM根目录）'}
+                  value={fullSyncCfg.strm_path}
+                  onChange={e => setFullSyncCfg(c => ({ ...c, strm_path: e.target.value }))}
+                  addonAfter={
+                    <Button type="link" size="small" icon={<FolderOpenOutlined />}
+                      disabled={!fullSyncCfg.use_custom}
+                      onClick={() => fullSyncCfg.use_custom && openSyncPicker('full', 'strm_path', 'local')}
+                      style={{ padding: 0, height: 'auto' }}>选择</Button>
+                  }
+                />
+              </Form.Item>
+            </Form>
             {strmStatus.running && (
-              <Alert style={{ marginBottom: 10 }} type="info" showIcon
+              <Alert style={{ marginBottom: 8 }} type="info" showIcon
                 message={t('p115.syncInProgress', { count: strmProgress.created || 0 })} />
             )}
-            <Button type="primary" icon={<ThunderboltOutlined />} block style={{ marginBottom: 12 }}
+            <Button type="primary" icon={<ThunderboltOutlined />} block style={{ marginBottom: 16 }}
               loading={strmSyncing || strmStatus.running} onClick={handleFullSync}>
               {t('p115.fullSync')}
             </Button>
 
             <Divider style={{ margin: '0 0 12px' }} />
 
-            <div style={{ fontSize: 12, color: '#888', marginBottom: 2 }}>{t('p115.lastIncSync')}</div>
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>
-              {strmStatus.last_inc_sync
-                ? new Date(strmStatus.last_inc_sync * 1000).toLocaleString() : '—'}
+            {/* ── 增量同步 ── */}
+            <div style={{ marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Text strong style={{ fontSize: 13 }}>{t('p115.incSync')}</Text>
+              <div style={{ fontSize: 11, color: '#888' }}>
+                {t('p115.lastIncSync')}：{strmStatus.last_inc_sync
+                  ? new Date(strmStatus.last_inc_sync * 1000).toLocaleString() : '—'}
+              </div>
             </div>
             <Space size={4} wrap style={{ marginBottom: 10 }}>
               <StatTag value={incStats.created} label={t('p115.statGenerated')} color="green" />
               <StatTag value={incStats.skipped} label={t('p115.statSkipped')}   color="default" />
               <StatTag value={incStats.errors}  label={t('p115.statFailed')}    color="red" />
             </Space>
+            {/* 增量同步 — 全局/自定义开关 */}
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              background: incSyncCfg.use_custom ? '#f6ffed' : '#f5f5f5',
+              border: `1px solid ${incSyncCfg.use_custom ? '#b7eb8f' : '#d9d9d9'}`,
+              borderRadius: 8, padding: '7px 12px', marginBottom: 8, transition: 'all .25s',
+            }}>
+              <div>
+                <Text strong style={{ fontSize: 12 }}>{incSyncCfg.use_custom ? '自定义路径' : '使用全局配置'}</Text>
+                <div style={{ fontSize: 11, color: '#888' }}>
+                  {incSyncCfg.use_custom ? '覆盖全局路径映射' : '沿用「整理与路径映射」配置'}
+                </div>
+              </div>
+              <Switch size="small" checkedChildren="自定义" unCheckedChildren="全局"
+                checked={incSyncCfg.use_custom}
+                onChange={v => setIncSyncCfg(c => ({ ...c, use_custom: v }))} />
+            </div>
+            <Form layout="vertical" size="small" style={{ marginBottom: 0 }}>
+              <Form.Item label="云盘路径" style={{ marginBottom: 6 }}>
+                <Input size="small"
+                  disabled={!incSyncCfg.use_custom}
+                  placeholder={incSyncCfg.use_custom ? '/影音' : '（全局云盘根目录）'}
+                  value={incSyncCfg.cloud_path}
+                  onChange={e => setIncSyncCfg(c => ({ ...c, cloud_path: e.target.value }))}
+                  addonAfter={
+                    <Button type="link" size="small" icon={<FolderOpenOutlined />}
+                      disabled={!incSyncCfg.use_custom}
+                      onClick={() => incSyncCfg.use_custom && openSyncPicker('inc', 'cloud_path', 'cloud')}
+                      style={{ padding: 0, height: 'auto' }}>选择</Button>
+                  }
+                />
+              </Form.Item>
+              <Form.Item label="STRM路径" style={{ marginBottom: 16 }}>
+                <Input size="small"
+                  disabled={!incSyncCfg.use_custom}
+                  placeholder={incSyncCfg.use_custom ? '/data/strm' : '（全局STRM根目录）'}
+                  value={incSyncCfg.strm_path}
+                  onChange={e => setIncSyncCfg(c => ({ ...c, strm_path: e.target.value }))}
+                  addonAfter={
+                    <Button type="link" size="small" icon={<FolderOpenOutlined />}
+                      disabled={!incSyncCfg.use_custom}
+                      onClick={() => incSyncCfg.use_custom && openSyncPicker('inc', 'strm_path', 'local')}
+                      style={{ padding: 0, height: 'auto' }}>选择</Button>
+                  }
+                />
+              </Form.Item>
+            </Form>
             <Button icon={<SyncOutlined />} block
               loading={strmSyncing || strmStatus.running} onClick={handleIncSync}>
               {t('p115.incSync')}
@@ -829,6 +939,17 @@ export const Drive115 = () => {
       <LocalDirPickerModal
         open={strmDirPickerOpen} onClose={() => setStrmDirPickerOpen(false)}
         onSelect={p => { setMonitorCfg(c => ({ ...c, strm_dir: p })); setStrmDirPickerOpen(false) }}
+      />
+      {/* 同步路径选择器：云盘用 DirPickerModal，本地用 LocalDirPickerModal */}
+      <DirPickerModal
+        open={syncPickerState.open && syncPickerState.type === 'cloud'}
+        onClose={() => setSyncPickerState(s => ({ ...s, open: false }))}
+        onSelect={handleSyncDirSelected}
+      />
+      <LocalDirPickerModal
+        open={syncPickerState.open && syncPickerState.type === 'local'}
+        onClose={() => setSyncPickerState(s => ({ ...s, open: false }))}
+        onSelect={handleSyncDirSelected}
       />
     </div>
   )
