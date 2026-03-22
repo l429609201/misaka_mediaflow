@@ -71,6 +71,9 @@ def _read_font_faces(path: str) -> list:
                     val = rec.toUnicode().strip()
                 except Exception:
                     continue
+                # 移除 NULL byte：老式中文字体（汉鼎、文鼎等）name 表常含 UTF-16BE 残留的
+                # \x00 或 C 风格末尾填充，PostgreSQL VARCHAR 列不接受 NULL byte（\x00）
+                val = val.replace('\x00', '').strip()
                 if not val:
                     continue
                 if rec.nameID == 1:
@@ -215,7 +218,10 @@ async def _db_insert_font_faces(db, file_id: int, faces: list):
         for lst in (face["family_names"], face["full_names"], face["postscript_names"]):
             for n in lst:
                 if n:
-                    all_names.add(n.strip().lower())
+                    # 再次清洗 NULL byte（防御：_extract 已清洗，此处为双重保险）
+                    clean = n.replace('\x00', '').strip().lower()
+                    if clean:
+                        all_names.add(clean)
         for name in all_names:
             db.add(FontName(name=name, face_id=ff.id))
 
@@ -239,13 +245,20 @@ async def _process_insert(path: str) -> int:
             await db.commit()
         return len(faces)
     except Exception as e:
-        # UniqueViolation = 并发扫描竞争写入同一文件，属于正常并发冲突，静默跳过
+        # 已知可忽略的异常，降为 DEBUG 级别（不产生 WARNING 日志噪音）：
+        #   - UniqueViolation      : 并发扫描竞争写入同一文件（正常并发冲突）
+        #   - CharacterNotInRepertoire / invalid byte sequence
+        #                          : 老式字体 name 表含 \x00，PostgreSQL 拒绝写入
         err_str = str(e)
-        if ("UniqueViolation" in err_str
-                or "unique constraint" in err_str.lower()
-                or "duplicate key" in err_str.lower()
-                or "Duplicate entry" in err_str):           # MySQL
-            logger.debug("[font_idx] 字体已存在（并发写入竞争），跳过: %s", path)
+        if (
+            "UniqueViolation" in err_str
+            or "unique constraint" in err_str.lower()
+            or "duplicate key" in err_str.lower()
+            or "Duplicate entry" in err_str                    # MySQL
+            or "CharacterNotInRepertoire" in err_str           # asyncpg \x00 in VARCHAR
+            or "invalid byte sequence" in err_str.lower()      # PostgreSQL generic encoding
+        ):
+            logger.debug("[font_idx] 字体跳过（已存在或名称含非法字节）: %s", path)
             return 0
         logger.warning("[font_idx] 入库失败 %s: %s", path, e)
         return 0
