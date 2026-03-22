@@ -262,7 +262,15 @@ export const Drive115 = () => {
   // 目录选择器
   const openDirPicker        = (f) => { setDirPickerTarget(f);      setDirPickerOpen(true) }
   const openLocalDirPicker   = (f) => { setLocalDirPickerTarget(f); setLocalDirPickerOpen(true) }
-  const handleDirSelected      = (p) => { if (dirPickerTarget)      mappingForm.setFieldValue(dirPickerTarget, p) }
+  const handleDirSelected    = (p) => {
+    if (!dirPickerTarget) return
+    if (dirPickerTarget === '__org_target_root__') {
+      // 整理分类卡片的目标根目录
+      setOrgCfg(c => ({ ...c, target_root: p }))
+    } else {
+      mappingForm.setFieldValue(dirPickerTarget, p)
+    }
+  }
   const handleLocalDirSelected = (p) => { if (localDirPickerTarget) mappingForm.setFieldValue(localDirPickerTarget, p) }
 
   // STRM
@@ -626,10 +634,22 @@ export const Drive115 = () => {
           >
             <Alert type="info" showIcon style={{ marginBottom: 16 }} message={t('p115.pathMappingHint')} />
             <Form form={mappingForm} layout="vertical" size="small"
-              initialValues={{ media_prefix: '', cloud_prefix: '', strm_prefix: '', local_media_prefix: '' }}>
+              initialValues={{ media_prefix: '', cloud_prefix: '', strm_prefix: '', local_media_prefix: '', organize_source: '', organize_unrecognized: '' }}>
               <Form.Item name="cloud_prefix" label={t('p115.cloudPrefix')} tooltip={t('p115.cloudPrefixHint')}>
                 <Input placeholder="/media" addonAfter={
                   <Button type="link" size="small" icon={<FolderOpenOutlined />} onClick={() => openDirPicker('cloud_prefix')} style={{ padding: 0, height: 'auto' }}>
+                    {t('p115.selectDir')}
+                  </Button>} />
+              </Form.Item>
+              <Form.Item name="organize_source" label={t('p115.organizeSource')} tooltip={t('p115.organizeSourceHint')}>
+                <Input placeholder="/待整理" addonAfter={
+                  <Button type="link" size="small" icon={<FolderOpenOutlined />} onClick={() => openDirPicker('organize_source')} style={{ padding: 0, height: 'auto' }}>
+                    {t('p115.selectDir')}
+                  </Button>} />
+              </Form.Item>
+              <Form.Item name="organize_unrecognized" label={t('p115.organizeUnrecognized')} tooltip={t('p115.organizeUnrecognizedHint')}>
+                <Input placeholder="/未识别" addonAfter={
+                  <Button type="link" size="small" icon={<FolderOpenOutlined />} onClick={() => openDirPicker('organize_unrecognized')} style={{ padding: 0, height: 'auto' }}>
                     {t('p115.selectDir')}
                   </Button>} />
               </Form.Item>
@@ -697,7 +717,17 @@ export const Drive115 = () => {
           <Form layout="vertical" size="small">
             <Form.Item label={t('p115.organizeTargetRoot')} tooltip={t('p115.organizeTargetRootHint')}>
               <Input value={orgCfg.target_root} placeholder={t('p115.organizeTargetRootHint')}
-                onChange={e => setOrgCfg(c => ({ ...c, target_root: e.target.value }))} />
+                onChange={e => setOrgCfg(c => ({ ...c, target_root: e.target.value }))}
+                addonAfter={
+                  <Button type="link" size="small" icon={<FolderOpenOutlined />}
+                    onClick={() => {
+                      setDirPickerTarget('__org_target_root__')
+                      setDirPickerOpen(true)
+                    }}
+                    style={{ padding: 0, height: 'auto' }}>
+                    {t('p115.selectDir')}
+                  </Button>
+                } />
             </Form.Item>
             <Form.Item label={t('p115.dryRun')} tooltip={t('p115.dryRunHint')}>
               <Switch checked={orgCfg.dry_run} onChange={v => setOrgCfg(c => ({ ...c, dry_run: v }))} />

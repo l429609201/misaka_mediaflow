@@ -91,31 +91,51 @@ _DEFAULT_CATEGORIES = [
 ]
 
 
-def _match_rule(rule: dict, filename: str, dirname: str) -> bool:
-    """执行单条规则匹配"""
-    field = rule.get("field", "filename")
-    text = filename if field == "filename" else dirname
-    value = rule.get("value", "")
+def _match_rule(rule: dict, filename: str, dirname: str, tmdb: dict = None) -> bool:
+    """执行单条规则匹配。支持 genre_ids / origin_country / original_language / keyword / regex。"""
+    rtype = rule.get("type", "keyword")
+    value = rule.get("value", "").strip()
     if not value:
         return False
+
+    if tmdb is None:
+        tmdb = {}
+
+    # ── TMDB 字段匹配 ──────────────────────────────────────────────────
+    if rtype == "genre_ids":
+        want_ids = {int(v.strip()) for v in value.split(",") if v.strip().isdigit()}
+        have_ids = {int(g) for g in tmdb.get("genre_ids", []) if str(g).isdigit()}
+        return bool(want_ids & have_ids)
+
+    if rtype == "origin_country":
+        want = {v.strip().upper() for v in value.split(",")}
+        have = {c.upper() for c in tmdb.get("origin_country", [])}
+        return bool(want & have)
+
+    if rtype == "original_language":
+        want = {v.strip().lower() for v in value.split(",")}
+        lang = tmdb.get("original_language", "").lower()
+        return lang in want
+
+    # ── 本地文件名匹配 ─────────────────────────────────────────────────
+    field = rule.get("field", "filename")
+    text = filename if field == "filename" else dirname
     try:
-        if rule.get("type") == "regex":
+        if rtype == "regex":
             return bool(re.search(value, text))
-        else:  # keyword — 大小写不敏感包含
+        else:
             return value.lower() in text.lower()
     except Exception:
         return False
 
 
-def _detect_category(filename: str, dirname: str, categories: list) -> Optional[str]:
-    """
-    按顺序用可配置规则匹配分类，返回分类名。
-    - 空规则分类作为兜底（fallback），取最后一个空规则分类
-    - 无任何匹配且无兜底时返回 None
-    """
+def _detect_category(
+    filename: str, dirname: str, tmdb_info: dict, categories: list
+) -> Optional[str]:
+    """按顺序匹配分类规则，返回第一个命中的分类名；空规则分类为兜底。"""
     fallback = None
     for cat in categories:
-        rules = cat.get("rules", [])
+        rules    = cat.get("rules", [])
         cat_name = cat.get("name", "")
         if not cat_name:
             continue
@@ -124,12 +144,72 @@ def _detect_category(filename: str, dirname: str, categories: list) -> Optional[
             continue
         match_all = cat.get("match_all", False)
         if match_all:
-            matched = all(_match_rule(r, filename, dirname) for r in rules)
+            matched = all(_match_rule(r, filename, dirname, tmdb_info) for r in rules)
         else:
-            matched = any(_match_rule(r, filename, dirname) for r in rules)
+            matched = any(_match_rule(r, filename, dirname, tmdb_info) for r in rules)
         if matched:
             return cat_name
     return fallback
+
+
+# ── TMDB 辅助（带内存缓存）─────────────────────────────────────────────────
+_tmdb_cache: dict = {}
+
+
+async def _get_tmdb_provider():
+    """从 SystemConfig 读取 TMDB 配置，返回 TMDBProvider；未配置 API Key 则返回 None。"""
+    try:
+        async with get_async_session_local() as db:
+            row = await db.execute(
+                select(SystemConfig).where(SystemConfig.key == "metadata_tmdb")
+            )
+            cfg = row.scalars().first()
+            if not cfg or not cfg.value:
+                return None
+            data    = json.loads(cfg.value)
+            api_key = data.get("api_key", "").strip()
+            if not api_key:
+                return None
+            from src.adapters.metadata.tmdb import TMDBProvider
+            return TMDBProvider(api_key=api_key, language=data.get("language", "zh-CN"))
+    except Exception as e:
+        logger.debug("[整理] 获取 TMDB 配置失败: %s", e)
+        return None
+
+
+async def _fetch_tmdb_info(title: str, is_movie: bool, year: Optional[str]) -> dict:
+    """搜索 TMDB，返回 {genre_ids, origin_country, original_language}；带缓存。"""
+    cache_key = f"{title}|{'movie' if is_movie else 'tv'}"
+    if cache_key in _tmdb_cache:
+        return _tmdb_cache[cache_key]
+
+    result: dict = {}
+    tmdb = await _get_tmdb_provider()
+    if tmdb is None:
+        return result
+
+    try:
+        media_type = "movie" if is_movie else "tv"
+        year_int   = int(year) if year and str(year).isdigit() else 0
+        results    = await tmdb.search(title, media_type=media_type, year=year_int)
+        if not results and year_int:
+            results = await tmdb.search(title, media_type=media_type)
+        if results:
+            top      = results[0]
+            tmdb_id  = top.extra.get("id") or top.tmdb_id
+            if tmdb_id:
+                detail = await tmdb.get_detail(int(tmdb_id), media_type=media_type)
+                if detail:
+                    result = {
+                        "genre_ids":         top.extra.get("genre_ids", []),
+                        "origin_country":    detail.extra.get("origin_country", []),
+                        "original_language": detail.extra.get("original_language", ""),
+                    }
+    except Exception as e:
+        logger.warning("[整理] TMDB 查询失败 title=%s: %s", title, e)
+
+    _tmdb_cache[cache_key] = result
+    return result
 
 
 def _get_manager():
@@ -216,10 +296,17 @@ class P115OrganizeService:
         return {"success": True, "message": "整理任务已启动"}
 
     async def _do_organize(self):
-        """执行整理分类"""
+        """执行整理分类
+        流程：
+          ① 从 path_mapping 读取 organize_source（待整理目录）
+          ② filename_parser 本地解析（title/is_movie/season/episode）
+          ③ TMDB 查询（genre_ids/origin_country/original_language），需配置 API Key
+          ④ 分类规则匹配（genre_ids/origin_country/keyword/regex）
+          ⑤ 匹配成功 → 移入分类目录；未识别 → 移入 organize_unrecognized
+        """
         self._running = True
         start_time = time.time()
-        stats = {"moved": 0, "skipped": 0, "errors": 0}
+        stats = {"moved": 0, "skipped": 0, "errors": 0, "unrecognized": 0}
         self._progress = {"stage": "scanning", **stats}
 
         try:
@@ -229,10 +316,35 @@ class P115OrganizeService:
                 logger.warning("[整理] 115 未启用或未就绪")
                 return
 
-            target_root_id = await self._ensure_dir(manager, config.get("target_root", ""))
-            if not target_root_id:
-                logger.error("[整理] 目标根目录无效: %s", config.get("target_root"))
+            # ── 从 path_mapping 读待整理目录 / 未识别目录 ──────────────────
+            path_mapping = await self._load_path_mapping()
+            organize_source = path_mapping.get("organize_source", "").strip()
+            organize_unrecognized = path_mapping.get("organize_unrecognized", "").strip()
+
+            # source_paths 优先使用 path_mapping.organize_source，
+            # 若未配置则回退到 config 里的 source_paths（向后兼容）
+            if organize_source:
+                source_paths = [organize_source]
+            else:
+                source_paths = [p.strip() for p in config.get("source_paths", []) if p.strip()]
+
+            if not source_paths:
+                logger.warning("[整理] 未配置待整理目录，退出")
                 return
+
+            # ── 目标根目录 ─────────────────────────────────────────────────
+            target_root = config.get("target_root", "").strip()
+            target_root_id = await self._ensure_dir(manager, target_root) if target_root else ""
+            if target_root and not target_root_id:
+                logger.error("[整理] 目标根目录无效: %s", target_root)
+                return
+
+            # ── 未识别目录 cid ─────────────────────────────────────────────
+            unrecognized_cid = ""
+            if organize_unrecognized:
+                unrecognized_cid = await self._ensure_dir(manager, organize_unrecognized)
+                if not unrecognized_cid:
+                    logger.warning("[整理] 未识别目录无效或不存在: %s", organize_unrecognized)
 
             dry_run = config.get("dry_run", False)
             categories = config.get("categories", _DEFAULT_CATEGORIES)
@@ -242,50 +354,100 @@ class P115OrganizeService:
                     for k, v in categories.items()
                 ]
 
-            # 预先创建分类目录，得到 cid 映射
-            cat_cid_map = {}
-            for cat in categories:
-                cat_name = cat.get("name", "")
-                sub_dir = cat.get("target_dir", cat_name)
-                if not cat_name or not sub_dir:
-                    continue
-                cid = await self._ensure_dir(
-                    manager,
-                    f"{config.get('target_root', '')}/{sub_dir}",
-                    parent_id=target_root_id,
-                )
-                if cid:
-                    cat_cid_map[cat_name] = cid
+            # ── 预建分类目录 cid 映射 ────────────────────────────────────────
+            cat_cid_map: dict[str, str] = {}
+            if target_root_id:
+                for cat in categories:
+                    cat_name = cat.get("name", "")
+                    sub_dir  = cat.get("target_dir", cat_name)
+                    if not cat_name or not sub_dir:
+                        continue
+                    cid = await self._ensure_dir(
+                        manager, f"{target_root}/{sub_dir}", parent_id=target_root_id,
+                    )
+                    if cid:
+                        cat_cid_map[cat_name] = cid
 
-            for source_path in config.get("source_paths", []):
-                source_path = source_path.strip()
-                if not source_path:
+            # ── TMDB 可用性 ─────────────────────────────────────────────────
+            tmdb_available = (await _get_tmdb_provider()) is not None
+            logger.info("[整理] TMDB %s", "已配置，启用精确分类" if tmdb_available else "未配置，使用本地规则")
+
+            # ── 扫描待整理目录 ──────────────────────────────────────────────
+            for source_path in source_paths:
+                logger.info("[整理] 扫描: %s", source_path)
+                try:
+                    entries = await manager.adapter.list_files(source_path, cid="0")
+                except Exception as e:
+                    logger.error("[整理] 扫描目录失败 %s: %s", source_path, e)
                     continue
-                logger.info("[整理] 扫描源目录: %s", source_path)
-                entries = await manager.adapter.list_files(source_path, cid="0")
+
+                dirname = source_path.rstrip("/").rsplit("/", 1)[-1]
+
                 for entry in entries:
                     if entry.is_dir:
                         continue
-                    dirname = source_path.rstrip("/").rsplit("/", 1)[-1]
-                    category = _detect_category(entry.name, dirname, categories)
-                    if not category:
-                        stats["skipped"] += 1
-                        logger.debug("[整理] 无匹配分类，跳过: %s", entry.name)
+
+                    filename = entry.name
+                    tmdb_info: dict = {}
+                    is_movie: Optional[bool] = None
+                    title   = filename
+                    year    = None
+
+                    # ① 本地解析
+                    try:
+                        from src.utils.filename_parser import parse_filename
+                        parsed  = parse_filename(filename)
+                        title   = parsed.title or filename
+                        year    = parsed.year
+                        if parsed.season is not None or parsed.episode is not None:
+                            is_movie = False
+                        elif parsed.is_movie:
+                            is_movie = True
+                    except Exception as ex:
+                        logger.debug("[整理] filename_parser 失败: %s", ex)
+
+                    # ② TMDB 查询
+                    if tmdb_available:
+                        if is_movie is None:
+                            tmdb_info = await _fetch_tmdb_info(title, True, year)
+                            if not tmdb_info:
+                                tmdb_info = await _fetch_tmdb_info(title, False, year)
+                        else:
+                            tmdb_info = await _fetch_tmdb_info(title, is_movie, year)
+
+                    # ③ 分类匹配
+                    category = _detect_category(filename, dirname, tmdb_info, categories)
+
+                    if not category or not cat_cid_map.get(category):
+                        # 未识别 → 移入未识别目录
+                        if unrecognized_cid:
+                            if dry_run:
+                                logger.info("[整理][试运行] 未识别 %s → 未识别目录", filename)
+                            else:
+                                ok = await self._move_file(manager, entry.file_id, unrecognized_cid)
+                                if ok:
+                                    stats["unrecognized"] += 1
+                                    logger.info("[整理] 未识别: %s → 未识别目录", filename)
+                                else:
+                                    stats["errors"] += 1
+                        else:
+                            stats["skipped"] += 1
+                            logger.debug("[整理] 无匹配分类，跳过: %s", filename)
                         continue
-                    target_cid = cat_cid_map.get(category)
-                    if not target_cid:
-                        stats["skipped"] += 1
-                        continue
+
+                    target_cid = cat_cid_map[category]
                     if dry_run:
-                        logger.info("[整理][试运行] %s → %s", entry.name, category)
+                        logger.info("[整理][试运行] %s → %s (tmdb=%s)", filename, category, bool(tmdb_info))
                         stats["moved"] += 1
                         continue
+
                     ok = await self._move_file(manager, entry.file_id, target_cid)
                     if ok:
                         stats["moved"] += 1
-                        logger.info("[整理] 移动: %s → %s", entry.name, category)
+                        logger.info("[整理] %s → %s", filename, category)
                     else:
                         stats["errors"] += 1
+
                 self._progress = {"stage": "organizing", **stats}
 
         except Exception as e:
@@ -300,18 +462,16 @@ class P115OrganizeService:
                 "last_organize_elapsed": elapsed,
             }
             async with get_async_session_local() as db:
-                result = await db.execute(
+                row = await db.execute(
                     select(SystemConfig).where(SystemConfig.key == _ORGANIZE_STATUS_KEY)
                 )
-                cfg = result.scalars().first()
+                cfg = row.scalars().first()
                 value = json.dumps(status_val, ensure_ascii=False)
                 if cfg:
-                    cfg.value = value
-                    cfg.updated_at = tm.now()
+                    cfg.value = value; cfg.updated_at = tm.now()
                 else:
                     cfg = SystemConfig(
-                        key=_ORGANIZE_STATUS_KEY,
-                        value=value,
+                        key=_ORGANIZE_STATUS_KEY, value=value,
                         description="115 整理分类状态",
                     )
                     db.add(cfg)
@@ -319,6 +479,20 @@ class P115OrganizeService:
             self._running = False
             self._progress = {"stage": "done", **stats}
             logger.info("[整理] 完成: %s 耗时 %.1fs", stats, elapsed)
+
+    async def _load_path_mapping(self) -> dict:
+        """从 SystemConfig 读取 path_mapping（organize_source / organize_unrecognized）"""
+        try:
+            async with get_async_session_local() as db:
+                row = await db.execute(
+                    select(SystemConfig).where(SystemConfig.key == "p115_path_mapping")
+                )
+                cfg = row.scalars().first()
+                if cfg and cfg.value:
+                    return json.loads(cfg.value)
+        except Exception as e:
+            logger.warning("[整理] 读取 path_mapping 失败: %s", e)
+        return {}
 
     async def _ensure_dir(self, manager, path: str, parent_id: str = "") -> str:
         """确保目录存在，返回 cid（不存在则返回空串）"""
