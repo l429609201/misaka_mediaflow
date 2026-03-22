@@ -725,13 +725,13 @@ const OrgRuleModal = ({ open, rule, onOk, onCancel, storages, categories }) => {
 
   return (
     <>
-      <Modal open={open} title={`编辑规则 — ${draft.name || ''}`}
+      <Modal open={open} title={`编辑目录 — ${draft.name || ''}`}
         onOk={() => onOk(draft)} onCancel={onCancel}
         okText="确定" cancelText="取消" width={660} destroyOnHidden>
         <Form layout="vertical" size="small" style={{ marginTop: 8 }}>
 
           {/* ── 行1：规则别名 ── */}
-          <Form.Item label="规则别名" style={{ marginBottom: 12 }}>
+          <Form.Item label="目录别名" style={{ marginBottom: 12 }}>
             <Input value={draft.name} onChange={e => set({ name: e.target.value })} placeholder="如：网盘-电影" />
           </Form.Item>
 
@@ -823,6 +823,16 @@ const OrgRuleModal = ({ open, rule, onOk, onCancel, storages, categories }) => {
 
           {/* ── 底部开关 ── */}
           <Row gutter={24}>
+            <Col>
+              <Form.Item label="开启目录分类" tooltip="整理时按「分类规则」对文件进行自动分类，关闭则不分类直接移动" style={{ marginBottom: 0 }}>
+                <Switch checked={draft.enable_classify !== false} onChange={v => set({ enable_classify: v })} checkedChildren="开" unCheckedChildren="关" />
+              </Form.Item>
+            </Col>
+            <Col>
+              <Form.Item label="开启重命名" tooltip="整理时按「重命名刮削」格式对文件进行重命名，关闭则保留原文件名" style={{ marginBottom: 0 }}>
+                <Switch checked={draft.enable_rename !== false} onChange={v => set({ enable_rename: v })} checkedChildren="开" unCheckedChildren="关" />
+              </Form.Item>
+            </Col>
             <Col>
               <Form.Item label="试运行" tooltip="只记录日志，不实际移动文件" style={{ marginBottom: 0 }}>
                 <Switch checked={draft.dry_run} onChange={v => set({ dry_run: v })} checkedChildren="开" unCheckedChildren="关" />
@@ -1022,7 +1032,7 @@ const OrganizeTab = () => {
       {/* ── 顶部工具栏 ── */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
         <Space size={8} wrap>
-          <Tag color="blue" style={{ fontSize: 13, padding: '2px 10px' }}>{rules.length} 条规则</Tag>
+          <Tag color="blue" style={{ fontSize: 13, padding: '2px 10px' }}>{rules.length} 个目录</Tag>
           {orgStatus.running && <Tag color="processing" icon={<SyncOutlined spin />}>整理进行中</Tag>}
           {!orgStatus.running && orgStatus.last_organize && (
             <span style={{ fontSize: 12, color: '#888' }}>
@@ -1039,7 +1049,7 @@ const OrganizeTab = () => {
         </Space>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>刷新</Button>
-          <Button icon={<PlusOutlined />} onClick={addRule}>添加规则</Button>
+          <Button icon={<PlusOutlined />} onClick={addRule}>添加目录</Button>
           <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={save}>保存配置</Button>
         </Space>
       </div>
