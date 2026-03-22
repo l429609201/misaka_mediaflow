@@ -560,30 +560,30 @@ const MEDIA_TYPE_COLOR = { all: 'default', movie: 'blue', tv: 'purple' }
 const MEDIA_TYPE_LABEL = { all: '全部', movie: '电影', tv: '剧集' }
 
 // =============================================================================
-// 刮削参数定义
+// 刮削参数定义（Jinja2 语法：{{ 变量 }} / {{ 变量|filter }}）
 // =============================================================================
 const SCRAPE_PARAMS_MOVIE = [
-  { param: '{title}',          label: '标题' },
-  { param: '{original_title}', label: '原始标题' },
-  { param: '{en_title}',       label: '英文标题' },
-  { param: '{year}',           label: '年份' },
-  { param: '{tmdbid}',         label: 'TMDB ID' },
-  { param: '{imdbid}',         label: 'IMDB ID' },
-  { param: '{resource_type}',  label: '资源类型' },
-  { param: '{resource_pix}',   label: '分辨率' },
-  { param: '{video_encode}',   label: '视频编码' },
-  { param: '{audio_encode}',   label: '音频编码' },
-  { param: '{edition}',        label: '版本' },
-  { param: '{resource_team}',  label: '制作组' },
+  { param: '{{ title }}',                   label: '标题' },
+  { param: '{{ original_title }}',          label: '原始标题' },
+  { param: '{{ en_title }}',                label: '英文标题' },
+  { param: '{{ year }}',                    label: '年份' },
+  { param: '{{ tmdbid }}',                  label: 'TMDB ID' },
+  { param: '{{ imdbid }}',                  label: 'IMDB ID' },
+  { param: '{{ resource_type }}',           label: '资源类型' },
+  { param: '{{ resource_pix }}',            label: '分辨率' },
+  { param: '{{ video_encode }}',            label: '视频编码' },
+  { param: '{{ audio_encode }}',            label: '音频编码' },
+  { param: '{{ edition }}',                 label: '版本' },
+  { param: '{{ resource_team }}',           label: '制作组' },
 ]
 const SCRAPE_PARAMS_TV = [
   ...SCRAPE_PARAMS_MOVIE,
-  { param: '{season}',         label: '季数（数字）' },
-  { param: '{season:02d}',     label: '季数（补零）' },
-  { param: '{episode}',        label: '集数（数字）' },
-  { param: '{episode:02d}',    label: '集数（补零）' },
-  { param: '{season_episode}', label: '季集（SxxExx）' },
-  { param: '{episode_title}',  label: '集标题' },
+  { param: '{{ season }}',                  label: '季数（数字）' },
+  { param: '{{ season|zfill(2) }}',         label: '季数（补零）' },
+  { param: '{{ episode }}',                 label: '集数（数字）' },
+  { param: '{{ episode|zfill(2) }}',        label: '集数（补零）' },
+  { param: '{{ season_episode }}',          label: '季集（SxxExx）' },
+  { param: '{{ episode_title }}',           label: '集标题' },
 ]
 const MOVIE_SAMPLE = {
   title: '星际穿越', original_title: 'Interstellar', en_title: 'Interstellar',
@@ -592,12 +592,28 @@ const MOVIE_SAMPLE = {
 }
 const TV_SAMPLE = {
   ...MOVIE_SAMPLE, title: '权力的游戏', en_title: 'Game of Thrones',
-  year: '2011', tmdbid: '1399', season: 1, 'season:02d': '01', episode: 1,
-  'episode:02d': '01', season_episode: 'S01E01', episode_title: '凛冬将至',
+  year: '2011', tmdbid: '1399',
+  season: 1, episode: 1,
+  season_episode: 'S01E01', episode_title: '凛冬将至',
+}
+
+// 简易 Jinja2 预览（支持变量替换 + zfill/upper/lower/default filter）
+const applyFilter = (val, filter) => {
+  if (!filter) return String(val ?? '')
+  const zfillMatch = filter.match(/^zfill\((\d+)\)$/)
+  if (zfillMatch) return String(val ?? '').padStart(Number(zfillMatch[1]), '0')
+  if (filter === 'upper') return String(val ?? '').toUpperCase()
+  if (filter === 'lower') return String(val ?? '').toLowerCase()
+  const defaultMatch = filter.match(/^default\(['"](.+)['"]\)$/)
+  if (defaultMatch) return val != null ? String(val) : defaultMatch[1]
+  return String(val ?? '')
 }
 const previewFormat = (fmt, sample) => {
   if (!fmt) return '—'
-  return fmt.replace(/\{([^}]+)\}/g, (_, k) => sample[k] !== undefined ? sample[k] : `{${k}}`)
+  return fmt.replace(/\{\{\s*([^|}]+?)\s*(?:\|\s*([^}]+?)\s*)?\}\}/g, (_, varName, filter) => {
+    const v = sample[varName.trim()]
+    return v !== undefined ? applyFilter(v, filter?.trim()) : `{{ ${varName.trim()}${filter ? '|' + filter.trim() : ''} }}`
+  })
 }
 
 // =============================================================================
@@ -1040,10 +1056,11 @@ const OrganizeTab = () => {
 // Tab3 — 重命名刮削
 // =============================================================================
 const ScrapeTab = () => {
+  const { token } = theme.useToken()
   const [scrapeCfg, setScrapeCfg] = useState({
     enabled: false,
-    movie_format: '{title} ({year})/{title} ({year})',
-    tv_format:    '{title} ({year})/Season {season:02d}/{title} - {season_episode} - {episode_title}',
+    movie_format: '{{ title }} ({{ year }})/{{ title }} ({{ year }})',
+    tv_format:    '{{ title }} ({{ year }})/Season {{ season|zfill(2) }}/{{ title }} - {{ season_episode }} - {{ episode_title }}',
   })
   const [saving,           setSaving]           = useState(false)
   const [loading,          setLoading]          = useState(true)
@@ -1100,17 +1117,17 @@ const ScrapeTab = () => {
               <Divider orientation="left" orientationMargin={0} style={{ fontSize: 13 }}>
                 <i className="iconfont icon-dianying" style={{ marginRight: 6 }} />电影
               </Divider>
-              <Form.Item label="电影命名格式" tooltip="支持 / 分隔目录层级">
+              <Form.Item label="电影命名格式" tooltip="支持 / 分隔目录层级，使用 Jinja2 语法 {{ 变量 }}">
                 <Input ref={movieFormatRef} value={scrapeCfg.movie_format}
-                  placeholder="{title} ({year})/{title} ({year})"
+                  placeholder="{{ title }} ({{ year }})/{{ title }} ({{ year }})"
                   onFocus={() => setScrapeActiveInput('movie')}
                   onChange={e => setScrapeCfg(c => ({ ...c, movie_format: e.target.value }))}
-                  style={{ padding: '10px 11px' }} />
+                  style={{ padding: '10px 11px', fontFamily: 'monospace' }} />
               </Form.Item>
-              <div style={{ background: 'var(--ant-color-fill-quaternary,rgba(0,0,0,.04))', borderRadius: 6,
+              <div style={{ background: token.colorFillTertiary, borderRadius: 6,
                 padding: '8px 12px', marginBottom: 16, fontSize: 12 }}>
-                <span style={{ color: '#888' }}>预览：</span>
-                <code style={{ color: 'var(--ant-color-primary,#1677ff)', wordBreak: 'break-all' }}>
+                <span style={{ color: token.colorTextSecondary }}>预览：</span>
+                <code style={{ color: token.colorPrimary, wordBreak: 'break-all' }}>
                   {previewFormat(scrapeCfg.movie_format, MOVIE_SAMPLE)}
                 </code>
               </div>
@@ -1118,17 +1135,17 @@ const ScrapeTab = () => {
               <Divider orientation="left" orientationMargin={0} style={{ fontSize: 13 }}>
                 <i className="iconfont icon-dianshiju" style={{ marginRight: 6 }} />电视节目
               </Divider>
-              <Form.Item label="剧集命名格式" tooltip="支持 / 分隔目录层级">
+              <Form.Item label="剧集命名格式" tooltip="支持 / 分隔目录层级，使用 Jinja2 语法 {{ 变量 }}">
                 <Input ref={tvFormatRef} value={scrapeCfg.tv_format}
-                  placeholder="{title} ({year})/Season {season:02d}/{title} - {season_episode} - {episode_title}"
+                  placeholder="{{ title }} ({{ year }})/Season {{ season|zfill(2) }}/{{ title }} - {{ season_episode }} - {{ episode_title }}"
                   onFocus={() => setScrapeActiveInput('tv')}
                   onChange={e => setScrapeCfg(c => ({ ...c, tv_format: e.target.value }))}
-                  style={{ padding: '10px 11px' }} />
+                  style={{ padding: '10px 11px', fontFamily: 'monospace' }} />
               </Form.Item>
-              <div style={{ background: 'var(--ant-color-fill-quaternary,rgba(0,0,0,.04))', borderRadius: 6,
+              <div style={{ background: token.colorFillTertiary, borderRadius: 6,
                 padding: '8px 12px', fontSize: 12 }}>
-                <span style={{ color: '#888' }}>预览：</span>
-                <code style={{ color: 'var(--ant-color-primary,#1677ff)', wordBreak: 'break-all' }}>
+                <span style={{ color: token.colorTextSecondary }}>预览：</span>
+                <code style={{ color: token.colorPrimary, wordBreak: 'break-all' }}>
                   {previewFormat(scrapeCfg.tv_format, TV_SAMPLE)}
                 </code>
               </div>
@@ -1142,17 +1159,19 @@ const ScrapeTab = () => {
               message={scrapeActiveInput === 'movie' ? '当前编辑：电影格式' : '当前编辑：剧集格式'} />
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
               {currentParams.map(({ param, label }) => (
-                <Tooltip key={param} title={param}>
+                <Tooltip key={param} title={<code style={{ fontSize: 11 }}>{param}</code>}>
                   <Button size="small" onClick={() => insertParam(param)}
                     style={{ fontFamily: 'monospace', fontSize: 12 }}>{label}</Button>
                 </Tooltip>
               ))}
             </div>
             <Divider style={{ margin: '12px 0' }} />
-            <div style={{ fontSize: 11, color: '#888', lineHeight: 1.8 }}>
+            <div style={{ fontSize: 11, color: token.colorTextSecondary, lineHeight: 1.8 }}>
               <div>• 点击参数按钮将其插入当前聚焦的格式输入框</div>
-              <div>• <code>/</code> 分隔文件夹层级，如 <code>{'{title}'} ({'{year}'})/...</code></div>
-              <div>• <code>:02d</code> 表示补零，如 <code>{'{season:02d}'}</code> → <code>01</code></div>
+              <div>• 使用 <code>{'{{ 变量 }}'}</code> 的 Jinja2 语法</div>
+              <div>• <code>/</code> 分隔文件夹层级，如 <code>{'{{ title }} ({{ year }})/...'}</code></div>
+              <div>• <code>{'{{ season|zfill(2) }}'}</code> → 补零，如 <code>01</code></div>
+              <div>• 支持 filter：<code>zfill(n)</code> / <code>upper</code> / <code>lower</code> / <code>default('值')</code></div>
             </div>
           </Card>
         </Col>
