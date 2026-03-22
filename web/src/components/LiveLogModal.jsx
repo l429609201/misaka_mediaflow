@@ -1,162 +1,219 @@
-// src/components/LiveLogModal.jsx
-// 实时日志弹窗 — 对齐弹幕库 RealtimeLogModal
-// SSE实时推送 + 日志级别过滤 + 搜索 + 自动滚动 + 复制
+﻿// src/components/LiveLogModal.jsx
+// 实时日志弹窗 — 样式对齐 HistoryLogModal（卡片行+左侧彩色竖条）
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Modal, Button, Tooltip, Switch, Input, Select, Space, Tag, Typography, message } from 'antd'
+import { Modal, Button, Tooltip, Switch, Input, Space, Tag, Typography, message } from 'antd'
 import { ClearOutlined, VerticalAlignBottomOutlined, SearchOutlined, CopyOutlined } from '@ant-design/icons'
 import { useTranslation } from 'react-i18next'
 import { useThemeContext } from '@/ThemeProvider'
-import { highlightText } from '@/utils/highlightText'
 
 const { Text } = Typography
 const MAX_LINES = 1000
+const ALL_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
 const LEVEL_VALUES = { DEBUG: 10, INFO: 20, WARNING: 30, ERROR: 40, CRITICAL: 50 }
 
+// 与 HistoryLogModal 完全一致的颜色表
+const LEVEL_COLOR = {
+  dark:  { CRITICAL: '#ff1744', ERROR: '#ff4d4f', WARNING: '#faad14', INFO: '#52c41a', DEBUG: '#1677ff' },
+  light: { CRITICAL: '#c62828', ERROR: '#d32f2f', WARNING: '#e65100', INFO: '#2e7d32', DEBUG: '#1565c0' },
+}
+const LEVEL_BG = {
+  dark:  { CRITICAL: 'rgba(255,23,68,0.08)',  ERROR: 'rgba(255,77,79,0.07)',  WARNING: 'rgba(250,173,20,0.07)', INFO: 'rgba(82,196,26,0.05)',  DEBUG: 'rgba(22,119,255,0.05)' },
+  light: { CRITICAL: 'rgba(198,40,40,0.06)',  ERROR: 'rgba(211,47,47,0.05)', WARNING: 'rgba(230,81,0,0.06)',   INFO: 'rgba(46,125,50,0.04)',  DEBUG: 'rgba(21,101,192,0.04)' },
+}
+const getLevelColor = (level, isDark) => (isDark ? LEVEL_COLOR.dark : LEVEL_COLOR.light)[level] ?? (isDark ? '#888' : '#666')
+const getLevelBg    = (level, isDark) => (isDark ? LEVEL_BG.dark    : LEVEL_BG.light)[level]    ?? 'transparent'
+
 const parseLevel = (line) => {
-  if (line.includes('[CRITICAL]')) return 'CRITICAL'
-  if (line.includes('[ERROR]')) return 'ERROR'
-  if (line.includes('[WARNING]') || line.includes('[WARN]')) return 'WARNING'
-  if (line.includes('[INFO]')) return 'INFO'
-  if (line.includes('[DEBUG]')) return 'DEBUG'
+  if (line.includes('[CRITICAL]') || line.includes('CRITICAL')) return 'CRITICAL'
+  if (line.includes('[ERROR]')    || line.includes('ERROR'))    return 'ERROR'
+  if (line.includes('[WARNING]')  || line.includes('WARNING'))  return 'WARNING'
+  if (line.includes('[INFO]')     || line.includes('INFO'))     return 'INFO'
+  if (line.includes('[DEBUG]')    || line.includes('DEBUG'))    return 'DEBUG'
   return 'INFO'
 }
 
-// 亮色/暗色模式下的日志级别颜色
-const getLevelColor = (level, isDark) => {
-  const colors = isDark
-    ? { CRITICAL: '#ff1744', ERROR: '#ff4d4f', WARNING: '#faad14', INFO: '#52c41a', DEBUG: '#1677ff' }
-    : { CRITICAL: '#c62828', ERROR: '#d32f2f', WARNING: '#e65100', INFO: '#2e7d32', DEBUG: '#1565c0' }
-  return colors[level] || (isDark ? '#d4d4d4' : '#333')
+// 高亮搜索关键字
+const highlightSearch = (text, keyword, isDark) => {
+  if (!keyword) return <span>{text}</span>
+  const parts = text.split(new RegExp(`(${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'))
+  return (
+    <>
+      {parts.map((p, i) =>
+        p.toLowerCase() === keyword.toLowerCase()
+          ? <mark key={i} style={{ background: isDark ? '#faad1440' : '#fff566', borderRadius: 2, padding: '0 1px' }}>{p}</mark>
+          : p
+      )}
+    </>
+  )
 }
 
-// 亮色/暗色模式下的主题色
-const getThemeColors = (isDark) => isDark
-  ? { toolbarBg: '#141414', toolbarBorder: '#303030', logBg: '#1e1e1e', emptyColor: '#666', labelColor: '#aaa' }
-  : { toolbarBg: '#fafafa', toolbarBorder: '#e8e8e8', logBg: '#f5f5f5', emptyColor: '#999', labelColor: '#666' }
+// 单条日志行（对齐 HistoryLogModal 的 LogRow）
+const LogRow = ({ line, search, isDark }) => {
+  const [hovered, setHovered] = useState(false)
+  const level = parseLevel(line)
+  const color = getLevelColor(level, isDark)
+  const bg    = getLevelBg(level, isDark)
+  const border = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'
+
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: 'flex', alignItems: 'flex-start', gap: 0,
+        borderLeft: `3px solid ${color}`,
+        background: hovered ? (isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)') : bg,
+        borderBottom: `1px solid ${border}`,
+        borderRadius: 4, marginBottom: 4, padding: '5px 10px 5px 10px',
+        transition: 'background 0.15s',
+        minHeight: 28,
+      }}
+    >
+      {/* 级别标签 */}
+      <Tag
+        color={color}
+        style={{ flexShrink: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px', marginRight: 8, marginTop: 1, border: 'none' }}
+      >
+        {level}
+      </Tag>
+
+      {/* 日志内容 */}
+      <Text style={{ fontFamily: 'monospace', fontSize: 12, flex: 1, wordBreak: 'break-all', color: isDark ? '#d4d4d4' : '#222', whiteSpace: 'pre-wrap' }}>
+        {highlightSearch(line, search, isDark)}
+      </Text>
+
+      {/* hover 时显示复制按钮 */}
+      {hovered && (
+        <Tooltip title="复制">
+          <Button
+            type="text" size="small" icon={<CopyOutlined />}
+            style={{ flexShrink: 0, color: isDark ? '#888' : '#aaa', marginLeft: 4 }}
+            onClick={() => { navigator.clipboard.writeText(line); message.success('已复制') }}
+          />
+        </Tooltip>
+      )}
+    </div>
+  )
+}
+
 
 export default function LiveLogModal({ open, onClose }) {
   const { t } = useTranslation()
   const { isDark } = useThemeContext()
-  const tc = getThemeColors(isDark)
   const [logs, setLogs] = useState([])
   const [connected, setConnected] = useState(false)
   const [autoScroll, setAutoScroll] = useState(true)
-  const [logLevel, setLogLevel] = useState('INFO')
+  // 默认 INFO 及以上开启，DEBUG 关闭
+  const [enabledLevels, setEnabledLevels] = useState(new Set(['INFO', 'WARNING', 'ERROR', 'CRITICAL']))
   const [searchText, setSearchText] = useState('')
   const containerRef = useRef(null)
   const esRef = useRef(null)
-  const [messageApi, ctxHolder] = message.useMessage()
 
-  // SSE 连接（后端连接时自动先推送内存已有日志）
+  // SSE 连接
   useEffect(() => {
     if (!open) {
-      if (esRef.current) { esRef.current.close(); esRef.current = null; setConnected(false) }
+      esRef.current?.close(); esRef.current = null; setConnected(false)
       return
     }
     const token = localStorage.getItem('token') || ''
     const es = new EventSource(`/api/v1/system/logs/stream?token=${encodeURIComponent(token)}`)
     esRef.current = es
-    es.onopen = () => setConnected(true)
+    es.onopen    = () => setConnected(true)
+    es.onerror   = () => setConnected(false)
     es.onmessage = (e) => {
       const msg = e.data?.trim()
       if (!msg || msg === '[connected]') return
-      setLogs(prev => {
-        const next = [...prev, msg]
-        return next.length > MAX_LINES ? next.slice(-MAX_LINES) : next
-      })
+      setLogs(prev => { const next = [...prev, msg]; return next.length > MAX_LINES ? next.slice(-MAX_LINES) : next })
     }
-    es.onerror = () => setConnected(false)
     return () => { es.close(); esRef.current = null; setConnected(false) }
   }, [open])
-
-  // 过滤：级别 + 搜索
-  const filteredLogs = useMemo(() => {
-    const threshold = LEVEL_VALUES[logLevel] ?? 20
-    const kw = searchText.toLowerCase()
-    return logs.filter(line => {
-      if ((LEVEL_VALUES[parseLevel(line)] ?? 20) < threshold) return false
-      if (kw && !line.toLowerCase().includes(kw)) return false
-      return true
-    })
-  }, [logs, logLevel, searchText])
 
   // 自动滚动
   useEffect(() => {
     if (autoScroll && containerRef.current)
       containerRef.current.scrollTop = containerRef.current.scrollHeight
-  }, [filteredLogs, autoScroll])
+  }, [logs, autoScroll])
 
-  const handleCopy = () => {
-    const text = filteredLogs.join('\n')
-    navigator.clipboard.writeText(text)
-      .then(() => messageApi.success(t('common.copied', '已复制'))).catch(() => {})
+  // 过滤
+  const filtered = useMemo(() => {
+    const kw = searchText.trim().toLowerCase()
+    return logs.filter(line => {
+      const lv = parseLevel(line)
+      if (!enabledLevels.has(lv)) return false
+      if (kw && !line.toLowerCase().includes(kw)) return false
+      return true
+    })
+  }, [logs, enabledLevels, searchText])
+
+  const toggleLevel = (lv) => {
+    setEnabledLevels(prev => {
+      const next = new Set(prev)
+      next.has(lv) ? next.delete(lv) : next.add(lv)
+      return next
+    })
   }
+
+  const bg = isDark ? '#141414' : '#fafafa'
+  const borderColor = isDark ? '#303030' : '#e8e8e8'
 
   return (
     <Modal
+      open={open} onCancel={onClose} footer={null} destroyOnClose
+      width={860} styles={{ body: { padding: 0 } }}
       title={
         <Space>
-          {t('logs.liveTitle', '实时日志')}
-          {connected
-            ? <Tag color="success">{t('logs.connected', '已连接')}</Tag>
-            : <Tag color="error">{t('logs.disconnected', '未连接')}</Tag>}
-          <Text type="secondary" style={{ fontSize: 12 }}>{filteredLogs.length} / {logs.length}</Text>
+          <span>{t('logs.liveTitle')}</span>
+          <Tag color={connected ? 'success' : 'default'}>{connected ? t('logs.connected') : t('logs.disconnected')}</Tag>
+          <Tag>{filtered.length}/{logs.length}</Tag>
         </Space>
       }
-      open={open} onCancel={onClose} footer={null}
-      width={960} centered destroyOnClose
-      styles={{ body: { padding: 0 } }}
     >
-      {ctxHolder}
       {/* 工具栏 */}
-      <div style={{
-        padding: '8px 16px', display: 'flex', alignItems: 'center',
-        justifyContent: 'space-between', flexWrap: 'wrap', gap: 8,
-        borderBottom: `1px solid ${tc.toolbarBorder}`, background: tc.toolbarBg,
-      }}>
-        <Space wrap>
-          <Select size="small" value={logLevel} onChange={setLogLevel} style={{ width: 110 }}
-            options={[
-              { value: 'DEBUG',   label: <span style={{ color: getLevelColor('DEBUG', isDark) }}>DEBUG</span> },
-              { value: 'INFO',    label: <span style={{ color: getLevelColor('INFO', isDark) }}>INFO</span> },
-              { value: 'WARNING', label: <span style={{ color: getLevelColor('WARNING', isDark) }}>WARNING</span> },
-              { value: 'ERROR',   label: <span style={{ color: getLevelColor('ERROR', isDark) }}>ERROR</span> },
-            ]}
-          />
-          <Input size="small" placeholder={t('logs.searchPlaceholder', '搜索日志...')}
-            prefix={<SearchOutlined />} value={searchText}
-            onChange={e => setSearchText(e.target.value)} allowClear style={{ width: 200 }}
-          />
-        </Space>
-        <Space>
-          <Text style={{ color: tc.labelColor, fontSize: 12 }}>{t('logs.autoScroll', '自动滚动')}</Text>
-          <Switch size="small" checked={autoScroll} onChange={setAutoScroll} />
-          <Tooltip title={t('logs.scrollToBottom', '滚到底部')}>
-            <Button size="small" icon={<VerticalAlignBottomOutlined />}
-              onClick={() => containerRef.current && (containerRef.current.scrollTop = containerRef.current.scrollHeight)} />
-          </Tooltip>
-          <Tooltip title={t('common.copy', '复制')}>
-            <Button size="small" icon={<CopyOutlined />} onClick={handleCopy} />
-          </Tooltip>
-          <Tooltip title={t('logs.clear', '清空')}>
+      <div style={{ padding: '8px 16px', borderBottom: `1px solid ${borderColor}`, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10, background: bg }}>
+        {/* 级别过滤 — 对齐 HistoryLogModal：Switch + 彩色文字标签 */}
+        <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap', marginRight: 2 }}>级别过滤：</Text>
+        {ALL_LEVELS.map(lv => {
+          const clr = getLevelColor(lv, isDark)
+          const on  = enabledLevels.has(lv)
+          return (
+            <Space key={lv} size={5} style={{ alignItems: 'center' }}>
+              <Switch
+                size="small" checked={on} onChange={() => toggleLevel(lv)}
+                style={on ? { backgroundColor: clr } : {}}
+              />
+              <Text style={{
+                fontSize: 12, fontWeight: on ? 700 : 400, userSelect: 'none',
+                color: on ? clr : (isDark ? '#3a3a3a' : '#ccc'),
+                transition: 'color 0.2s',
+              }}>{lv}</Text>
+            </Space>
+          )
+        })}
+        <Input
+          size="small" placeholder="搜索…" prefix={<SearchOutlined />} allowClear
+          value={searchText} onChange={e => setSearchText(e.target.value)}
+          style={{ width: 160, marginLeft: 4 }}
+        />
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
+          <Switch size="small" checked={autoScroll} onChange={setAutoScroll}
+            checkedChildren={<VerticalAlignBottomOutlined />} unCheckedChildren={<VerticalAlignBottomOutlined />} />
+          <Text type="secondary" style={{ fontSize: 12 }}>{t('logs.autoScroll')}</Text>
+          <Tooltip title={t('common.clear')}>
             <Button size="small" icon={<ClearOutlined />} onClick={() => setLogs([])} />
           </Tooltip>
-        </Space>
+        </div>
       </div>
-      {/* 日志内容 */}
-      <div ref={containerRef} style={{
-        height: 500, overflow: 'auto', background: tc.logBg, padding: '12px 16px',
-        fontFamily: "'JetBrains Mono','Fira Code','Consolas',monospace", fontSize: 12, lineHeight: 1.7,
-      }}>
-        {filteredLogs.length === 0 && (
-          <Text style={{ color: tc.emptyColor }}>{t('logs.waitingLogs', '等待日志...')}</Text>
-        )}
-        {filteredLogs.map((line, i) => (
-          <div key={i} style={{ color: getLevelColor(parseLevel(line), isDark), whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-            {searchText ? highlightText(line, searchText, isDark) : line}
-          </div>
-        ))}
+
+      {/* 日志内容区 — 卡片行样式 */}
+      <div
+        ref={containerRef}
+        style={{ height: 480, overflowY: 'auto', padding: '8px 12px', background: bg }}
+      >
+        {filtered.length === 0
+          ? <Text type="secondary" style={{ display: 'block', textAlign: 'center', marginTop: 40 }}>{t('logs.waitingLogs')}</Text>
+          : filtered.map((line, i) => <LogRow key={i} line={line} search={searchText} isDark={isDark} />)
+        }
       </div>
     </Modal>
   )

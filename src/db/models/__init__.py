@@ -8,6 +8,7 @@ from src.db.models.strm import StrmTask, StrmFile
 from src.db.models.system import SystemConfig, OperationLog
 from src.db.models.p115 import P115FsCache, P115MediaInfo, P115OrganizeRecord
 from src.db.models.user import User
+from src.db.models.font import FontFile, FontFace, FontName, SubtitleFile
 
 __all__ = [
     # 存储
@@ -29,5 +30,10 @@ __all__ = [
     "P115OrganizeRecord",
     # 用户
     "User",
+    # 字体索引
+    "FontFile",
+    "FontFace",
+    "FontName",
+    "SubtitleFile",
 ]
 

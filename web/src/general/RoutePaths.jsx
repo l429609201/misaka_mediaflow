@@ -5,9 +5,12 @@ export const RoutePaths = {
   HOME: '/',
   LOGIN: '/login',
   STORAGE: '/storage',
+  MAPPINGS: '/mappings',
   STRM: '/strm',
   DRIVE115: '/115',
-  P115: '/p115',
+  SEARCH_SOURCE: '/search-source',
+  REALTIME_SUBTITLE: '/realtime-subtitle',
+  MEDIA_PROXY: '/media-proxy',
   LOGS: '/logs',
   SETTING: '/setting',
 }

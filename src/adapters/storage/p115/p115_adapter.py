@@ -1,7 +1,14 @@
 # app/adapters/storage/p115/p115_adapter.py
 # 115 存储适配器 — 实现 StorageAdapter 接口
+#
+# 直链获取参照 ETK (emby-toolkit) 的方案:
+# 使用 p115client 库的 P115Client.download_url() 获取直链
+# p115client 内部已封装 RSA 加解密、API 端点选择等所有复杂逻辑
 
+import asyncio
 import logging
+import time
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 import httpx
 
@@ -12,9 +19,16 @@ from src.adapters.storage.p115.p115_cache import P115IdPathCache
 
 logger = logging.getLogger(__name__)
 
-# 115 文件 API
-_115_DOWNLOAD_URL = "https://proapi.115.com/app/chrome/downurl"
+# ── 尝试导入 p115client ──────────────────────────────────────────────────────
+try:
+    from p115client import P115Client
+except ImportError:
+    P115Client = None  # type: ignore
+    logger.warning("p115client 未安装，115 直链功能不可用")
+
+# ── 115 接口地址（webapi，用于目录/搜索等非直链操作）────────────────────────
 _115_FILES_URL = "https://webapi.115.com/files"
+_115_SEARCH_URL = "https://webapi.115.com/files/search"
 _115_SPACE_URL = "https://webapi.115.com/files/index_info"
 _115_USER_URL = "https://my.115.com/?ct=ajax&ac=nav"
 
@@ -22,7 +36,6 @@ _115_USER_URL = "https://my.115.com/?ct=ajax&ac=nav"
 class P115StorageAdapter(StorageAdapter):
     """115 网盘存储适配器"""
 
-    # 115 认证通过系统设置页（Cookie 扫码）完成，无需在存储管理页配置
     CONFIG_FIELDS = []
 
     def __init__(
@@ -35,75 +48,143 @@ class P115StorageAdapter(StorageAdapter):
         self._rate = rate_limiter
         self._cache = id_path_cache
         self._client: httpx.AsyncClient | None = None
+        self._p115_client = None  # P115Client 实例（同步，懒初始化）
+        self._p115_client_cookie: str = ""  # 上次创建 P115Client 时用的 cookie
 
     async def _ensure_client(self) -> httpx.AsyncClient:
+        """获取 HTTP 客户端（用于目录/搜索等 webapi 操作）"""
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=30)
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(10.0, connect=5.0),
+                limits=httpx.Limits(
+                    max_connections=200,
+                    max_keepalive_connections=100,
+                ),
+            )
         return self._client
+
+    def _get_p115_client(self):
+        """
+        获取 P115Client 实例（同步方法）。
+          - P115CookieClient 使用 P115Client(cookie_str) 创建客户端
+          - download_url(pick_code, user_agent) 直接获取直链
+          - p115client 库内部封装了 RSA 加解密、API 端点等所有复杂逻辑
+
+        如果 cookie 变更了，会自动重建客户端。
+        """
+        if P115Client is None:
+            logger.error("p115client 库未安装，无法获取 115 直链")
+            return None
+
+        current_cookie = self._auth.cookie
+        if not current_cookie:
+            logger.error("115 Cookie 为空，无法创建 P115Client")
+            return None
+
+        # cookie 变更时重建客户端
+        if self._p115_client is None or self._p115_client_cookie != current_cookie:
+            try:
+                self._p115_client = P115Client(current_cookie)
+                self._p115_client_cookie = current_cookie
+                logger.info("P115Client 已创建/重建 (cookie len=%d)", len(current_cookie))
+            except Exception as e:
+                logger.error("P115Client 创建失败: %s", e)
+                self._p115_client = None
+                return None
+
+        return self._p115_client
+
+    def warmup(self) -> bool:
+        """
+        预热：提前创建 P115Client 实例，避免首次 302 请求时产生冷启动延迟。
+        在应用启动时由 p115_warmup_service 调用（异步线程池内执行）。
+        返回 True 表示预热成功，False 表示 Cookie 未就绪或创建失败。
+        """
+        client = self._get_p115_client()
+        if client is not None:
+            logger.info("[预热] P115Client 预热完成 (cookie len=%d)", len(self._auth.cookie))
+            return True
+        logger.warning("[预热] P115Client 预热跳过：Cookie 未就绪或库未安装")
+        return False
+
+    def _sync_download_url(self, pick_code: str, user_agent: str) -> str | None:
+        """
+        同步方法：调用 P115Client.download_url() 获取直链。
+
+        参照 ETK routes/p115.py _get_cached_115_url():
+          url_obj = client.download_url(pick_code, user_agent=user_agent)
+          direct_url = str(url_obj) if url_obj else None
+        """
+        p115 = self._get_p115_client()
+        if p115 is None:
+            return None
+
+        try:
+            url_obj = p115.download_url(pick_code, user_agent=user_agent)
+            return str(url_obj) if url_obj else None
+        except Exception as e:
+            logger.error("P115Client.download_url 异常: %s (pick_code=%s)", e, pick_code)
+            return None
 
     async def get_direct_link(self, cloud_path: str, **kwargs) -> DirectLink:
         """
-        获取 115 CDN 直链
-        kwargs 支持:
-          - pick_code: str  直接传入 pick_code 跳过路径查找
-          - sha1: str       文件 SHA1
+        获取 115 CDN 直链。
+
+        参照 ETK (emby-toolkit) 的方案：
+          - 使用 p115client 库的 P115Client(cookie).download_url(pick_code, user_agent)
+          - p115client 内部自动处理 RSA 加解密、API 端点、cookie 格式等
+          - 无文件大小限制
+
+        kwargs:
+          - pick_code: str  直接传入 pick_code
+          - user_agent: str 播放器真实 UA（透传给 115 CDN 鉴权）
         """
         pick_code = kwargs.get("pick_code", "")
+        user_agent = kwargs.get("user_agent", "")
         if not pick_code:
-            # 通过路径从 ID/Path 缓存反查 pick_code
-            # 生产环境中应查询 p115fscache 数据表
             file_id = self._cache.get_id(cloud_path)
             if not file_id:
                 logger.warning("115 路径无法解析 pick_code: %s", cloud_path)
                 return DirectLink()
-            # file_id 场景下 pick_code 需从数据库取，此处做保护
             logger.warning("115 通过路径反查 pick_code 需数据库支持: %s", cloud_path)
             return DirectLink()
 
         await self._rate.acquire()
-        client = await self._ensure_client()
 
         try:
-            resp = await client.post(
-                _115_DOWNLOAD_URL,
-                data={"pickcode": pick_code},
-                headers=self._auth.get_cookie_headers(),
+            # P115Client.download_url() 是同步方法，用 asyncio.to_thread 包装
+            download_url = await asyncio.to_thread(
+                self._sync_download_url, pick_code, user_agent
             )
-            data = resp.json()
 
-            if not data.get("state"):
-                err_msg = data.get("msg", data.get("error", "unknown"))
-                # WAF 封禁检测
-                if resp.status_code == 403 or "频" in str(err_msg):
-                    self._rate.trigger_waf_cooldown()
-                logger.error("115 直链获取失败: %s (pick_code=%s)", err_msg, pick_code)
+            if not download_url:
+                logger.error("115 直链获取失败: 返回空 URL (pick_code=%s)", pick_code)
                 return DirectLink()
 
-            # 解析直链 — data 格式: {"state": true, "data": {"<fid>": {"url": {"url": "..."}}}}
-            file_data = data.get("data", {})
-            for fid, info in file_data.items():
-                url_info = info.get("url", {})
-                if isinstance(url_info, dict):
-                    download_url = url_info.get("url", "")
-                elif isinstance(url_info, str):
-                    download_url = url_info
-                else:
-                    download_url = ""
+            # file_name 从 URL path 解析
+            file_name = unquote(urlsplit(download_url).path.rpartition("/")[-1])
 
-                if download_url:
-                    return DirectLink(
-                        url=download_url,
-                        file_name=info.get("file_name", ""),
-                        file_size=int(info.get("file_size", 0)),
-                        expires_in=7200,
-                        headers={"User-Agent": self._auth.get_cookie_headers()["User-Agent"]},
-                    )
+            # 过期时间从 URL 的 t 参数解析，提前 5 分钟
+            expires_in = 7200
+            try:
+                t_val = next(
+                    (v for k, v in parse_qsl(urlsplit(download_url).query) if k == "t"),
+                    None,
+                )
+                if t_val:
+                    expires_in = max(0, int(t_val) - int(time.time()) - 300)
+            except Exception:
+                pass
 
-            logger.warning("115 直链响应中无有效 URL: pick_code=%s", pick_code)
-            return DirectLink()
+            return DirectLink(
+                url=download_url,
+                file_name=file_name,
+                expires_in=expires_in,
+                headers={"User-Agent": user_agent},
+            )
 
         except Exception as e:
-            logger.error("115 直链请求异常: %s", e)
+            logger.error("115 直链请求异常: %s (pick_code=%s)", e, pick_code)
             return DirectLink()
 
     async def list_files(self, cloud_path: str, cid: str = "0") -> list[FileEntry]:
@@ -269,4 +350,68 @@ class P115StorageAdapter(StorageAdapter):
     async def get_download_url(self, pick_code: str) -> DirectLink:
         """通过 pick_code 直接获取直链（供 Go 内部 API 调用）"""
         return await self.get_direct_link("", pick_code=pick_code)
+
+    async def search_file_by_cloud_path(self, cloud_path: str) -> str:
+        """
+        通过云端路径搜索文件，返回 pick_code（FsCache 无数据时的兜底方案）。
+
+        原理：
+          - 用文件名调用 115 搜索 API（webapi.115.com/files/search）
+          - 遍历结果，用文件名精确匹配（n 字段 == filename）
+          - 找到后返回 pick_code（pc 字段）
+
+        参考：gostrm 参考项目 handle115PanDirectLink 的 pathCache 逻辑
+        """
+        from pathlib import Path as _Path
+        filename = _Path(cloud_path).name
+        if not filename:
+            logger.warning("[p115] search_file_by_cloud_path: cloud_path 无文件名 '%s'", cloud_path)
+            return ""
+
+        await self._rate.acquire()
+        client = await self._ensure_client()
+
+        try:
+            resp = await client.get(
+                _115_SEARCH_URL,
+                params={
+                    "search_value": filename,
+                    "limit": 20,
+                    "offset": 0,
+                    "format": "json",
+                    "type": 99,   # 99 = 仅文件（不含目录）
+                },
+                headers=self._auth.get_cookie_headers(),
+            )
+            data = resp.json()
+
+            if not data.get("state", True) and data.get("errno"):
+                logger.error("[p115] 搜索 API 返回错误: %s", data.get("error", data))
+                return ""
+
+            items = data.get("data", [])
+            if not items:
+                logger.info("[p115] 搜索无结果: filename=%s cloud_path=%s", filename, cloud_path)
+                return ""
+
+            # 精确匹配文件名，取第一个命中
+            for item in items:
+                name = item.get("n", "")
+                pc = item.get("pc", "")
+                if name == filename and pc:
+                    logger.info(
+                        "[p115] 搜索命中: filename=%s → pickcode=%s (cloud_path=%s)",
+                        filename, pc, cloud_path,
+                    )
+                    return pc
+
+            logger.info(
+                "[p115] 搜索结果中无精确匹配: filename=%s cloud_path=%s (共%d条结果)",
+                filename, cloud_path, len(items),
+            )
+            return ""
+
+        except Exception as e:
+            logger.error("[p115] search_file_by_cloud_path 异常: %s (cloud_path=%s)", e, cloud_path)
+            return ""
 

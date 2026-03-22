@@ -1,5 +1,6 @@
 # src/main.py — 对齐 misaka_danmu_server 的 src/main.py
 
+import asyncio
 import logging
 import os
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.version import APP_NAME, VERSION
@@ -95,10 +97,27 @@ async def lifespan(app: FastAPI):
     # 3. 初始化管理员密码
     initialize_admin_password()
 
-    # 4. 启动定时调度器
+    # 4. 从数据库加载 HTTP 代理配置，注入 core 层
+    from src.services.proxy_config_service import init_proxy_config
+    await init_proxy_config()
+
+    # 4.5 预热 P115Client（提前完成 RSA 初始化，消除首播冷启动延迟）
+    from src.services.p115_warmup_service import warmup_p115_client
+    await warmup_p115_client()
+
+    # 5. 启动定时调度器
     start_scheduler()
 
-    # 5. Go 反代随主程序自动启动
+    # 5.5 字体目录初始扫描（异步后台，不阻塞启动）
+    async def _bg_font_scan():
+        try:
+            from src.services.font_index_service import scan_and_sync
+            await scan_and_sync(force=True)
+        except Exception as _e:
+            logger.warning("字体目录初始扫描失败: %s", _e)
+    asyncio.create_task(_bg_font_scan())
+
+    # 6. Go 反代随主程序自动启动
     go_result = await go_proxy_service.start()
     if go_result.get("success"):
         logger.info("Go 反代自动启动成功: pid=%s port=%s", go_result.get("pid"), go_result.get("port"))
@@ -133,21 +152,48 @@ app.add_middleware(
 )
 
 # Routes
-from src.api.v1 import v1_router       # noqa: E402
-from src.api.internal import internal_router  # noqa: E402
-
+from src.api.v1 import v1_router                   # noqa: E402
+from src.api.internal import internal_router        # noqa: E402
+from src.api.redirect_url import router as redirect_url_router  # noqa: E402
+ 
 app.include_router(v1_router)
 app.include_router(internal_router)
+# ⭐ redirect_url 同时挂根路径，STRM 可直接写 http://host/redirect_url?pickcode=xxx
+app.include_router(redirect_url_router)
 
 # Static files (production build)
 _web_dist = Path(__file__).parent.parent / "web" / "dist"
-if _web_dist.exists():
-    app.mount("/web", StaticFiles(directory=str(_web_dist), html=True), name="web")
+_web_index = _web_dist / "index.html"
+_web_assets = _web_dist / "assets"
+if _web_assets.exists():
+    app.mount("/web/assets", StaticFiles(directory=str(_web_assets)), name="web-assets")
 
 
-@app.get("/")
+@app.get("/", include_in_schema=False)
 async def root():
-    return {"app": APP_NAME, "version": VERSION}
+    return RedirectResponse(url="/web/login", status_code=302)
+
+
+@app.get("/web", include_in_schema=False)
+async def web_root():
+    return RedirectResponse(url="/web/login", status_code=302)
+
+
+@app.get("/web/{path:path}", include_in_schema=False)
+async def web_spa(path: str):
+    if not _web_dist.exists() or not _web_index.exists():
+        return {"detail": "Web frontend not built"}
+
+    requested = (_web_dist / path).resolve()
+    try:
+        requested.relative_to(_web_dist.resolve())
+    except ValueError:
+        return {"detail": "Not Found"}
+
+    if requested.is_file():
+        return FileResponse(str(requested))
+
+    return FileResponse(str(_web_index))
 
 
 # ==================== 直接运行入口（对齐弹幕库 python -m src.main） ====================

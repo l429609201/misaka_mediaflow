@@ -99,51 +99,25 @@ _runtime_api_token: Optional[str] = None
 
 
 def get_api_token() -> str:
-    """获取 API Token，未配置则从数据库加载或自动生成并持久化"""
+    """
+    获取 API Token。
+    优先级：配置文件 > 内存缓存（由 async_preload_from_db 在启动时填充）> 随机生成。
+    注意：DB 持久化由 async_preload_from_db 在异步上下文完成，此函数纯内存操作。
+    """
     global _runtime_api_token
 
     # 1. 配置文件优先
     if settings.security.api_token:
         return settings.security.api_token
 
-    # 2. 内存缓存
+    # 2. 内存缓存（由 async_preload_from_db 在启动时填充）
     if _runtime_api_token is not None:
         return _runtime_api_token
 
-    # 3. 从 systemconfig 表加载
-    try:
-        db = _get_sync_session()
-        try:
-            from src.db.models import SystemConfig
-            cfg = db.query(SystemConfig).filter(SystemConfig.key == "api_token").first()
-            if cfg and cfg.value:
-                _runtime_api_token = cfg.value
-                logger.info("API Token 已从数据库加载")
-                return _runtime_api_token
-        finally:
-            db.close()
-    except Exception:
-        pass
-
-    # 4. 随机生成并持久化
+    # 3. 兜底：生成临时 token（启动预加载尚未完成时极少数情况）
+    #    不持久化，持久化由 async_preload_from_db 负责
     _runtime_api_token = secrets.token_urlsafe(32)
-    try:
-        db = _get_sync_session()
-        try:
-            from src.db.models import SystemConfig
-            from src.core.timezone import tm
-            cfg = SystemConfig(
-                key="api_token", value=_runtime_api_token,
-                description="API Token / JWT Secret（自动生成）", updated_at=tm.now(),
-            )
-            db.add(cfg)
-            db.commit()
-            logger.info("API Token 已自动生成并持久化到数据库")
-        finally:
-            db.close()
-    except Exception as e:
-        logger.warning("API Token 持久化失败: %s", e)
-
+    logger.warning("API Token 在预加载前被访问，使用临时 token（将在预加载后被覆盖）")
     return _runtime_api_token
 
 
@@ -153,72 +127,29 @@ _initial_password: Optional[str] = None
 _admin_password_hash: Optional[str] = None
 
 
-def _get_sync_session():
-    """获取同步数据库会话（延迟导入避免循环依赖）"""
-    from src.db import database as db_module
-    if db_module.SyncSessionLocal is None:
-        raise RuntimeError("SyncSessionLocal not initialized yet")
-    return db_module.SyncSessionLocal()
-
-
 def initialize_admin_password():
     """
-    初始化管理员密码：
-    1. 配置文件 security.admin_password -> 优先（同步写入 user 表）
-    2. user 表已有 admin -> 加载
-    3. 都没有 -> 随机生成 -> 打印到控制台 + 写入 user 表
+    同步兼容入口（被 main.py lifespan 调用）。
+    实际 DB 操作已移至 async_preload_from_db，此函数仅作兼容占位：
+    若预加载已完成（_admin_password_hash 已填充），直接返回；
+    否则生成随机密码放入内存（DB 持久化由 async_preload_from_db 在之后完成）。
     """
     global _initial_password, _admin_password_hash
 
-    # 1. 配置文件优先
+    # 配置文件优先（不需要 DB）
     configured = getattr(settings.security, "admin_password", "")
     if configured:
         _admin_password_hash = hash_password(configured)
-        try:
-            db = _get_sync_session()
-            try:
-                from src.db.models import User
-                from src.core.timezone import tm
-                now = tm.now()
-                user = db.query(User).filter(User.username == ADMIN_USERNAME).first()
-                if user:
-                    user.password_hash = _admin_password_hash
-                    user.updated_at = now
-                else:
-                    user = User(
-                        username=ADMIN_USERNAME,
-                        password_hash=_admin_password_hash,
-                        role="admin", is_active=1,
-                        created_at=now, updated_at=now,
-                    )
-                    db.add(user)
-                db.commit()
-            finally:
-                db.close()
-        except Exception as e:
-            logger.debug("配置密码同步到 user 表失败: %s", e)
         logger.info("管理员密码已从配置加载")
         return
 
-    # 2. 从 user 表读取
-    try:
-        db = _get_sync_session()
-        try:
-            from src.db.models import User
-            user = db.query(User).filter(User.username == ADMIN_USERNAME).first()
-            if user and user.password_hash:
-                _admin_password_hash = user.password_hash
-                logger.info("管理员密码已从 user 表加载")
-                return
-        finally:
-            db.close()
-    except Exception as e:
-        logger.warning("数据库读取密码失败: %s", e)
+    # async_preload_from_db 已经填充过了，直接返回
+    if _admin_password_hash is not None:
+        return
 
-    # 3. 随机生成
+    # 兜底：生成随机密码（正常启动流程下 async_preload_from_db 先于此函数运行）
     _initial_password = secrets.token_urlsafe(12)
     _admin_password_hash = hash_password(_initial_password)
-
     print("\n" + "=" * 60)
     print("  Misaka MediaFlow 初始管理员账户")
     print(f"   用户名: {ADMIN_USERNAME}")
@@ -226,25 +157,6 @@ def initialize_admin_password():
     print("   请登录后在设置页面修改密码!")
     print("=" * 60 + "\n")
     logger.info("初始管理员密码已随机生成（详见控制台输出）")
-
-    try:
-        db = _get_sync_session()
-        try:
-            from src.db.models import User
-            from src.core.timezone import tm
-            now = tm.now()
-            user = User(
-                username=ADMIN_USERNAME,
-                password_hash=_admin_password_hash,
-                role="admin", is_active=1,
-                created_at=now, updated_at=now,
-            )
-            db.add(user)
-            db.commit()
-        finally:
-            db.close()
-    except Exception as e:
-        logger.warning("密码写入 user 表失败: %s", e)
 
 
 def get_admin_password_hash() -> str:
@@ -254,17 +166,19 @@ def get_admin_password_hash() -> str:
     return _admin_password_hash
 
 
-def update_admin_password(new_password: str):
-    """更新管理员密码（写入 user 表）"""
+async def update_admin_password(new_password: str):
+    """更新管理员密码（异步写入 user 表）"""
     global _admin_password_hash
     _admin_password_hash = hash_password(new_password)
     try:
-        db = _get_sync_session()
-        try:
-            from src.db.models import User
-            from src.core.timezone import tm
-            now = tm.now()
-            user = db.query(User).filter(User.username == ADMIN_USERNAME).first()
+        from src.db import get_async_session_local
+        from src.db.models import User
+        from src.core.timezone import tm
+        from sqlalchemy import select
+        now = tm.now()
+        async with get_async_session_local() as db:
+            result = await db.execute(select(User).where(User.username == ADMIN_USERNAME))
+            user = result.scalars().first()
             if user:
                 user.password_hash = _admin_password_hash
                 user.updated_at = now
@@ -276,10 +190,8 @@ def update_admin_password(new_password: str):
                     created_at=now, updated_at=now,
                 )
                 db.add(user)
-            db.commit()
+            await db.commit()
             logger.info("管理员密码已更新")
-        finally:
-            db.close()
     except Exception as e:
         logger.error("密码更新失败: %s", e)
 
@@ -291,44 +203,55 @@ _whitelist_cache: list = []
 _whitelist_cache_ts: float = 0
 
 
-def _load_whitelist_from_db() -> list:
-    """从 systemconfig 表读取白名单"""
+async def _load_whitelist_from_db_async() -> list:
+    """从 systemconfig 表异步读取白名单，更新内存缓存"""
     import json as _json
-    global _whitelist_cache, _whitelist_cache_ts
     import time as _time
-
-    # 缓存 10 秒
-    now = _time.time()
-    if _whitelist_cache_ts and now - _whitelist_cache_ts < 10:
-        return _whitelist_cache
-
+    global _whitelist_cache, _whitelist_cache_ts
     try:
-        db = _get_sync_session()
-        try:
-            from src.db.models import SystemConfig
-            cfg = db.query(SystemConfig).filter(SystemConfig.key == "ip_whitelist").first()
-            if cfg and cfg.value:
-                _whitelist_cache = _json.loads(cfg.value)
-            else:
-                _whitelist_cache = []
-            _whitelist_cache_ts = now
-        finally:
-            db.close()
+        from src.db import get_async_session_local
+        from src.db.models import SystemConfig
+        from sqlalchemy import select
+        async with get_async_session_local() as db:
+            result = await db.execute(
+                select(SystemConfig).where(SystemConfig.key == "ip_whitelist")
+            )
+            cfg = result.scalars().first()
+            _whitelist_cache = _json.loads(cfg.value) if (cfg and cfg.value) else []
+            _whitelist_cache_ts = _time.time()
     except Exception:
         pass
     return _whitelist_cache
 
 
+def _load_whitelist_from_db() -> list:
+    """
+    从内存缓存返回白名单（同步只读）。
+    缓存由 async_preload_from_db 在启动时填充，invalidate_whitelist_cache
+    清零后下次 async 请求时由 _check_ip_whitelist 触发异步刷新。
+    """
+    return _whitelist_cache
+
+
 def invalidate_whitelist_cache():
-    """清除白名单缓存（修改后调用）"""
+    """清除白名单缓存（修改后调用，下次请求触发异步重新加载）"""
     global _whitelist_cache_ts
     _whitelist_cache_ts = 0
 
 
-def _check_ip_whitelist(client_ip: str) -> bool:
-    """检查 IP 是否在白名单中（支持 CIDR 格式，兼容 IPv6 ::1 → 127.0.0.1）"""
+async def _check_ip_whitelist_async(client_ip: str) -> bool:
+    """
+    检查 IP 是否在白名单中（异步版本，缓存过期时自动刷新）。
+    支持 CIDR 格式，兼容 IPv6 ::1 → 127.0.0.1。
+    """
     import ipaddress
-    whitelist = _load_whitelist_from_db()
+    import time as _time
+
+    # 缓存过期则异步刷新
+    if not _whitelist_cache_ts or _time.time() - _whitelist_cache_ts >= 10:
+        await _load_whitelist_from_db_async()
+
+    whitelist = _whitelist_cache
     if not whitelist:
         return False
 
@@ -348,7 +271,6 @@ def _check_ip_whitelist(client_ip: str) -> bool:
                     entry_str = "127.0.0.1"
                 if entry_str.startswith("::ffff:"):
                     entry_str = entry_str[7:]
-
                 if '/' in entry_str:
                     if addr in ipaddress.ip_network(entry_str, strict=False):
                         return True
@@ -360,6 +282,146 @@ def _check_ip_whitelist(client_ip: str) -> bool:
     except ValueError:
         return False
     return False
+
+
+def _check_ip_whitelist(client_ip: str) -> bool:
+    """同步兼容版本（只读内存缓存，不触发 DB 查询）"""
+    import ipaddress
+    whitelist = _whitelist_cache
+    if not whitelist:
+        return False
+
+    normalized = client_ip
+    if normalized == "::1":
+        normalized = "127.0.0.1"
+    if normalized.startswith("::ffff:"):
+        normalized = normalized[7:]
+
+    try:
+        addr = ipaddress.ip_address(normalized)
+        for entry in whitelist:
+            try:
+                entry_str = str(entry).strip()
+                if entry_str in ("::1",):
+                    entry_str = "127.0.0.1"
+                if entry_str.startswith("::ffff:"):
+                    entry_str = entry_str[7:]
+                if '/' in entry_str:
+                    if addr in ipaddress.ip_network(entry_str, strict=False):
+                        return True
+                else:
+                    if addr == ipaddress.ip_address(entry_str):
+                        return True
+            except ValueError:
+                continue
+    except ValueError:
+        return False
+    return False
+
+
+# ==================== 启动时异步预加载（替代同步 DB 操作） ====================
+
+async def async_preload_from_db(session_factory) -> None:
+    """
+    在 lifespan 启动阶段（init_db_tables → _setup_compat）异步预加载所有
+    security 模块需要的数据，消除对同步 PostgreSQL 驱动的依赖。
+
+    加载顺序：
+    1. api_token：从 systemconfig 表读取，不存在则随机生成并写入
+    2. admin_password_hash：从 user 表读取，不存在则生成随机密码并写入
+    3. ip_whitelist：从 systemconfig 表读取，写入内存缓存
+    """
+    global _runtime_api_token, _admin_password_hash, _initial_password
+    global _whitelist_cache, _whitelist_cache_ts
+
+    import json as _json
+    import time as _time
+    from sqlalchemy import select
+    from src.db.models import SystemConfig, User
+    from src.core.timezone import tm
+
+    try:
+        async with session_factory() as db:
+            # 1. api_token
+            if not settings.security.api_token:
+                result = await db.execute(
+                    select(SystemConfig).where(SystemConfig.key == "api_token")
+                )
+                cfg = result.scalars().first()
+                if cfg and cfg.value:
+                    _runtime_api_token = cfg.value
+                    logger.info("API Token 已从数据库预加载")
+                else:
+                    _runtime_api_token = secrets.token_urlsafe(32)
+                    now = tm.now()
+                    new_cfg = SystemConfig(
+                        key="api_token", value=_runtime_api_token,
+                        description="API Token / JWT Secret（自动生成）", updated_at=now,
+                    )
+                    db.add(new_cfg)
+                    await db.commit()
+                    logger.info("API Token 已自动生成并持久化")
+
+            # 2. admin_password（配置文件优先，无需 DB）
+            configured = getattr(settings.security, "admin_password", "")
+            if configured:
+                _admin_password_hash = hash_password(configured)
+                # 同步到 user 表
+                result = await db.execute(
+                    select(User).where(User.username == ADMIN_USERNAME)
+                )
+                user = result.scalars().first()
+                now = tm.now()
+                if user:
+                    user.password_hash = _admin_password_hash
+                    user.updated_at = now
+                else:
+                    db.add(User(
+                        username=ADMIN_USERNAME, password_hash=_admin_password_hash,
+                        role="admin", is_active=1, created_at=now, updated_at=now,
+                    ))
+                await db.commit()
+                logger.info("管理员密码已从配置同步到 user 表")
+            else:
+                result = await db.execute(
+                    select(User).where(User.username == ADMIN_USERNAME)
+                )
+                user = result.scalars().first()
+                if user and user.password_hash:
+                    _admin_password_hash = user.password_hash
+                    logger.info("管理员密码已从 user 表预加载")
+                else:
+                    _initial_password = secrets.token_urlsafe(12)
+                    _admin_password_hash = hash_password(_initial_password)
+                    now = tm.now()
+                    if user:
+                        user.password_hash = _admin_password_hash
+                        user.updated_at = now
+                    else:
+                        db.add(User(
+                            username=ADMIN_USERNAME, password_hash=_admin_password_hash,
+                            role="admin", is_active=1, created_at=now, updated_at=now,
+                        ))
+                    await db.commit()
+                    print("\n" + "=" * 60)
+                    print("  Misaka MediaFlow 初始管理员账户")
+                    print(f"   用户名: {ADMIN_USERNAME}")
+                    print(f"   密码:   {_initial_password}")
+                    print("   请登录后在设置页面修改密码!")
+                    print("=" * 60 + "\n")
+                    logger.info("初始管理员密码已随机生成并写入 user 表")
+
+            # 3. ip_whitelist
+            result = await db.execute(
+                select(SystemConfig).where(SystemConfig.key == "ip_whitelist")
+            )
+            wl_cfg = result.scalars().first()
+            _whitelist_cache = _json.loads(wl_cfg.value) if (wl_cfg and wl_cfg.value) else []
+            _whitelist_cache_ts = _time.time()
+
+    except Exception as e:
+        logger.error("security 预加载失败: %s", e)
+        # 不抛异常：允许服务降级启动，缺失数据由各函数兜底处理
 
 
 # ==================== FastAPI 依赖项 ====================
@@ -401,9 +463,9 @@ async def verify_token_or_whitelist(
     credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
 ) -> str:
     """验证 Token 或 IP 白名单，二者有一即可"""
-    # 白名单 IP 直接放行
+    # 白名单 IP 直接放行（异步版，缓存过期时自动从 DB 刷新）
     client_ip = request.client.host if request.client else ""
-    if _check_ip_whitelist(client_ip):
+    if await _check_ip_whitelist_async(client_ip):
         return "whitelist"
 
     # 走正常 token 验证

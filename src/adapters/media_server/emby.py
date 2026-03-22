@@ -33,6 +33,16 @@ class EmbyAdapter(MediaServerAdapter):
         resp = await client.get("/emby/Library/VirtualFolders")
         return resp.json() if resp.status_code == 200 else []
 
+    async def get_users(self) -> list[dict]:
+        """获取 Emby 用户列表，返回 [{"id": ..., "name": ...}]"""
+        client = await self._ensure_client()
+        resp = await client.get("/emby/Users/Query")
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+        items = data.get("Items", []) if isinstance(data, dict) else data
+        return [{"id": u.get("Id", ""), "name": u.get("Name", "")} for u in items if u.get("Id")]
+
     async def get_items(self, library_id: str, item_type: Optional[str] = None) -> list[dict]:
         client = await self._ensure_client()
         params = {

@@ -110,10 +110,12 @@ async def organize_files(payload: OrganizePayload):
 # ──────────────────── 路径映射（单条，存 systemconfig） ────────────────────
 
 class PathMappingPayload(BaseModel):
-    """路径映射配置：媒体库路径 / 网盘路径 / STRM路径"""
-    media_prefix: str = ""    # 媒体库中的路径前缀（Emby 看到的路径）
-    cloud_prefix: str = ""    # 115 网盘中的路径前缀
-    strm_prefix: str = ""     # STRM 文件输出目录路径前缀
+    """路径映射配置：媒体库路径 / 网盘路径 / STRM路径 / 本地媒体路径"""
+    media_prefix: str = ""            # 媒体库中的路径前缀（Emby 看到的路径）
+    cloud_prefix: str = ""            # 115 网盘中的路径前缀
+    strm_prefix: str = ""             # STRM 文件输出目录路径前缀
+    local_media_prefix: str = ""      # 本地媒体路径（用于 302 直链匹配）
+    local_media_source: str = "local" # 来源: "local" 或存储源 ID
 
 
 @router.get("/path-mapping", dependencies=[Depends(verify_token)])
@@ -129,7 +131,7 @@ async def get_path_mapping():
                 return _json.loads(cfg.value)
             except (ValueError, TypeError):
                 pass
-    return {"media_prefix": "", "cloud_prefix": "", "strm_prefix": ""}
+    return {"media_prefix": "", "cloud_prefix": "", "strm_prefix": "", "local_media_prefix": "", "local_media_source": "local"}
 
 
 @router.post("/path-mapping", dependencies=[Depends(verify_token)])

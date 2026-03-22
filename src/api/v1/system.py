@@ -255,36 +255,36 @@ async def update_ip_whitelist(payload: IpWhitelistPayload):
 async def get_media_server():
     """获取媒体库配置（从 systemconfig 读，首次用 config.yaml 值）"""
     async with get_async_session_local() as db:
-        keys = ["media_server_type", "media_server_host", "media_server_api_key"]
+        keys = ["media_server_type", "media_server_host", "media_server_api_key", "media_server_user_id"]
         result = {}
         defaults = {
-            "media_server_type": settings.media_server.type,
+            "media_server_type": "emby",
             "media_server_host": settings.media_server.host,
             "media_server_api_key": settings.media_server.api_key,
+            "media_server_user_id": "",
         }
         for k in keys:
             row = await db.execute(select(SystemConfig).where(SystemConfig.key == k))
             cfg = row.scalars().first()
-            if cfg:
-                result[k.replace("media_server_", "")] = cfg.value
-            else:
-                result[k.replace("media_server_", "")] = defaults[k]
+            result[k.replace("media_server_", "")] = cfg.value if cfg else defaults[k]
     return result
 
 
 class MediaServerPayload(BaseModel):
-    type: str
+    type: str = "emby"
     host: str
     api_key: str
+    user_id: str = ""
 
 
 @router.post("/media-server", dependencies=[Depends(verify_token)])
 async def update_media_server(payload: MediaServerPayload):
     """保存媒体库配置到 systemconfig 表"""
     saves = {
-        "media_server_type": payload.type,
+        "media_server_type": "emby",
         "media_server_host": payload.host.rstrip("/"),
         "media_server_api_key": payload.api_key,
+        "media_server_user_id": payload.user_id,
     }
     async with get_async_session_local() as db:
         for k, v in saves.items():
@@ -296,7 +296,7 @@ async def update_media_server(payload: MediaServerPayload):
             else:
                 db.add(SystemConfig(key=k, value=v, description=f"媒体服务器配置: {k}", updated_at=tm.now()))
         await db.commit()
-    logger.info("媒体服务器配置已更新: type=%s host=%s", payload.type, payload.host)
+    logger.info("媒体服务器配置已更新: host=%s user_id=%s", payload.host, payload.user_id)
     return {"success": True}
 
 
@@ -305,21 +305,17 @@ async def test_media_server(payload: MediaServerPayload):
     """测试媒体库连接并返回完整库列表"""
     host = payload.host.rstrip("/")
     try:
-        if payload.type == "emby":
-            from src.adapters.media_server.emby import EmbyAdapter
-            adapter = EmbyAdapter(host=host, api_key=payload.api_key)
-        else:
-            from src.adapters.media_server.jellyfin import JellyfinAdapter
-            adapter = JellyfinAdapter(host=host, api_key=payload.api_key)
+        from src.adapters.media_server.emby import EmbyAdapter
+        adapter = EmbyAdapter(host=host, api_key=payload.api_key)
         libs = await adapter.get_libraries()
-        # 返回完整的库列表，前端用于勾选
-        lib_list = []
-        for lib in libs:
-            lib_list.append({
+        lib_list = [
+            {
                 "id": lib.get("ItemId", lib.get("Id", "")),
                 "name": lib.get("Name", ""),
                 "type": lib.get("CollectionType", "unknown"),
-            })
+            }
+            for lib in libs
+        ]
         return {
             "success": True,
             "libraries": lib_list,
@@ -329,31 +325,48 @@ async def test_media_server(payload: MediaServerPayload):
         return {"success": False, "message": str(e)}
 
 
+class MediaServerUsersPayload(BaseModel):
+    host: str
+    api_key: str
+
+
+@router.post("/media-server/users", dependencies=[Depends(verify_token)])
+async def get_media_server_users(payload: MediaServerUsersPayload):
+    """用传入的 host+api_key 实时查询 Emby 用户列表"""
+    host = payload.host.rstrip("/")
+    try:
+        from src.adapters.media_server.emby import EmbyAdapter
+        adapter = EmbyAdapter(host=host, api_key=payload.api_key)
+        users = await adapter.get_users()
+        return {"success": True, "users": users}
+    except Exception as e:
+        return {"success": False, "users": [], "message": str(e)}
+
+
 @router.get("/media-server/libraries", dependencies=[Depends(verify_token)])
 async def get_media_libraries():
     """使用已保存的配置获取媒体库列表（用于刷新库列表而非测试连接）"""
-    cfg = await get_media_server()  # 复用已有方法拿到 type/host/api_key
+    cfg = await get_media_server()
     host = cfg.get("host", "").rstrip("/")
     api_key = cfg.get("api_key", "")
-    server_type = cfg.get("type", "emby")
     if not host or not api_key:
         return {"success": False, "message": "媒体服务器未配置", "libraries": []}
     try:
-        if server_type == "emby":
-            from src.adapters.media_server.emby import EmbyAdapter
-            adapter = EmbyAdapter(host=host, api_key=api_key)
-        else:
-            from src.adapters.media_server.jellyfin import JellyfinAdapter
-            adapter = JellyfinAdapter(host=host, api_key=api_key)
+        from src.adapters.media_server.emby import EmbyAdapter
+        adapter = EmbyAdapter(host=host, api_key=api_key)
         libs = await adapter.get_libraries()
-        lib_list = [{
-            "id": lib.get("ItemId", lib.get("Id", "")),
-            "name": lib.get("Name", ""),
-            "type": lib.get("CollectionType", "unknown"),
-        } for lib in libs]
+        lib_list = [
+            {
+                "id": lib.get("ItemId", lib.get("Id", "")),
+                "name": lib.get("Name", ""),
+                "type": lib.get("CollectionType", "unknown"),
+            }
+            for lib in libs
+        ]
         return {"success": True, "libraries": lib_list}
     except Exception as e:
         return {"success": False, "message": str(e), "libraries": []}
+
 
 
 class SelectedLibrariesPayload(BaseModel):
@@ -502,8 +515,38 @@ async def browse_local_dir(path: str = ""):
 
 @router.get("/go-proxy/traffic", dependencies=[Depends(verify_token)])
 async def get_go_proxy_traffic():
-    """获取 Go 反代流量统计"""
+    """获取 Go 反代流量统计（单次 REST，兼容保留）"""
     return go_proxy_service.get_traffic()
+
+
+@router.get("/go-proxy/traffic/stream")
+async def go_proxy_traffic_stream(token: str = ""):
+    """Go 反代流量统计 SSE 推送（每 2 秒推送一次，替代前端轮询）"""
+    # SSE 通过 query param 传 token 认证（与 status/stream 一致）
+    if token:
+        try:
+            verify_token(token)
+        except Exception:
+            raise HTTPException(status_code=401, detail="Invalid token")
+
+    async def _event_generator():
+        while True:
+            try:
+                data = go_proxy_service.get_traffic()
+                yield f"data: {_json.dumps(data)}\n\n"
+            except Exception:
+                pass
+            await asyncio.sleep(2)
+
+    return StreamingResponse(
+        _event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ==================== 操作日志 ====================
@@ -549,9 +592,9 @@ async def stream_logs(request: Request):
         if not ok:
             raise HTTPException(status_code=401, detail="Invalid token")
     else:
-        from src.core.security import _check_ip_whitelist
+        from src.core.security import _check_ip_whitelist_async
         client_ip = request.client.host if request.client else ""
-        if not _check_ip_whitelist(client_ip):
+        if not await _check_ip_whitelist_async(client_ip):
             raise HTTPException(status_code=401, detail="Unauthorized")
 
     async def event_generator():

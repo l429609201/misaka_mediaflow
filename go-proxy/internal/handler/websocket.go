@@ -4,7 +4,6 @@
 package handler
 
 import (
-	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/mediaflow/go-proxy/internal/config"
+	"github.com/mediaflow/go-proxy/internal/logger"
 )
 
 var upgrader = websocket.Upgrader{
@@ -34,7 +34,7 @@ func (h *WSHandler) HandleWS(c *gin.Context) {
 	// 连接客户端
 	clientConn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		log.Printf("WS 升级失败: %v", err)
+		logger.Infof("WS 升级失败: %v", err)
 		return
 	}
 	defer clientConn.Close()
@@ -52,7 +52,7 @@ func (h *WSHandler) HandleWS(c *gin.Context) {
 	// 连接目标
 	serverConn, _, err := websocket.DefaultDialer.Dial(targetURL.String(), nil)
 	if err != nil {
-		log.Printf("WS 目标连接失败: %v", err)
+		logger.Infof("WS 目标连接失败: %v", err)
 		return
 	}
 	defer serverConn.Close()

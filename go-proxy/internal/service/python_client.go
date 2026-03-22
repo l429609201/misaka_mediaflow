@@ -4,20 +4,23 @@
 package service
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/mediaflow/go-proxy/internal/config"
 )
 
-// ResolveResult Python resolve-link 返回结果
+// ResolveResult Python resolve 返回结果（通用）
 type ResolveResult struct {
 	URL       string `json:"url"`
 	ExpiresIn int    `json:"expires_in"`
+	Source    string `json:"source"`
 	Error     string `json:"error"`
 }
 
@@ -37,14 +40,71 @@ func NewPythonClient(cfg *config.Config) *PythonClient {
 	}
 }
 
-// ResolveLink 调用 Python 解析直链
-func (pc *PythonClient) ResolveLink(itemID string, storageID int, apiKey string) (*ResolveResult, error) {
-	url := fmt.Sprintf("%s/internal/resolve-link?item_id=%s&storage_id=%d&api_key=%s",
-		pc.baseURL, itemID, storageID, apiKey)
+// BaseURL 返回 Python 内部 API 基础地址（供其他 handler 拼接路径使用）
+func (pc *PythonClient) BaseURL() string {
+	return pc.baseURL
+}
 
-	resp, err := pc.client.Get(url)
+// ResolveLink 通过 item_id 解析直链
+func (pc *PythonClient) ResolveLink(itemID string, storageID int, apiKey string, userID string, userAgent string) (*ResolveResult, error) {
+	q := url.Values{}
+	q.Set("item_id", itemID)
+	q.Set("storage_id", fmt.Sprintf("%d", storageID))
+	if apiKey != "" {
+		q.Set("api_key", apiKey)
+	}
+	if userID != "" {
+		q.Set("user_id", userID)
+	}
+	if userAgent != "" {
+		q.Set("user_agent", userAgent)
+	}
+	reqURL := fmt.Sprintf("%s/internal/resolve-link?%s", pc.baseURL, q.Encode())
+	return pc.doGet(reqURL)
+}
+
+// ResolveByPickcode 通过 pickcode 调用统一解析接口
+func (pc *PythonClient) ResolveByPickcode(pickcode string, userAgent string) (*ResolveResult, error) {
+	q := url.Values{}
+	q.Set("pickcode", pickcode)
+	if userAgent != "" {
+		q.Set("user_agent", userAgent)
+	}
+	reqURL := fmt.Sprintf("%s/internal/redirect_url/resolve?%s", pc.baseURL, q.Encode())
+	return pc.doGet(reqURL)
+}
+
+// ResolveByPath 通过路径调用统一解析接口
+func (pc *PythonClient) ResolveByPath(filePath string, storageID int) (*ResolveResult, error) {
+	reqURL := fmt.Sprintf("%s/internal/redirect_url/resolve?path=%s&storage_id=%d",
+		pc.baseURL, url.QueryEscape(filePath), storageID)
+	return pc.doGet(reqURL)
+}
+
+// ResolveByURL 通过 HTTP URL 调用统一解析接口
+func (pc *PythonClient) ResolveByURL(rawURL string) (*ResolveResult, error) {
+	reqURL := fmt.Sprintf("%s/internal/redirect_url/resolve?url=%s",
+		pc.baseURL, url.QueryEscape(rawURL))
+	return pc.doGet(reqURL)
+}
+
+// ResolveAny 通用统一解析入口（透传所有参数）
+func (pc *PythonClient) ResolveAny(params map[string]string) (*ResolveResult, error) {
+	q := url.Values{}
+	for k, v := range params {
+		if v != "" {
+			q.Set(k, v)
+		}
+	}
+	reqURL := fmt.Sprintf("%s/internal/redirect_url/resolve?%s", pc.baseURL, q.Encode())
+	return pc.doGet(reqURL)
+}
+
+// doGet 内部通用 GET 请求
+func (pc *PythonClient) doGet(reqURL string) (*ResolveResult, error) {
+	resp, err := pc.client.Get(reqURL)
 	if err != nil {
-		log.Printf("调用 Python resolve-link 失败: %v", err)
+		log.Printf("[go] Python API 请求失败: %v url=%s", err, reqURL)
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -56,9 +116,162 @@ func (pc *PythonClient) ResolveLink(itemID string, storageID int, apiKey string)
 
 	var result ResolveResult
 	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("解析响应失败: %w body=%s", err, string(body))
 	}
-
 	return &result, nil
 }
+
+// CheckStrmResult Python check-strm 返回结果
+type CheckStrmResult struct {
+	IsStrm   bool   `json:"is_strm"`
+	ItemType string `json:"item_type"` // Movie / Episode / Series / 空(配置不完整时)
+}
+
+// CheckStrm 调用 Python 内部接口，判断 itemId 对应的 Emby 条目是否为 STRM 文件。
+// Python 端会自动使用数据库中保存的 user_id / host / api_key 拼接正确查询路径。
+// apiKey 为 Go 从 PlaybackInfo 请求里提取的 token，Python 优先用此值，兜底用数据库值。
+// 返回 (isStrm, itemType, error)，itemType 如 "Movie" / "Episode"
+func (pc *PythonClient) CheckStrm(itemID, apiKey string) (bool, string, error) {
+	q := url.Values{}
+	q.Set("item_id", itemID)
+	if apiKey != "" {
+		q.Set("api_key", apiKey)
+	}
+	reqURL := fmt.Sprintf("%s/internal/emby/check-strm?%s", pc.baseURL, q.Encode())
+
+	resp, err := pc.client.Get(reqURL)
+	if err != nil {
+		log.Printf("[go] CheckStrm 请求失败: %v url=%s", err, reqURL)
+		return false, "", err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return false, "", err
+	}
+
+	var result CheckStrmResult
+	if err := json.Unmarshal(body, &result); err != nil {
+		return false, "", fmt.Errorf("CheckStrm 解析响应失败: %w body=%s", err, string(body))
+	}
+	return result.IsStrm, result.ItemType, nil
+}
+
+// EmbeddedSubInfo 内封字幕元数据
+type EmbeddedSubInfo struct {
+	Cached     bool   `json:"cached"`
+	Extracting bool   `json:"extracting"`
+	Lang       string `json:"lang"`
+	Title      string `json:"title"`
+	Codec      string `json:"codec"`
+}
+
+// GetEmbeddedSubInfo 查询某 item 是否有已提取的内封字幕及其元数据
+// 返回 nil 表示没有缓存
+func (pc *PythonClient) GetEmbeddedSubInfo(itemID string) *EmbeddedSubInfo {
+	reqURL := fmt.Sprintf("%s/internal/subtitle/embedded/%s/info", pc.baseURL, itemID)
+	resp, err := pc.client.Get(reqURL)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil
+	}
+	var info EmbeddedSubInfo
+	if err := json.Unmarshal(body, &info); err != nil || !info.Cached {
+		return nil
+	}
+	return &info
+}
+
+// WaitEmbeddedSubInfo 等待内封字幕提取完成，最多等待 maxWait。
+// 若 item 正在提取中则轮询，提取完成后返回字幕信息；
+// 若等待超时或无字幕则返回 nil。
+func (pc *PythonClient) WaitEmbeddedSubInfo(itemID string, maxWait time.Duration) *EmbeddedSubInfo {
+	statusURL := fmt.Sprintf("%s/internal/subtitle/embedded/%s/status", pc.baseURL, itemID)
+	deadline := time.Now().Add(maxWait)
+	ticker := time.NewTicker(300 * time.Millisecond)
+	defer ticker.Stop()
+
+	for time.Now().Before(deadline) {
+		<-ticker.C
+		resp, err := pc.client.Get(statusURL)
+		if err != nil {
+			return nil
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		var status EmbeddedSubInfo
+		if err := json.Unmarshal(body, &status); err != nil {
+			return nil
+		}
+		if status.Cached {
+			return &status
+		}
+		if !status.Extracting {
+			// 已确认无字幕，不再等待
+			return nil
+		}
+		// status.Extracting==true → 继续等待
+	}
+	return nil
+}
+
+// WarmupEmbeddedSub 在 PlaybackInfo 阶段同步触发一次内封字幕提取，并短暂等待结果。
+func (pc *PythonClient) WarmupEmbeddedSub(itemID, cdnURL, userAgent, itemType string, waitTimeout time.Duration) *EmbeddedSubInfo {
+	payload := map[string]interface{}{
+		"item_id": itemID,
+		"cdn_url": cdnURL,
+		"user_agent": userAgent,
+		"item_type": itemType,
+		"wait_timeout": waitTimeout.Seconds(),
+	}
+	body, _ := json.Marshal(payload)
+	reqURL := fmt.Sprintf("%s/internal/subtitle/embedded/warmup", pc.baseURL)
+	resp, err := pc.client.Post(reqURL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil
+	}
+	var info EmbeddedSubInfo
+	if err := json.Unmarshal(respBody, &info); err != nil || !info.Cached {
+		return nil
+	}
+	return &info
+}
+
+
+func (pc *PythonClient) GetAPIInterval() float64 {
+	reqURL := fmt.Sprintf("%s/internal/p115/api-interval", pc.baseURL)
+	resp, err := pc.client.Get(reqURL)
+	if err != nil {
+		return 1.0 // 默认 1 秒
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 1.0
+	}
+
+	var result struct {
+		APIInterval float64 `json:"api_interval"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil || result.APIInterval <= 0 {
+		return 1.0
+	}
+	return result.APIInterval
+}
+
 

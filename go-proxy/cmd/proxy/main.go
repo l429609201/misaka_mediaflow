@@ -11,8 +11,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/mediaflow/go-proxy/internal/cache"
 	"github.com/mediaflow/go-proxy/internal/config"
+	"github.com/mediaflow/go-proxy/internal/logger"
 	"github.com/mediaflow/go-proxy/internal/router"
 )
 
@@ -26,13 +26,16 @@ func main() {
 	embyAPIKey := flag.String("emby-apikey", "", "Emby/Jellyfin API Key")
 	flag.Parse()
 
-	log.Printf("Misaka MediaFlow Go Proxy %s 启动中...\n", Version)
-
 	// 1. 加载配置 (YAML + 环境变量)
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("配置加载失败: %v", err)
 	}
+
+	// 初始化日志级别
+	logger.SetLevel(cfg.LogLevel)
+
+	logger.Infof("Misaka MediaFlow Go Proxy %s 启动中...", Version)
 
 	// 命令行参数优先级最高，覆盖配置
 	if *port > 0 {
@@ -47,18 +50,14 @@ func main() {
 
 	// 2. 初始化时区
 	config.InitTimezone(cfg.Timezone)
-	log.Printf("时区: %s", cfg.Timezone)
-	log.Printf("Emby 后端: %s", cfg.MediaServer.Host)
+	logger.Infof("时区: %s | 日志级别: %s", cfg.Timezone, cfg.LogLevel)
+	logger.Infof("Emby 后端: %s", cfg.MediaServer.Host)
 
-	// 3. 初始化缓存
-	cacheManager := cache.NewManager(cfg.Redis, cfg.Proxy.MemCacheSize)
-	defer cacheManager.Close()
-
-	// 4. 启动 HTTP 服务
-	r := router.Setup(cfg, cacheManager)
+	// 3. 启动 HTTP 服务（Go 只做转发，缓存由 Python 端管理）
+	r := router.Setup(cfg)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.GoPort)
-	log.Printf("Go 反代监听: %s", addr)
+	logger.Infof("Go 反代监听: %s", addr)
 
 	go func() {
 		if err := r.Run(addr); err != nil {
@@ -66,10 +65,10 @@ func main() {
 		}
 	}()
 
-	// 5. 优雅关闭
+	// 4. 优雅关闭
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	log.Println("Go 反代已停止")
+	logger.Infof("Go 反代已停止")
 }
 

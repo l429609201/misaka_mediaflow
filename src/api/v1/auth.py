@@ -13,7 +13,7 @@ from src.core.security import (
     update_admin_password,
     verify_token,
     get_api_token,
-    _check_ip_whitelist,
+    _check_ip_whitelist_async,
 )
 
 logger = logging.getLogger(__name__)
@@ -74,7 +74,7 @@ async def verify(request: Request):
 
     # 2. IP 白名单 → 自动签发 JWT Token
     client_ip = request.client.host if request.client else ""
-    if _check_ip_whitelist(client_ip):
+    if await _check_ip_whitelist_async(client_ip):
         token = create_jwt_token(ADMIN_USERNAME)
         logger.info("白名单 IP %s 自动登录", client_ip)
         return {
@@ -99,7 +99,7 @@ async def change_password(payload: ChangePasswordPayload):
     if len(payload.new_password) < 6:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="新密码至少 6 位")
 
-    update_admin_password(payload.new_password)
+    await update_admin_password(payload.new_password)
     logger.info("管理员密码已修改")
     return {"success": True, "message": "密码修改成功"}
 

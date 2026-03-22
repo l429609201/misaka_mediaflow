@@ -73,5 +73,5 @@ async def upgrade(conn, db_type: str):
         except Exception as e:
             logger.warning(f"迁移 002: 删除旧列 {col} 失败: {e}")
 
-    logger.info("迁移 002: 完成 ✓")
+    logger.info("迁移 002: 完成")
 

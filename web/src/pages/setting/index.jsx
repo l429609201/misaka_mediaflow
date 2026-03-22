@@ -1,44 +1,17 @@
 // src/pages/setting/index.jsx
-// 系统设置（注意：目录名用 setting 单数，对齐 misaka 命名）
+// 系统设置
 
 import { useState, useEffect } from 'react'
-import { Card, Tabs, Form, Input, Button, Select, message, Typography, Descriptions, Space } from 'antd'
-import { CopyOutlined, SaveOutlined } from '@ant-design/icons'
+import { Card, Tabs, Input, Button, message, Typography, Space } from 'antd'
+import { CopyOutlined, SaveOutlined, KeyOutlined, SafetyOutlined } from '@ant-design/icons'
 import { useTranslation } from 'react-i18next'
-import { authApi } from '@/apis'
-import { LANGUAGES, changeLanguage, getCurrentLanguage } from '@/i18n'
+import { authApi, systemApi } from '@/apis'
 
 const { Text } = Typography
 const { TextArea } = Input
 
 export const Setting = () => {
   const { t } = useTranslation()
-
-  // ==================== 修改密码 ====================
-  const [pwdForm] = Form.useForm()
-  const [pwdLoading, setPwdLoading] = useState(false)
-
-  const handleChangePassword = async () => {
-    const values = await pwdForm.validateFields()
-    if (values.new_password !== values.confirm_password) {
-      message.error(t('settings.passwordMismatch'))
-      return
-    }
-    if (values.new_password.length < 6) {
-      message.error(t('settings.passwordTooShort'))
-      return
-    }
-    setPwdLoading(true)
-    try {
-      await authApi.changePassword(values.old_password, values.new_password)
-      message.success(t('settings.passwordChanged'))
-      pwdForm.resetFields()
-    } catch {
-      message.error(t('common.failed'))
-    } finally {
-      setPwdLoading(false)
-    }
-  }
 
   // ==================== API Token ====================
   const [apiToken, setApiToken] = useState('')
@@ -84,107 +57,62 @@ export const Setting = () => {
     }
   }
 
-  // ==================== 语言设置 ====================
-  const handleLanguageChange = (lang) => {
-    changeLanguage(lang)
-  }
-
+  // ==================== Tab 定义 ====================
   const tabItems = [
     {
-      key: 'security',
-      label: t('settings.security'),
+      key: 'token',
+      label: <Space><KeyOutlined />{t('settings.apiToken')}</Space>,
       children: (
-        <div style={{ maxWidth: 500 }}>
-          <Card title={t('settings.changePassword')} size="small" style={{ marginBottom: 16 }}>
-            <Form form={pwdForm} layout="vertical">
-              <Form.Item name="old_password" label={t('settings.oldPassword')} rules={[{ required: true }]}>
-                <Input.Password />
-              </Form.Item>
-              <Form.Item name="new_password" label={t('settings.newPassword')} rules={[{ required: true }]}>
-                <Input.Password />
-              </Form.Item>
-              <Form.Item name="confirm_password" label={t('settings.confirmPassword')} rules={[{ required: true }]}>
-                <Input.Password />
-              </Form.Item>
-              <Button type="primary" loading={pwdLoading} onClick={handleChangePassword}>
-                {t('common.save')}
-              </Button>
-            </Form>
-          </Card>
-
-          <Card title={t('settings.apiToken')} size="small" style={{ marginBottom: 16 }}>
-            <Text type="secondary">{t('settings.apiTokenHint')}</Text>
-            <div style={{ marginTop: 12 }}>
-              {apiToken ? (
-                <Space>
-                  <Input value={apiToken} readOnly style={{ width: 360 }} />
-                  <Button icon={<CopyOutlined />} onClick={handleCopyToken} />
-                </Space>
-              ) : (
-                <Button onClick={handleShowToken}>{t('settings.apiToken')}</Button>
-              )}
-            </div>
-          </Card>
-
-          <Card title={t('settings.ipWhitelist')} size="small">
-            <Text type="secondary">{t('settings.ipWhitelistHint')}</Text>
-            <div style={{ marginTop: 12 }}>
-              <TextArea
-                rows={5}
-                placeholder={t('settings.ipWhitelistPlaceholder')}
-                value={whitelistText}
-                onChange={(e) => setWhitelistText(e.target.value)}
-                style={{ marginBottom: 12 }}
-              />
-              <Button
-                type="primary"
-                icon={<SaveOutlined />}
-                loading={whitelistLoading}
-                onClick={handleSaveWhitelist}
-              >
-                {t('common.save')}
-              </Button>
-            </div>
-          </Card>
+        <div style={{ maxWidth: 560, paddingTop: 8 }}>
+          <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
+            {t('settings.apiTokenHint')}
+          </Text>
+          {apiToken ? (
+            <Space.Compact style={{ width: '100%' }}>
+              <Input value={apiToken} readOnly />
+              <Button icon={<CopyOutlined />} onClick={handleCopyToken} />
+            </Space.Compact>
+          ) : (
+            <Button type="primary" onClick={handleShowToken}>
+              {t('settings.apiToken')}
+            </Button>
+          )}
         </div>
       ),
     },
     {
-      key: 'language',
-      label: t('settings.language'),
+      key: 'whitelist',
+      label: <Space><SafetyOutlined />{t('settings.ipWhitelist')}</Space>,
       children: (
-        <div style={{ maxWidth: 400 }}>
-          <Form layout="vertical">
-            <Form.Item label={t('settings.language')}>
-              <Select
-                value={getCurrentLanguage()}
-                onChange={handleLanguageChange}
-                options={LANGUAGES.map((l) => ({ value: l.key, label: l.label }))}
-                style={{ width: 200 }}
-              />
-            </Form.Item>
-          </Form>
+        <div style={{ maxWidth: 560, paddingTop: 8 }}>
+          <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+            {t('settings.ipWhitelistHint')}
+          </Text>
+          <TextArea
+            rows={8}
+            placeholder={t('settings.ipWhitelistPlaceholder')}
+            value={whitelistText}
+            onChange={(e) => setWhitelistText(e.target.value)}
+            style={{ marginBottom: 12 }}
+          />
+          <Button
+            type="primary"
+            icon={<SaveOutlined />}
+            loading={whitelistLoading}
+            onClick={handleSaveWhitelist}
+          >
+            {t('common.save')}
+          </Button>
         </div>
-      ),
-    },
-    {
-      key: 'about',
-      label: t('settings.about'),
-      children: (
-        <Descriptions column={1} bordered size="small" style={{ maxWidth: 500 }}>
-          <Descriptions.Item label={t('app.name')}>Misaka MediaFlow</Descriptions.Item>
-          <Descriptions.Item label={t('settings.version')}>1.0.0</Descriptions.Item>
-        </Descriptions>
       ),
     },
   ]
 
   return (
     <Card title={t('settings.title')}>
-      <Tabs items={tabItems} tabPosition="left" />
+      <Tabs items={tabItems} />
     </Card>
   )
 }
-
 
 export default Setting

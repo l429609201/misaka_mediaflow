@@ -17,7 +17,7 @@ export const authApi = {
 export const systemApi = {
   health: () => api.get('/system/health'),
   getConfig: () => api.get('/system/config'),
-  setConfig: (payload) => api.post('/system/config', payload),
+  setConfig: (payload) => api.put('/system/config', payload),
   getDashboard: () => api.get('/system/dashboard'),
   getLogs: (params) => api.get('/system/logs', { params }),
   getProxyConfig: () => api.get('/system/proxy-config'),
@@ -28,6 +28,7 @@ export const systemApi = {
   getMediaServer: () => api.get('/system/media-server'),
   updateMediaServer: (payload) => api.post('/system/media-server', payload),
   testMediaServer: (payload) => api.post('/system/media-server/test', payload),
+  getMediaServerUsers: (payload) => api.post('/system/media-server/users', payload),
   getMediaLibraries: () => api.get('/system/media-server/libraries'),
   getSelectedLibraries: () => api.get('/system/media-server/selected-libraries'),
   saveSelectedLibraries: (library_ids) => api.post('/system/media-server/selected-libraries', { library_ids }),
@@ -41,6 +42,19 @@ export const systemApi = {
   getLogFiles: () => api.get('/system/logs/files'),
   getLogFileContent: (filename, tail = 500) =>
     api.get(`/system/logs/files/${encodeURIComponent(filename)}`, { params: { tail } }),
+  // 搜索源
+  discoverSources: () => api.get('/search-source/discover'),
+  saveSource: (payload) => api.post('/search-source/save', payload),
+}
+
+// ==================== Subtitle ====================
+export const subtitleApi = {
+  // 内封字幕缓存列表
+  listEmbeddedCache: () => api.get('/subtitle/embedded/list'),
+  // 字体状态
+  getFontStatus: () => api.get('/subtitle/font/status'),
+  // 手动触发字体扫描
+  triggerFontScan: () => api.post('/subtitle/font/scan'),
 }
 
 // ==================== Storage ====================
@@ -60,6 +74,7 @@ export const mappingApi = {
   list: (params) => api.get('/storage/mappings', { params }),
   create: (payload) => api.post('/storage/mappings', payload),
   update: (id, payload) => api.put(`/storage/mappings/${id}`, payload),
+  toggle: (id) => api.patch(`/storage/mappings/${id}/toggle`),
   remove: (id) => api.delete(`/storage/mappings/${id}`),
 }
 
@@ -69,6 +84,8 @@ export const strmApi = {
   createTask: (task_type) => api.post('/strm/tasks', null, { params: { task_type } }),
   getTask: (id) => api.get(`/strm/tasks/${id}`),
   listFiles: (params) => api.get('/strm/files', { params }),
+  getUrlTemplate: () => api.get('/strm/url-template'),
+  saveUrlTemplate: (template) => api.post('/strm/url-template', { template }),
 }
 
 // ==================== 115 ====================

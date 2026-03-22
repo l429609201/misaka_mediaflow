@@ -48,7 +48,11 @@ class P115AuthService:
         """返回带 Cookie 的请求头"""
         return {
             "Cookie": self._cookie,
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
         }
 
     # ==================== OpenAPI Token 管理 ====================

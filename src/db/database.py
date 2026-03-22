@@ -74,7 +74,11 @@ async def _create_db_if_not_exists():
         admin_url = _build_db_url(database="postgres")
 
     try:
-        engine = create_async_engine(admin_url, poolclass=AsyncAdaptedQueuePool)
+        engine = create_async_engine(
+            admin_url,
+            poolclass=AsyncAdaptedQueuePool,
+            isolation_level="AUTOCOMMIT",   # CREATE DATABASE 必须在 autocommit 下执行
+        )
         async with engine.connect() as conn:
             if db_cfg.type == "mysql":
                 result = await conn.execute(
@@ -87,14 +91,13 @@ async def _create_db_if_not_exists():
                     ))
                     logger.info(f"Database '{db_name}' created (MySQL)")
             else:
-                # PostgreSQL: autocommit 模式才能 CREATE DATABASE
-                raw_conn = await conn.get_raw_connection()
-                raw_pg = raw_conn.dbapi_connection
-                result = await raw_pg.fetch(
-                    "SELECT 1 FROM pg_database WHERE datname = $1", db_name
+                # PostgreSQL: 用 SQLAlchemy text() 查 pg_database，autocommit 引擎直接 CREATE DATABASE
+                result = await conn.execute(
+                    text("SELECT 1 FROM pg_database WHERE datname = :name"),
+                    {"name": db_name}
                 )
-                if not result:
-                    await raw_pg.execute(f'CREATE DATABASE "{db_name}"')
+                if not result.fetchone():
+                    await conn.execute(text(f'CREATE DATABASE "{db_name}"'))
                     logger.info(f"Database '{db_name}' created (PostgreSQL)")
         await engine.dispose()
     except Exception as e:
@@ -244,23 +247,31 @@ def get_async_session_local():
 
 
 async def _setup_compat(app: FastAPI):
-    """在 init_db_tables 成功后设置兼容层全局变量"""
+    """
+    在 init_db_tables 成功后设置兼容层全局变量，并预加载 security 模块所需的初始数据。
+
+    设计原则：
+    - 不再创建同步引擎（消除 psycopg2/pg8000 等同步驱动依赖）
+    - 所有 DB 操作均通过异步引擎完成，结果注入 security 模块全局变量
+    - MySQL 的 SyncSessionLocal 仍通过 pymysql 提供（兼容老代码路径）
+    """
     global AsyncSessionLocal, SyncSessionLocal
     AsyncSessionLocal = app.state.session_factory
 
-    # 同步引擎（security.py 等需要）
+    # MySQL 保留同步引擎（pymysql 已在 requirements.txt 中，无需额外驱动）
     db_cfg = settings.database
     if db_cfg.type == "mysql":
         sync_url = URL.create("mysql+pymysql", db_cfg.user, db_cfg.password,
                               db_cfg.host, db_cfg.port, db_cfg.name, {"charset": "utf8mb4"})
-    else:
-        sync_url = URL.create("postgresql+psycopg2", db_cfg.user, db_cfg.password,
-                              db_cfg.host, db_cfg.port, db_cfg.name)
+        sync_engine = create_engine(sync_url, pool_size=5, max_overflow=10, pool_recycle=3600)
+        SyncSessionLocal = sessionmaker(bind=sync_engine, autocommit=False, autoflush=False,
+                                        expire_on_commit=False)
+        app.state.sync_engine = sync_engine
+    # PostgreSQL 不创建同步引擎，所有操作通过异步接口完成
 
-    sync_engine = create_engine(sync_url, pool_size=5, max_overflow=10, pool_recycle=3600)
-    SyncSessionLocal = sessionmaker(bind=sync_engine, autocommit=False, autoflush=False,
-                                    expire_on_commit=False)
-    app.state.sync_engine = sync_engine
+    # 异步预加载 security 模块所需初始数据（替代原来的同步 DB 查询）
+    from src.core import security as _sec
+    await _sec.async_preload_from_db(AsyncSessionLocal)
 
 
 def get_id_column():

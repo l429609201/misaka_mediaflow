@@ -1,4 +1,7 @@
-# Python
+# ffmpeg 原始压缩包（不入 git，体积太大）
+ffmpeg-release-*-static.tar.xz
+ffmpeg-release-*-static.tar
+
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -8,6 +11,10 @@ venv/
 *.egg
 .pytest_cache/
 .mypy_cache/
+
+# IDE 内部记忆 / 对话备份
+.cunzhi-memory/
+*播放变TS*.json
 .coverage
 htmlcov/
 
@@ -48,7 +55,7 @@ redis_data/
 
 # 日志
 *.log
-logs/
+/logs/
 config/logs/
 
 # 配置（保留模板）
@@ -67,3 +74,4 @@ config/strm/
 *修复*.json
 _ref_server.txt
 
+115直链获取文件大小限制_2026-03-18T04-42-39.json

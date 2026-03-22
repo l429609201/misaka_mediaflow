@@ -4,12 +4,11 @@
 package middleware
 
 import (
-	"log"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/mediaflow/go-proxy/internal/config"
+	"github.com/mediaflow/go-proxy/internal/logger"
 	"github.com/mediaflow/go-proxy/internal/traffic"
 )
 
@@ -38,8 +37,9 @@ func RequestLogger() gin.HandlerFunc {
 		traffic.Counter.AddUpload(reqSize)
 		traffic.Counter.AddDownload(respSize)
 
-		log.Printf("[%s] %d %s %s %v ↑%d ↓%d",
-			config.Now(), status, c.Request.Method, path, latency, reqSize, respSize)
+		// 请求日志使用 DEBUG 级别，减少正常运行时的日志噪音
+		logger.Debugf("%d %s %s %v ↑%d ↓%d",
+			status, c.Request.Method, path, latency, reqSize, respSize)
 	}
 }
 

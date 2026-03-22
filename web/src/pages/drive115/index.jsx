@@ -14,12 +14,19 @@ import {
   NodeIndexOutlined, FolderOpenOutlined, UserOutlined,
 } from '@ant-design/icons'
 import { useTranslation } from 'react-i18next'
-import { p115Api } from '@/apis'
+import { p115Api, storageApi } from '@/apis'
 import DirPickerModal from '@/components/DirPickerModal'
 import LocalDirPickerModal from '@/components/LocalDirPickerModal'
+import StorageDirPickerModal from '@/components/StorageDirPickerModal'
 
 const { TextArea } = Input
 const { Text } = Typography
+
+
+const getDefaultStrmHost = () => {
+  if (typeof window === 'undefined' || !window.location) return ''
+  return window.location.origin || ''
+}
 
 export const Drive115 = () => {
   const { t } = useTranslation()
@@ -47,15 +54,21 @@ export const Drive115 = () => {
   const [settingsLoading, setSettingsLoading] = useState(true)
   const [settingsSaving, setSettingsSaving] = useState(false)
   const [settingsForm] = Form.useForm()
-
   // ==================== 路径映射 ====================
   const [mappingLoading, setMappingLoading] = useState(true)
   const [mappingSaving, setMappingSaving] = useState(false)
   const [mappingForm] = Form.useForm()
   const [dirPickerOpen, setDirPickerOpen] = useState(false)
   const [dirPickerTarget, setDirPickerTarget] = useState(null)
+  const defaultStrmHost = getDefaultStrmHost()
+
   const [localDirPickerOpen, setLocalDirPickerOpen] = useState(false)
   const [localDirPickerTarget, setLocalDirPickerTarget] = useState(null)
+
+  // ==================== 存储源列表（本地媒体路径下拉用） ====================
+  const [storageSources, setStorageSources] = useState([])
+  const [localMediaSource, setLocalMediaSource] = useState('local')
+  const [storageDirPickerOpen, setStorageDirPickerOpen] = useState(false)
 
   // ===================================================================
   //                          数据加载
@@ -79,9 +92,17 @@ export const Drive115 = () => {
     try {
       const { data } = await p115Api.getPathMapping()
       mappingForm.setFieldsValue(data)
+      if (data.local_media_source) setLocalMediaSource(data.local_media_source)
     } catch { /* ignore */ }
     finally { setMappingLoading(false) }
   }, [mappingForm])
+
+  const fetchStorageSources = useCallback(async () => {
+    try {
+      const { data } = await storageApi.list()
+      setStorageSources(Array.isArray(data) ? data : (data?.items || []))
+    } catch { /* ignore */ }
+  }, [])
 
   const fetchSettings = useCallback(async () => {
     try {
@@ -96,7 +117,8 @@ export const Drive115 = () => {
     fetchAccount()
     fetchPathMapping()
     fetchSettings()
-  }, [fetchStatus, fetchAccount, fetchPathMapping, fetchSettings])
+    fetchStorageSources()
+  }, [fetchStatus, fetchAccount, fetchPathMapping, fetchSettings, fetchStorageSources])
 
   // ===================================================================
   //                          Cookie 逻辑
@@ -171,8 +193,11 @@ export const Drive115 = () => {
     setMappingSaving(true)
     try {
       const values = await mappingForm.validateFields()
+      values.local_media_source = localMediaSource
       await p115Api.savePathMapping(values)
       message.success(t('common.success'))
+      // 保存后重新加载最新配置
+      fetchPathMapping()
     } catch { message.error(t('common.failed')) }
     finally { setMappingSaving(false) }
   }
@@ -353,9 +378,16 @@ export const Drive115 = () => {
                     </Form.Item>
                   </Col>
                 </Row>
-                <Form.Item name="strm_link_host" label={t('p115.strmLinkHost')} tooltip={t('p115.strmLinkHostHint')}>
-                  <Input placeholder="http://192.168.1.100:14996" />
+                <Form.Item
+                  name="strm_link_host"
+                  label={t('p115.strmLinkHost')}
+                  tooltip={t('p115.strmLinkHostHint')}
+                >
+                  <Input placeholder={defaultStrmHost} />
                 </Form.Item>
+
+
+
                 <Form.Item name="file_extensions" label={t('p115.fileExtensions')} tooltip={t('p115.fileExtensionsHint')}>
                   <Input placeholder="mp4,mkv,avi,ts,iso,mov,m2ts" />
                 </Form.Item>
@@ -377,10 +409,10 @@ export const Drive115 = () => {
             >
               <Alert type="info" showIcon style={{ marginBottom: 16 }} message={t('p115.pathMappingHint')} />
               <Form form={mappingForm} layout="vertical" size="small"
-                initialValues={{ media_prefix: '', cloud_prefix: '', strm_prefix: '' }}
+                initialValues={{ media_prefix: '', cloud_prefix: '', strm_prefix: '', local_media_prefix: '' }}
               >
                 {/* 网盘媒体库根目录 + 选择按钮 */}
-                <Form.Item name="cloud_prefix" label={t('p115.cloudPrefix')} tooltip={t('p115.cloudPrefixHint')} rules={[{ required: true }]}>
+                <Form.Item name="cloud_prefix" label={t('p115.cloudPrefix')} tooltip={t('p115.cloudPrefixHint')}>
                   <Input
                     placeholder="/影视/电影"
                     addonAfter={
@@ -395,17 +427,51 @@ export const Drive115 = () => {
                   />
                 </Form.Item>
                 {/* 媒体库挂载路径 */}
-                <Form.Item name="media_prefix" label={t('p115.mediaPrefix')} tooltip={t('p115.mediaPrefixHint')} rules={[{ required: true }]}>
+                <Form.Item name="media_prefix" label={t('p115.mediaPrefix')} tooltip={t('p115.mediaPrefixHint')}>
                   <Input placeholder="/media/movies" />
                 </Form.Item>
                 {/* 本地 STRM 根目录 */}
-                <Form.Item name="strm_prefix" label={t('p115.strmPrefix')} tooltip={t('p115.strmPrefixHint')} rules={[{ required: true }]}>
+                <Form.Item name="strm_prefix" label={t('p115.strmPrefix')} tooltip={t('p115.strmPrefixHint')}>
                   <Input
                     placeholder="/config/strm/movies"
                     addonAfter={
                       <Button
                         type="link" size="small" icon={<FolderOpenOutlined />}
                         onClick={() => openLocalDirPicker('strm_prefix')}
+                        style={{ padding: 0, height: 'auto' }}
+                      >
+                        {t('p115.selectDir')}
+                      </Button>
+                    }
+                  />
+                </Form.Item>
+                {/* 本地媒体路径 — 带左侧来源选择下拉 */}
+                <Form.Item name="local_media_prefix" label={t('p115.localMediaPrefix')} tooltip={t('p115.localMediaPrefixHint')}>
+                  <Input
+                    placeholder="/cd2/115open"
+                    addonBefore={
+                      <Select
+                        value={localMediaSource}
+                        onChange={setLocalMediaSource}
+                        style={{ width: 120 }}
+                        options={[
+                          { value: 'local', label: t('p115.localMediaSourceLocal') },
+                          ...storageSources
+                            .filter(s => s.is_active)
+                            .map(s => ({ value: String(s.id), label: s.name }))
+                        ]}
+                      />
+                    }
+                    addonAfter={
+                      <Button
+                        type="link" size="small" icon={<FolderOpenOutlined />}
+                        onClick={() => {
+                          if (localMediaSource && localMediaSource !== 'local') {
+                            setStorageDirPickerOpen(true)
+                          } else {
+                            openLocalDirPicker('local_media_prefix')
+                          }
+                        }}
                         style={{ padding: 0, height: 'auto' }}
                       >
                         {t('p115.selectDir')}
@@ -431,6 +497,14 @@ export const Drive115 = () => {
         open={localDirPickerOpen}
         onClose={() => setLocalDirPickerOpen(false)}
         onSelect={handleLocalDirSelected}
+      />
+
+      {/* ========== 存储源目录选择弹窗 ========== */}
+      <StorageDirPickerModal
+        open={storageDirPickerOpen}
+        onClose={() => setStorageDirPickerOpen(false)}
+        storageId={localMediaSource !== 'local' ? Number(localMediaSource) : null}
+        onSelect={(path) => mappingForm.setFieldValue('local_media_prefix', path)}
       />
 
       {/* ========== Cookie 弹窗 ========== */}

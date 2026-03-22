@@ -1,105 +1,57 @@
-# =============================================================
-# Misaka MediaFlow docker-compose.yml
-#
-# All-in-One 单容器 (Python + Go + 前端) + 外部数据库/缓存
-#
-# 快速启动:
-#   docker compose up -d
-#
-# 自定义配置:
-#   1. 复制 .env.example → .env 并修改
-#   2. 或直接修改下方 environment 段
-# =============================================================
-
 services:
-  # ===== 应用服务 (All-in-One) =====
   misaka-mediaflow:
-    image: ghcr.io/your-username/misaka-mediaflow:latest
-    # 本地构建使用:
-    # build:
-    #   context: .
-    #   args:
-    #     VERSION: "1.0.0"
     container_name: misaka-mediaflow
-    restart: unless-stopped
-    ports:
-      - "${APP_PORT:-7789}:7789"       # 管理后台
-      - "${PROXY_PORT:-9906}:9906"     # Go 302 反代 — Emby 客户端连此端口
-    volumes:
-      - ./config:/app/config           # 配置 + 日志持久化
     environment:
       - MISAKAMF_CONFIG_DIR=/app/config
-      - MISAKAMF_TIMEZONE=${TIMEZONE:-Asia/Shanghai}
+      - TZ=Asia/Shanghai
       - MISAKAMF_SERVER__PORT=7789
-      - MISAKAMF_SERVER__GO_PORT=9906
-      # ---- 数据库 ----
-      - MISAKAMF_DATABASE__TYPE=${DB_TYPE:-postgresql}
-      - MISAKAMF_DATABASE__HOST=postgres
+
+      - MISAKAMF_DATABASE__TYPE=postgresql
+      - MISAKAMF_DATABASE__HOST=192.168.10.7
       - MISAKAMF_DATABASE__PORT=5432
-      - MISAKAMF_DATABASE__NAME=${DB_NAME:-mediaflow}
-      - MISAKAMF_DATABASE__USER=${DB_USER:-mediaflow}
-      - MISAKAMF_DATABASE__PASSWORD=${DB_PASSWORD:-mediaflow}
-      # ---- Redis (可选) ----
-      - MISAKAMF_REDIS__ENABLED=${REDIS_ENABLED:-true}
-      - MISAKAMF_REDIS__HOST=redis
-      - MISAKAMF_REDIS__PORT=6379
-      # ---- 媒体服务器 ----
-      - MISAKAMF_MEDIA_SERVER__HOST=${EMBY_HOST:-http://emby:8096}
-      - MISAKAMF_MEDIA_SERVER__API_KEY=${EMBY_API_KEY:-}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - mediaflow
 
-  # ===== PostgreSQL =====
-  postgres:
-    image: postgres:16-alpine
-    container_name: misaka-mediaflow-db
+      - MISAKAMF_DATABASE__NAME=mediaflow
+      - MISAKAMF_DATABASE__USER=mediaflow
+      - MISAKAMF_DATABASE__PASSWORD=mediaflow
+
+      # 缓存配置（风格同弹幕库 DANMUAPI_CACHE__）
+      # 后端模式: memory / database / redis / hybrid（默认）
+      # - MISAKAMF_CACHE__BACKEND=hybrid
+      # - MISAKAMF_CACHE__REDIS_URL=redis://:password@host:6379/0
+      # - MISAKAMF_CACHE__MEMORY_MAXSIZE=10000
+      # - MISAKAMF_CACHE__MEMORY_DEFAULT_TTL=600
+    image: l429609201/misaka-mediaflow:latest
+    ports:
+      - '7789:7789'
+      - '9906:9906'
     restart: unless-stopped
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-    environment:
-      - POSTGRES_USER=${DB_USER:-mediaflow}
-      - POSTGRES_PASSWORD=${DB_PASSWORD:-mediaflow}
-      - POSTGRES_DB=${DB_NAME:-mediaflow}
-    # 如不需要外部访问数据库，可注释掉 ports
-    # ports:
-    #   - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-mediaflow} -d ${DB_NAME:-mediaflow}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - mediaflow
+      - ./config:/app/config
 
-  # ===== Redis =====
-  redis:
-    image: redis:7-alpine
-    container_name: misaka-mediaflow-redis
-    restart: unless-stopped
-    command: redis-server --appendonly yes
-    volumes:
-      - redis_data:/data
-    # 如不需要外部访问 Redis，可注释掉 ports
-    # ports:
-    #   - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - mediaflow
-
-volumes:
-  postgres_data:
-  redis_data:
-
-networks:
-  mediaflow:
-    driver: bridge
+  # ── 字幕字体子集化服务（可选，需在 WebUI 中启用）──────────────────────────
+  # 说明：
+  #   使用 noproxy 标签版本，不含内置 nginx（由 misaka-mediaflow 的 Go 反代负责路由）
+  #   EMBY_SERVER_URL 指向 Emby 服务地址，fontInAss 内部会向此地址拉取原始字幕
+  #   fonts 目录挂载本地字体（可选，fontInAss 也支持在线字体库）
+  #   不需要对外暴露端口，仅容器内网通信
+  #
+  # 启用步骤：
+  #   1. 取消以下注释
+  #   2. 修改 EMBY_SERVER_URL 为实际 Emby 地址
+  #   3. 在 WebUI → 系统设置 → 字幕设置 中：
+  #      - 启用字幕字体子集化: ON
+  #      - fontInAss 地址: http://fontinass:8011
+  #
+  # fontinass:
+  #   image: riderlty/fontinass:noproxy
+  #   container_name: fontinass
+  #   environment:
+  #     - EMBY_SERVER_URL=http://emby:8096    # ← 修改为你的 Emby 地址
+  #     # - FONT_DIRS=/app/fonts              # 自定义字体目录（可选）
+  #     # - SUB_CACHE_SIZE=50                 # 字幕缓存条数（默认 50）
+  #     # - SUB_CACHE_TTL=60                  # 字幕缓存分钟数（默认 60）
+  #   volumes:
+  #     - ./fonts:/app/Fonts                  # 本地字体目录（可选）
+  #   restart: unless-stopped
+  #   # 不暴露端口，仅容器内网访问
 
