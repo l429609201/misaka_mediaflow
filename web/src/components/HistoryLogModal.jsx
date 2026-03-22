@@ -57,7 +57,8 @@ export default function HistoryLogModal({ open, onClose }) {
   const [search, setSearch]       = useState('')
   const [logFiles, setLogFiles]   = useState([])
   const [selectedFile, setSelectedFile] = useState(MEMORY_LOG_KEY)
-  const [levelOn, setLevelOn]     = useState({ DEBUG: true, INFO: true, WARNING: true, ERROR: true, CRITICAL: true })
+  // 默认 INFO 及以上开启，DEBUG 关闭
+  const [levelOn, setLevelOn]     = useState({ DEBUG: false, INFO: true, WARNING: true, ERROR: true, CRITICAL: true })
   const [hoveredIdx, setHoveredIdx] = useState(null)
   const [messageApi, ctxHolder]   = message.useMessage()
   const topRef    = useRef(null)

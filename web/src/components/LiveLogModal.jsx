@@ -104,7 +104,8 @@ export default function LiveLogModal({ open, onClose }) {
   const [logs, setLogs] = useState([])
   const [connected, setConnected] = useState(false)
   const [autoScroll, setAutoScroll] = useState(true)
-  const [enabledLevels, setEnabledLevels] = useState(new Set(ALL_LEVELS))
+  // 默认 INFO 及以上开启，DEBUG 关闭
+  const [enabledLevels, setEnabledLevels] = useState(new Set(['INFO', 'WARNING', 'ERROR', 'CRITICAL']))
   const [searchText, setSearchText] = useState('')
   const containerRef = useRef(null)
   const esRef = useRef(null)
@@ -169,21 +170,30 @@ export default function LiveLogModal({ open, onClose }) {
       }
     >
       {/* 工具栏 */}
-      <div style={{ padding: '8px 16px', borderBottom: `1px solid ${borderColor}`, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, background: bg }}>
-        {/* 级别 Switch（对齐 HistoryLogModal） */}
-        {ALL_LEVELS.map(lv => (
-          <Switch
-            key={lv} size="small" checked={enabledLevels.has(lv)}
-            onChange={() => toggleLevel(lv)}
-            checkedChildren={<span style={{ fontSize: 10 }}>{lv}</span>}
-            unCheckedChildren={<span style={{ fontSize: 10 }}>{lv}</span>}
-            style={{ background: enabledLevels.has(lv) ? getLevelColor(lv, isDark) : undefined }}
-          />
-        ))}
+      <div style={{ padding: '8px 16px', borderBottom: `1px solid ${borderColor}`, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10, background: bg }}>
+        {/* 级别过滤 — 对齐 HistoryLogModal：Switch + 彩色文字标签 */}
+        <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap', marginRight: 2 }}>级别过滤：</Text>
+        {ALL_LEVELS.map(lv => {
+          const clr = getLevelColor(lv, isDark)
+          const on  = enabledLevels.has(lv)
+          return (
+            <Space key={lv} size={5} style={{ alignItems: 'center' }}>
+              <Switch
+                size="small" checked={on} onChange={() => toggleLevel(lv)}
+                style={on ? { backgroundColor: clr } : {}}
+              />
+              <Text style={{
+                fontSize: 12, fontWeight: on ? 700 : 400, userSelect: 'none',
+                color: on ? clr : (isDark ? '#3a3a3a' : '#ccc'),
+                transition: 'color 0.2s',
+              }}>{lv}</Text>
+            </Space>
+          )
+        })}
         <Input
           size="small" placeholder="搜索…" prefix={<SearchOutlined />} allowClear
           value={searchText} onChange={e => setSearchText(e.target.value)}
-          style={{ width: 160 }}
+          style={{ width: 160, marginLeft: 4 }}
         />
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
           <Switch size="small" checked={autoScroll} onChange={setAutoScroll}
