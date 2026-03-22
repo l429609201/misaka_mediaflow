@@ -1,20 +1,26 @@
 // src/pages/drive115/index.jsx
-// 115 网盘 — 左: 115配置 + 高级设置  右: 路径映射
+// 115 网盘 — Tab布局:
+//   Tab1: 115网盘&STRM生成（网盘配置 + STRM全量/增量）
+//   Tab2: 整理&路径（路径映射 + 整理分类）
+//   Tab3: 生活事件监控
 
 import { useEffect, useState, useRef, useCallback } from 'react'
 import {
   Card, Descriptions, Tag, Button, Input, InputNumber, Modal, message,
   Space, Alert, Row, Col, Spin, Typography, Form, Select, QRCode,
-  Avatar, Progress, Divider,
+  Avatar, Progress, Divider, Tabs, Switch, Badge, Table,
 } from 'antd'
 import {
   CheckCircleOutlined, CloseCircleOutlined, CloudSyncOutlined,
   KeyOutlined, QrcodeOutlined, SaveOutlined,
   MobileOutlined, DesktopOutlined, WechatOutlined, AlipayCircleOutlined,
   NodeIndexOutlined, FolderOpenOutlined, UserOutlined,
+  ThunderboltOutlined, SyncOutlined, PlayCircleOutlined,
+  PauseCircleOutlined, FolderAddOutlined, PlusOutlined, DeleteOutlined,
+  ClockCircleOutlined,
 } from '@ant-design/icons'
 import { useTranslation } from 'react-i18next'
-import { p115Api, storageApi } from '@/apis'
+import { p115Api, storageApi, p115StrmApi } from '@/apis'
 import DirPickerModal from '@/components/DirPickerModal'
 import LocalDirPickerModal from '@/components/LocalDirPickerModal'
 import StorageDirPickerModal from '@/components/StorageDirPickerModal'
@@ -22,103 +28,131 @@ import StorageDirPickerModal from '@/components/StorageDirPickerModal'
 const { TextArea } = Input
 const { Text } = Typography
 
-
 const getDefaultStrmHost = () => {
   if (typeof window === 'undefined' || !window.location) return ''
   return window.location.origin || ''
 }
+const tsToStr = (ts) => ts ? new Date(ts * 1000).toLocaleString('zh-CN') : '—'
+const StatTag = ({ value, label, color }) => (
+  <Tag color={color} style={{ fontSize: 13, padding: '2px 10px' }}>
+    {label}: <b>{value ?? 0}</b>
+  </Tag>
+)
 
 export const Drive115 = () => {
   const { t } = useTranslation()
 
-  // ==================== 115 状态 ====================
-  const [status, setStatus] = useState({})
+  // ── 115 状态 / 账号 ──────────────────────────────────────────────────
+  const [status,  setStatus]  = useState({})
   const [loading, setLoading] = useState(true)
-
-  // ==================== 115 账号信息 ====================
   const [account, setAccount] = useState({})
 
-  // ==================== Cookie 弹窗 ====================
-  const [cookieModal, setCookieModal] = useState(false)
-  const [cookieValue, setCookieValue] = useState('')
+  // ── Cookie 弹窗 ───────────────────────────────────────────────────────
+  const [cookieModal,  setCookieModal]  = useState(false)
+  const [cookieValue,  setCookieValue]  = useState('')
   const [cookieSaving, setCookieSaving] = useState(false)
 
-  // ==================== 扫码弹窗 ====================
-  const [qrModal, setQrModal] = useState(false)
-  const [qrData, setQrData] = useState(null)
+  // ── 扫码弹窗 ──────────────────────────────────────────────────────────
+  const [qrModal,  setQrModal]  = useState(false)
+  const [qrData,   setQrData]   = useState(null)
   const [qrStatus, setQrStatus] = useState('idle')
-  const [qrApp, setQrApp] = useState('web')
+  const [qrApp,    setQrApp]    = useState('web')
   const pollRef = useRef(null)
 
-  // ==================== 高级设置 ====================
+  // ── 高级设置 ──────────────────────────────────────────────────────────
   const [settingsLoading, setSettingsLoading] = useState(true)
-  const [settingsSaving, setSettingsSaving] = useState(false)
+  const [settingsSaving,  setSettingsSaving]  = useState(false)
   const [settingsForm] = Form.useForm()
-  // ==================== 路径映射 ====================
+
+  // ── 路径映射 ──────────────────────────────────────────────────────────
   const [mappingLoading, setMappingLoading] = useState(true)
-  const [mappingSaving, setMappingSaving] = useState(false)
+  const [mappingSaving,  setMappingSaving]  = useState(false)
   const [mappingForm] = Form.useForm()
-  const [dirPickerOpen, setDirPickerOpen] = useState(false)
-  const [dirPickerTarget, setDirPickerTarget] = useState(null)
+  const [dirPickerOpen,        setDirPickerOpen]        = useState(false)
+  const [dirPickerTarget,      setDirPickerTarget]      = useState(null)
+  const [localDirPickerOpen,   setLocalDirPickerOpen]   = useState(false)
+  const [localDirPickerTarget, setLocalDirPickerTarget] = useState(null)
+  const [storageSources,       setStorageSources]       = useState([])
+  const [localMediaSource,     setLocalMediaSource]     = useState('local')
+  const [storageDirPickerOpen, setStorageDirPickerOpen] = useState(false)
   const defaultStrmHost = getDefaultStrmHost()
 
-  const [localDirPickerOpen, setLocalDirPickerOpen] = useState(false)
-  const [localDirPickerTarget, setLocalDirPickerTarget] = useState(null)
+  // ── STRM 同步 ─────────────────────────────────────────────────────────
+  const [strmConfig,    setStrmConfig]    = useState({ sync_pairs: [], file_extensions: 'mp4,mkv,avi,ts,iso,mov,m2ts', strm_link_host: '' })
+  const [strmStatus,    setStrmStatus]    = useState({})
+  const [syncPairs,     setSyncPairs]     = useState([])
+  const [strmSyncing,   setStrmSyncing]   = useState(false)
+  const [strmCfgSaving, setStrmCfgSaving] = useState(false)
 
-  // ==================== 存储源列表（本地媒体路径下拉用） ====================
-  const [storageSources, setStorageSources] = useState([])
-  const [localMediaSource, setLocalMediaSource] = useState('local')
-  const [storageDirPickerOpen, setStorageDirPickerOpen] = useState(false)
+  // ── 生活事件监控 ──────────────────────────────────────────────────────
+  const [monitorCfg,    setMonitorCfg]    = useState({ poll_interval: 30, auto_inc_sync: true })
+  const [monitorStatus, setMonitorStatus] = useState({})
+  const [monitorSaving, setMonitorSaving] = useState(false)
+
+  // ── 整理分类 ──────────────────────────────────────────────────────────
+  const [orgCfg,     setOrgCfg]     = useState({
+    source_paths: [], target_root: '', dry_run: false,
+    categories: { 电影: '电影', 剧集: '剧集', 动漫: '动漫', 纪录片: '纪录片', 综艺: '综艺' },
+  })
+  const [orgStatus,  setOrgStatus]  = useState({})
+  const [orgPaths,   setOrgPaths]   = useState([])
+  const [orgSaving,  setOrgSaving]  = useState(false)
+  const [orgRunning, setOrgRunning] = useState(false)
 
   // ===================================================================
   //                          数据加载
   // ===================================================================
 
   const fetchStatus = useCallback(async () => {
-    try {
-      const { data } = await p115Api.status()
-      setStatus(data)
-    } finally { setLoading(false) }
+    try { const { data } = await p115Api.status(); setStatus(data) }
+    finally { setLoading(false) }
   }, [])
-
   const fetchAccount = useCallback(async () => {
-    try {
-      const { data } = await p115Api.getAccount()
-      setAccount(data)
-    } catch { /* ignore */ }
+    try { const { data } = await p115Api.getAccount(); setAccount(data) }
+    catch { /* ignore */ }
   }, [])
-
   const fetchPathMapping = useCallback(async () => {
     try {
       const { data } = await p115Api.getPathMapping()
       mappingForm.setFieldsValue(data)
       if (data.local_media_source) setLocalMediaSource(data.local_media_source)
-    } catch { /* ignore */ }
-    finally { setMappingLoading(false) }
+    } catch { /* ignore */ } finally { setMappingLoading(false) }
   }, [mappingForm])
-
   const fetchStorageSources = useCallback(async () => {
+    try { const { data } = await storageApi.list(); setStorageSources(Array.isArray(data) ? data : (data?.items || [])) }
+    catch { /* ignore */ }
+  }, [])
+  const fetchSettings = useCallback(async () => {
+    try { const { data } = await p115Api.getSettings(); settingsForm.setFieldsValue(data) }
+    catch { /* ignore */ } finally { setSettingsLoading(false) }
+  }, [settingsForm])
+  const fetchStrmAll = useCallback(async () => {
     try {
-      const { data } = await storageApi.list()
-      setStorageSources(Array.isArray(data) ? data : (data?.items || []))
+      const [cfgRes, stRes] = await Promise.all([p115StrmApi.getSyncConfig(), p115StrmApi.getSyncStatus()])
+      const cfg = cfgRes.data || {}
+      setStrmConfig(cfg); setSyncPairs(cfg.sync_pairs || []); setStrmStatus(stRes.data || {})
+    } catch { /* ignore */ }
+  }, [])
+  const fetchMonitorAll = useCallback(async () => {
+    try {
+      const [cfgRes, stRes] = await Promise.all([p115StrmApi.getMonitorConfig(), p115StrmApi.getMonitorStatus()])
+      setMonitorCfg(cfgRes.data || {}); setMonitorStatus(stRes.data || {})
+    } catch { /* ignore */ }
+  }, [])
+  const fetchOrganizeAll = useCallback(async () => {
+    try {
+      const [cfgRes, stRes] = await Promise.all([p115StrmApi.getOrganizeConfig(), p115StrmApi.getOrganizeStatus()])
+      const cfg = cfgRes.data || {}
+      setOrgCfg(cfg); setOrgPaths(cfg.source_paths || []); setOrgStatus(stRes.data || {})
     } catch { /* ignore */ }
   }, [])
 
-  const fetchSettings = useCallback(async () => {
-    try {
-      const { data } = await p115Api.getSettings()
-      settingsForm.setFieldsValue(data)
-    } catch { /* ignore */ }
-    finally { setSettingsLoading(false) }
-  }, [settingsForm])
-
   useEffect(() => {
-    fetchStatus()
-    fetchAccount()
-    fetchPathMapping()
-    fetchSettings()
-    fetchStorageSources()
-  }, [fetchStatus, fetchAccount, fetchPathMapping, fetchSettings, fetchStorageSources])
+    fetchStatus(); fetchAccount(); fetchPathMapping()
+    fetchSettings(); fetchStorageSources()
+    fetchStrmAll(); fetchMonitorAll(); fetchOrganizeAll()
+  }, [fetchStatus, fetchAccount, fetchPathMapping, fetchSettings,
+      fetchStorageSources, fetchStrmAll, fetchMonitorAll, fetchOrganizeAll])
 
   // ===================================================================
   //                          Cookie 逻辑
@@ -186,7 +220,7 @@ export const Drive115 = () => {
   const handleCloseQr = () => { stopPolling(); setQrModal(false) }
 
   // ===================================================================
-  //                          保存操作
+  //                    新增：STRM / 监控 / 整理 操作
   // ===================================================================
 
   const handleSavePathMapping = async () => {
@@ -196,7 +230,6 @@ export const Drive115 = () => {
       values.local_media_source = localMediaSource
       await p115Api.savePathMapping(values)
       message.success(t('common.success'))
-      // 保存后重新加载最新配置
       fetchPathMapping()
     } catch { message.error(t('common.failed')) }
     finally { setMappingSaving(false) }
@@ -212,30 +245,62 @@ export const Drive115 = () => {
     finally { setSettingsSaving(false) }
   }
 
-  // ===================================================================
-  //                      目录选择器回调
-  // ===================================================================
+  // 目录选择器
+  const openDirPicker        = (f) => { setDirPickerTarget(f);      setDirPickerOpen(true) }
+  const openLocalDirPicker   = (f) => { setLocalDirPickerTarget(f); setLocalDirPickerOpen(true) }
+  const handleDirSelected      = (p) => { if (dirPickerTarget)      mappingForm.setFieldValue(dirPickerTarget, p) }
+  const handleLocalDirSelected = (p) => { if (localDirPickerTarget) mappingForm.setFieldValue(localDirPickerTarget, p) }
 
-  const openDirPicker = (fieldName) => {
-    setDirPickerTarget(fieldName)
-    setDirPickerOpen(true)
+  // STRM
+  const handleStrmSaveCfg = async () => {
+    setStrmCfgSaving(true)
+    try { await p115StrmApi.saveSyncConfig({ ...strmConfig, sync_pairs: syncPairs }); message.success(t('p115.configSaved')) }
+    catch { message.error(t('p115.saveFailed')) } finally { setStrmCfgSaving(false) }
+  }
+  const handleFullSync = async () => {
+    setStrmSyncing(true)
+    try {
+      const r = await p115StrmApi.fullSync()
+      r.data?.success ? message.success(t('p115.syncStarted')) : message.warning(r.data?.message || t('p115.syncStartFailed'))
+      setTimeout(fetchStrmAll, 1500)
+    } catch { message.error(t('common.failed')) } finally { setStrmSyncing(false) }
+  }
+  const handleIncSync = async () => {
+    setStrmSyncing(true)
+    try {
+      const r = await p115StrmApi.incSync()
+      r.data?.success ? message.success(t('p115.syncStarted')) : message.warning(r.data?.message || t('p115.syncStartFailed'))
+      setTimeout(fetchStrmAll, 1500)
+    } catch { message.error(t('common.failed')) } finally { setStrmSyncing(false) }
   }
 
-  const handleDirSelected = (path) => {
-    if (dirPickerTarget) {
-      mappingForm.setFieldValue(dirPickerTarget, path)
-    }
+  // 监控
+  const handleMonitorSave = async () => {
+    setMonitorSaving(true)
+    try { await p115StrmApi.saveMonitorConfig(monitorCfg); message.success(t('p115.configSaved')) }
+    catch { message.error(t('p115.saveFailed')) } finally { setMonitorSaving(false) }
+  }
+  const handleMonitorToggle = async () => {
+    try {
+      if (monitorStatus.running) { await p115StrmApi.stopMonitor(); message.success(t('p115.monitorStopped2')) }
+      else { await p115StrmApi.startMonitor(); message.success(t('p115.monitorStarted')) }
+      setTimeout(fetchMonitorAll, 800)
+    } catch { message.error(t('p115.operateFailed')) }
   }
 
-  const openLocalDirPicker = (fieldName) => {
-    setLocalDirPickerTarget(fieldName)
-    setLocalDirPickerOpen(true)
+  // 整理
+  const handleOrgSave = async () => {
+    setOrgSaving(true)
+    try { await p115StrmApi.saveOrganizeConfig({ ...orgCfg, source_paths: orgPaths }); message.success(t('p115.configSaved')) }
+    catch { message.error(t('p115.saveFailed')) } finally { setOrgSaving(false) }
   }
-
-  const handleLocalDirSelected = (path) => {
-    if (localDirPickerTarget) {
-      mappingForm.setFieldValue(localDirPickerTarget, path)
-    }
+  const handleOrgRun = async () => {
+    setOrgRunning(true)
+    try {
+      const r = await p115StrmApi.runOrganize()
+      r.data?.success ? message.success(t('p115.organizeStarted')) : message.warning(r.data?.message || t('p115.organizeStartFailed'))
+      setTimeout(fetchOrganizeAll, 1500)
+    } catch { message.error(t('common.failed')) } finally { setOrgRunning(false) }
   }
 
   // ===================================================================
@@ -285,279 +350,353 @@ export const Drive115 = () => {
     : 0
 
   // ===================================================================
-  //                           渲染
+  //  STRM 统计快照（Tab1 用）
   // ===================================================================
+  const strmProgress = strmStatus.progress || {}
+  const fullStats    = strmStatus.last_full_sync_stats || {}
+  const incStats     = strmStatus.last_inc_sync_stats  || {}
 
+  // ===================================================================
+  //  Tab 1 — 115 网盘 & STRM 生成
+  // ===================================================================
+  const tab1 = (
+    <Spin spinning={loading || settingsLoading}>
+      <Card
+        title={<Space><CloudSyncOutlined />{t('p115.tabDriveStrm')}</Space>}
+        extra={
+          <Space>
+            {!loading && (status.cookie
+              ? <Tag color="success">{t('p115.connected')}</Tag>
+              : <Tag color="error">{t('p115.disconnected')}</Tag>)}
+            <Button type="primary" icon={<SaveOutlined />} loading={settingsSaving} onClick={handleSaveSettings}>
+              {t('common.save')}
+            </Button>
+          </Space>
+        }
+      >
+        {/* 账号信息 */}
+        {account.logged_in && (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+              <Avatar size={48} src={account.avatar} icon={!account.avatar && <UserOutlined />} />
+              <div style={{ flex: 1 }}>
+                <Space>
+                  <Text strong style={{ fontSize: 16 }}>{account.user_name}</Text>
+                  {account.vip_name && <Tag color={account.vip_color || 'gold'}>{account.vip_name}</Tag>}
+                </Space>
+                <div style={{ marginTop: 4 }}>
+                  <Progress percent={spacePercent} size="small"
+                    format={() => `${formatSize(account.space_used)} / ${formatSize(account.space_total)}`}
+                    strokeColor={spacePercent > 90 ? '#ff4d4f' : spacePercent > 70 ? '#faad14' : undefined}
+                  />
+                </div>
+              </div>
+            </div>
+            <Divider style={{ margin: '8px 0 16px' }} />
+          </>
+        )}
+
+        {/* Cookie / OpenAPI 状态 */}
+        <Descriptions column={1} bordered size="small" style={{ marginBottom: 16 }}>
+          <Descriptions.Item label={t('p115.cookieStatus')}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+              {status.cookie
+                ? <Tag icon={<CheckCircleOutlined />} color="success">{t('p115.cookieSet')}</Tag>
+                : <Tag icon={<CloseCircleOutlined />} color="error">{t('p115.cookieNotSet')}</Tag>}
+              <Space size="small">
+                <Button size="small" icon={<KeyOutlined />} onClick={() => setCookieModal(true)}>{t('p115.setCookie')}</Button>
+                <Button size="small" icon={<QrcodeOutlined />} onClick={handleOpenQr}>{t('p115.scanLogin')}</Button>
+              </Space>
+            </div>
+          </Descriptions.Item>
+          <Descriptions.Item label={t('p115.openapiStatus')}>
+            {status.openapi
+              ? <Tag icon={<CheckCircleOutlined />} color="success">{t('p115.openapiSet')}</Tag>
+              : <Tag icon={<CloseCircleOutlined />} color="warning">{t('p115.openapiNotSet')}</Tag>}
+          </Descriptions.Item>
+          <Descriptions.Item label={t('p115.rateBlocked')}>
+            {status.rate_blocked ? <Tag color="error">Blocked</Tag> : <Tag color="success">OK</Tag>}
+          </Descriptions.Item>
+          <Descriptions.Item label={t('p115.cacheSize')}>{status.cache_size ?? 0}</Descriptions.Item>
+        </Descriptions>
+
+        {/* 高级设置 */}
+        <Form form={settingsForm} layout="vertical" size="small"
+          initialValues={{ api_interval: 1, api_concurrent: 3, strm_link_host: '', file_extensions: 'mp4,mkv,avi,ts,iso,mov,m2ts' }}
+        >
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item name="api_interval" label={t('p115.apiInterval')} tooltip={t('p115.apiIntervalHint')}>
+                <InputNumber min={0.1} step={0.5} style={{ width: '100%' }} addonAfter={t('p115.seconds')} />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="api_concurrent" label={t('p115.apiConcurrent')} tooltip={t('p115.apiConcurrentHint')}>
+                <InputNumber min={1} max={10} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="strm_link_host" label={t('p115.strmLinkHost')} tooltip={t('p115.strmLinkHostHint')}>
+            <Input placeholder={defaultStrmHost} />
+          </Form.Item>
+          <Form.Item name="file_extensions" label={t('p115.fileExtensions')} tooltip={t('p115.fileExtensionsHint')}>
+            <Input placeholder="mp4,mkv,avi,ts,iso,mov,m2ts" />
+          </Form.Item>
+        </Form>
+
+        {/* STRM 生成 */}
+        <Divider orientation="left"><ThunderboltOutlined /> {t('p115.strmGeneration')}</Divider>
+        <Row gutter={16} style={{ marginBottom: 12 }}>
+          <Col span={12}>
+            <div style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>{t('p115.lastFullSync')}</div>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>{strmStatus.last_full_sync ? new Date(strmStatus.last_full_sync * 1000).toLocaleString() : '—'}</div>
+            <Space size={4} wrap>
+              <StatTag value={fullStats.created} label={t('p115.statGenerated')} color="green" />
+              <StatTag value={fullStats.skipped} label={t('p115.statSkipped')} color="default" />
+              <StatTag value={fullStats.errors}  label={t('p115.statFailed')} color="red" />
+            </Space>
+          </Col>
+          <Col span={12}>
+            <div style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>{t('p115.lastIncSync')}</div>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>{strmStatus.last_inc_sync ? new Date(strmStatus.last_inc_sync * 1000).toLocaleString() : '—'}</div>
+            <Space size={4} wrap>
+              <StatTag value={incStats.created} label={t('p115.statGenerated')} color="green" />
+              <StatTag value={incStats.skipped} label={t('p115.statSkipped')} color="default" />
+              <StatTag value={incStats.errors}  label={t('p115.statFailed')} color="red" />
+            </Space>
+          </Col>
+        </Row>
+        {strmStatus.running && (
+          <Alert style={{ marginBottom: 12 }} type="info" showIcon
+            message={t('p115.syncInProgress', { count: strmProgress.created || 0 })} />
+        )}
+        <Space style={{ marginBottom: 16 }}>
+          <Button type="primary" icon={<ThunderboltOutlined />} loading={strmSyncing || strmStatus.running} onClick={handleFullSync}>{t('p115.fullSync')}</Button>
+          <Button icon={<SyncOutlined />} loading={strmSyncing || strmStatus.running} onClick={handleIncSync}>{t('p115.incSync')}</Button>
+          <Button icon={<SyncOutlined spin={strmStatus.running} />} onClick={fetchStrmAll}>{t('p115.refreshStatus')}</Button>
+        </Space>
+        <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{t('p115.syncPairs')}</div>
+        {syncPairs.map((pair, idx) => (
+          <Row gutter={8} key={idx} style={{ marginBottom: 8 }} align="middle">
+            <Col flex="1"><Input placeholder={t('p115.sourcePath115Placeholder')} value={pair.cloud_path}
+              onChange={e => setSyncPairs(p => p.map((v, i) => i === idx ? { ...v, cloud_path: e.target.value } : v))} /></Col>
+            <Col flex="1"><Input placeholder={t('p115.strmOutputPlaceholder')} value={pair.strm_path}
+              onChange={e => setSyncPairs(p => p.map((v, i) => i === idx ? { ...v, strm_path: e.target.value } : v))} /></Col>
+            <Col><Button danger icon={<DeleteOutlined />} onClick={() => setSyncPairs(p => p.filter((_, i) => i !== idx))} /></Col>
+          </Row>
+        ))}
+        <Space style={{ marginTop: 4 }}>
+          <Button icon={<PlusOutlined />} onClick={() => setSyncPairs(p => [...p, { cloud_path: '', strm_path: '' }])}>{t('p115.addSyncPair')}</Button>
+          <Button type="primary" icon={<CheckCircleOutlined />} onClick={handleStrmSaveCfg} loading={strmCfgSaving}>{t('p115.saveSyncConfig')}</Button>
+        </Space>
+      </Card>
+    </Spin>
+  )
+
+  // ===================================================================
+  //  Tab 2 — 整理 & 路径
+  // ===================================================================
+  const tab2 = (
+    <Row gutter={[24, 24]}>
+      {/* 路径映射 */}
+      <Col xs={24} lg={12}>
+        <Spin spinning={mappingLoading}>
+          <Card title={<Space><NodeIndexOutlined />{t('p115.pathMappingTitle')}</Space>}
+            extra={<Button type="primary" icon={<SaveOutlined />} loading={mappingSaving} onClick={handleSavePathMapping}>{t('common.save')}</Button>}
+          >
+            <Alert type="info" showIcon style={{ marginBottom: 16 }} message={t('p115.pathMappingHint')} />
+            <Form form={mappingForm} layout="vertical" size="small"
+              initialValues={{ media_prefix: '', cloud_prefix: '', strm_prefix: '', local_media_prefix: '' }}>
+              <Form.Item name="cloud_prefix" label={t('p115.cloudPrefix')} tooltip={t('p115.cloudPrefixHint')}>
+                <Input placeholder="/media" addonAfter={
+                  <Button type="link" size="small" icon={<FolderOpenOutlined />} onClick={() => openDirPicker('cloud_prefix')} style={{ padding: 0, height: 'auto' }}>
+                    {t('p115.selectDir')}
+                  </Button>} />
+              </Form.Item>
+              <Form.Item name="media_prefix" label={t('p115.mediaPrefix')} tooltip={t('p115.mediaPrefixHint')}>
+                <Input placeholder="/media/movies" />
+              </Form.Item>
+              <Form.Item name="strm_prefix" label={t('p115.strmPrefix')} tooltip={t('p115.strmPrefixHint')}>
+                <Input placeholder="/config/strm/movies" addonAfter={
+                  <Button type="link" size="small" icon={<FolderOpenOutlined />} onClick={() => openLocalDirPicker('strm_prefix')} style={{ padding: 0, height: 'auto' }}>
+                    {t('p115.selectDir')}
+                  </Button>} />
+              </Form.Item>
+              <Form.Item name="local_media_prefix" label={t('p115.localMediaPrefix')} tooltip={t('p115.localMediaPrefixHint')}>
+                <Input placeholder="/cd2/115open"
+                  addonBefore={
+                    <Select value={localMediaSource} onChange={setLocalMediaSource} style={{ width: 120 }}
+                      options={[
+                        { value: 'local', label: t('p115.localMediaSourceLocal') },
+                        ...storageSources.filter(s => s.is_active).map(s => ({ value: String(s.id), label: s.name })),
+                        { value: 'storage_dir', label: t('p115.localMediaSourceStorage') },
+                      ]} />
+                  }
+                  addonAfter={
+                    localMediaSource === 'storage_dir'
+                      ? <Button type="link" size="small" icon={<FolderOpenOutlined />} onClick={() => setStorageDirPickerOpen(true)} style={{ padding: 0, height: 'auto' }}>{t('p115.selectDir')}</Button>
+                      : localMediaSource === 'local'
+                        ? <Button type="link" size="small" icon={<FolderOpenOutlined />} onClick={() => openLocalDirPicker('local_media_prefix')} style={{ padding: 0, height: 'auto' }}>{t('p115.selectDir')}</Button>
+                        : null
+                  }
+                />
+              </Form.Item>
+            </Form>
+          </Card>
+        </Spin>
+      </Col>
+
+      {/* 整理分类 */}
+      <Col xs={24} lg={12}>
+        <Card title={<Space><FolderAddOutlined />{t('p115.organizeTitle')}</Space>}
+          extra={
+            <Space>
+              <Button icon={<SyncOutlined />} onClick={fetchOrganizeAll} />
+              <Button type="primary" icon={<FolderAddOutlined />} loading={orgRunning || orgStatus.running} onClick={handleOrgRun}>{t('p115.startOrganize')}</Button>
+            </Space>
+          }
+        >
+          {orgStatus.last_organize && (
+            <Alert style={{ marginBottom: 8 }} type="info" showIcon
+              message={<Space size={4} wrap>
+                <span>{t('p115.lastOrganize')}: {new Date(orgStatus.last_organize * 1000).toLocaleString()}</span>
+                <StatTag value={orgStatus.last_organize_stats?.moved}   label={t('p115.statMoved')}    color="green" />
+                <StatTag value={orgStatus.last_organize_stats?.skipped} label={t('p115.statSkipped')}  color="default" />
+                <StatTag value={orgStatus.last_organize_stats?.errors}  label={t('p115.statFailed')}   color="red" />
+              </Space>} />
+          )}
+          {orgStatus.running && <Alert style={{ marginBottom: 8 }} type="info" showIcon message={t('p115.organizeInProgress')} />}
+          <Alert style={{ marginBottom: 12 }} type="warning" showIcon message={t('p115.organizeWarning')} />
+          <Form layout="vertical" size="small">
+            <Form.Item label={t('p115.organizeTargetRoot')} tooltip={t('p115.organizeTargetRootHint')}>
+              <Input value={orgCfg.target_root} placeholder={t('p115.organizeTargetRootHint')}
+                onChange={e => setOrgCfg(c => ({ ...c, target_root: e.target.value }))} />
+            </Form.Item>
+            <Form.Item label={t('p115.dryRun')} tooltip={t('p115.dryRunHint')}>
+              <Switch checked={orgCfg.dry_run} onChange={v => setOrgCfg(c => ({ ...c, dry_run: v }))} />
+            </Form.Item>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{t('p115.sourcePaths')}</div>
+            {orgPaths.map((p, idx) => (
+              <Row gutter={8} key={idx} style={{ marginBottom: 8 }} align="middle">
+                <Col flex="1"><Input placeholder={t('p115.sourceDirPlaceholder')} value={p}
+                  onChange={e => setOrgPaths(prev => prev.map((v, i) => i === idx ? e.target.value : v))} /></Col>
+                <Col><Button danger icon={<DeleteOutlined />} onClick={() => setOrgPaths(prev => prev.filter((_, i) => i !== idx))} /></Col>
+              </Row>
+            ))}
+            <Button icon={<PlusOutlined />} onClick={() => setOrgPaths(p => [...p, ''])} style={{ marginBottom: 12 }}>{t('p115.addSourcePath')}</Button>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{t('p115.categoryRules')}</div>
+            {Object.entries(orgCfg.categories || {}).map(([cat, sub]) => (
+              <Row gutter={8} key={cat} style={{ marginBottom: 8 }} align="middle">
+                <Col span={6}><Tag color="blue">{cat}</Tag></Col>
+                <Col flex="1"><Input value={sub}
+                  onChange={e => setOrgCfg(c => ({ ...c, categories: { ...c.categories, [cat]: e.target.value } }))} /></Col>
+              </Row>
+            ))}
+            <Button type="primary" icon={<CheckCircleOutlined />} onClick={handleOrgSave} loading={orgSaving} style={{ marginTop: 8 }}>
+              {t('p115.saveOrganizeConfig')}
+            </Button>
+          </Form>
+        </Card>
+      </Col>
+    </Row>
+  )
+
+  // ===================================================================
+  //  Tab 3 — 生活事件监控
+  // ===================================================================
+  const evTypeMap = {
+    0: t('p115.evType0'), 1: t('p115.evType1'), 2: t('p115.evType2'),
+    4: t('p115.evType4'), 5: t('p115.evType5'),
+  }
+  const tab3 = (
+    <Space direction="vertical" style={{ width: '100%' }} size="middle">
+      <Card size="small" title={t('p115.monitorStatusTitle')}>
+        <Row gutter={16} align="middle" wrap>
+          <Col><Badge status={monitorStatus.running ? 'processing' : 'default'} text={monitorStatus.running ? t('p115.monitorRunning') : t('p115.monitorStopped')} /></Col>
+          <Col><Text type="secondary">{t('p115.lastEvent')}: {monitorStatus.last_event_time ? new Date(monitorStatus.last_event_time * 1000).toLocaleString() : '—'}</Text></Col>
+          <Col>
+            <Button type={monitorStatus.running ? 'default' : 'primary'}
+              icon={monitorStatus.running ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
+              onClick={handleMonitorToggle}>
+              {monitorStatus.running ? t('p115.stopMonitor') : t('p115.startMonitor')}
+            </Button>
+          </Col>
+          <Col><Button icon={<SyncOutlined />} onClick={fetchMonitorAll}>{t('common.refresh')}</Button></Col>
+        </Row>
+      </Card>
+      <Card size="small" title={t('p115.monitorConfig')}>
+        <Form layout="vertical" size="small">
+          <Form.Item label={t('p115.pollInterval')}>
+            <InputNumber min={10} max={3600} value={monitorCfg.poll_interval}
+              onChange={v => setMonitorCfg(c => ({ ...c, poll_interval: v }))} />
+          </Form.Item>
+          <Form.Item label={t('p115.autoIncSync')}>
+            <Switch checked={monitorCfg.auto_inc_sync} onChange={v => setMonitorCfg(c => ({ ...c, auto_inc_sync: v }))} />
+          </Form.Item>
+          <Button type="primary" icon={<CheckCircleOutlined />} onClick={handleMonitorSave} loading={monitorSaving}>{t('p115.saveMonitorConfig')}</Button>
+        </Form>
+      </Card>
+      <Card size="small" title={t('p115.recentEvents', { count: (monitorStatus.recent_events || []).length })}>
+        <Table
+          dataSource={monitorStatus.recent_events || []} rowKey={(_, i) => i} size="small"
+          pagination={{ pageSize: 10, size: 'small' }} locale={{ emptyText: t('p115.noEvents') }}
+          columns={[
+            { title: t('common.type'),     dataIndex: 'type',      key: 'type',      width: 100, render: v => evTypeMap[v] || v },
+            { title: t('p115.fileName'),   dataIndex: 'file_name', key: 'file_name', ellipsis: true },
+            { title: t('common.time'),     dataIndex: 'time',      key: 'time',      width: 180,
+              render: v => v ? new Date(v * 1000).toLocaleString() : '—' },
+          ]}
+        />
+      </Card>
+    </Space>
+  )
+
+  // ===================================================================
+  //  主渲染
+  // ===================================================================
   return (
     <div style={{ padding: 24 }}>
-      <Row gutter={[24, 24]}>
-        {/* ========== 左栏: 115 配置（含高级设置） ========== */}
-        <Col xs={24} lg={12}>
-          <Spin spinning={loading || settingsLoading}>
-            <Card
-              title={<Space><CloudSyncOutlined />{t('p115.p115Title')}</Space>}
-              extra={
-                <Space>
-                  {!loading && (
-                    status.cookie
-                      ? <Tag color="success">{t('p115.connected')}</Tag>
-                      : <Tag color="error">{t('p115.disconnected')}</Tag>
-                  )}
-                  <Button type="primary" icon={<SaveOutlined />} loading={settingsSaving} onClick={handleSaveSettings}>
-                    {t('common.save')}
-                  </Button>
-                </Space>
-              }
-            >
-              {/* 账号信息区域 */}
-              {account.logged_in && (
-                <>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-                    <Avatar
-                      size={48} src={account.avatar}
-                      icon={!account.avatar && <UserOutlined />}
-                    />
-                    <div style={{ flex: 1 }}>
-                      <Space>
-                        <Text strong style={{ fontSize: 16 }}>{account.user_name}</Text>
-                        {account.vip_name && <Tag color={account.vip_color || 'gold'}>{account.vip_name}</Tag>}
-                      </Space>
-                      <div style={{ marginTop: 4 }}>
-                        <Progress
-                          percent={spacePercent} size="small"
-                          format={() => `${formatSize(account.space_used)} / ${formatSize(account.space_total)}`}
-                          strokeColor={spacePercent > 90 ? '#ff4d4f' : spacePercent > 70 ? '#faad14' : undefined}
-                        />
-                      </div>
-                    </div>
-                  </div>
-                  <Divider style={{ margin: '8px 0 16px' }} />
-                </>
-              )}
-              <Descriptions column={1} bordered size="small" style={{ marginBottom: 16 }}>
-                <Descriptions.Item label={t('p115.cookieStatus')}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-                    {status.cookie
-                      ? <Tag icon={<CheckCircleOutlined />} color="success">{t('p115.cookieSet')}</Tag>
-                      : <Tag icon={<CloseCircleOutlined />} color="error">{t('p115.cookieNotSet')}</Tag>}
-                    <Space size="small">
-                      <Button size="small" icon={<KeyOutlined />} onClick={() => setCookieModal(true)}>
-                        {t('p115.setCookie')}
-                      </Button>
-                      <Button size="small" icon={<QrcodeOutlined />} onClick={handleOpenQr}>
-                        {t('p115.scanLogin')}
-                      </Button>
-                    </Space>
-                  </div>
-                </Descriptions.Item>
-                <Descriptions.Item label={t('p115.openapiStatus')}>
-                  {status.openapi
-                    ? <Tag icon={<CheckCircleOutlined />} color="success">{t('p115.openapiSet')}</Tag>
-                    : <Tag icon={<CloseCircleOutlined />} color="warning">{t('p115.openapiNotSet')}</Tag>}
-                </Descriptions.Item>
-                <Descriptions.Item label={t('p115.rateBlocked')}>
-                  {status.rate_blocked ? <Tag color="error">Blocked</Tag> : <Tag color="success">OK</Tag>}
-                </Descriptions.Item>
-                <Descriptions.Item label={t('p115.cacheSize')}>
-                  {status.cache_size ?? 0}
-                </Descriptions.Item>
-              </Descriptions>
-
-              <Form form={settingsForm} layout="vertical" size="small"
-                initialValues={{ api_interval: 1, api_concurrent: 3, strm_link_host: '', file_extensions: 'mp4,mkv,avi,ts,iso,mov,m2ts' }}
-              >
-                <Row gutter={16}>
-                  <Col span={12}>
-                    <Form.Item name="api_interval" label={t('p115.apiInterval')} tooltip={t('p115.apiIntervalHint')}>
-                      <InputNumber min={0.1} step={0.5} style={{ width: '100%' }} addonAfter={t('p115.seconds')} />
-                    </Form.Item>
-                  </Col>
-                  <Col span={12}>
-                    <Form.Item name="api_concurrent" label={t('p115.apiConcurrent')} tooltip={t('p115.apiConcurrentHint')}>
-                      <InputNumber min={1} max={10} style={{ width: '100%' }} />
-                    </Form.Item>
-                  </Col>
-                </Row>
-                <Form.Item
-                  name="strm_link_host"
-                  label={t('p115.strmLinkHost')}
-                  tooltip={t('p115.strmLinkHostHint')}
-                >
-                  <Input placeholder={defaultStrmHost} />
-                </Form.Item>
-
-
-
-                <Form.Item name="file_extensions" label={t('p115.fileExtensions')} tooltip={t('p115.fileExtensionsHint')}>
-                  <Input placeholder="mp4,mkv,avi,ts,iso,mov,m2ts" />
-                </Form.Item>
-              </Form>
-            </Card>
-          </Spin>
-        </Col>
-
-        {/* ========== 右栏: 路径映射 ========== */}
-        <Col xs={24} lg={12}>
-          <Spin spinning={mappingLoading}>
-            <Card
-              title={<Space><NodeIndexOutlined />{t('p115.pathMappingTitle')}</Space>}
-              extra={
-                <Button type="primary" icon={<SaveOutlined />} loading={mappingSaving} onClick={handleSavePathMapping}>
-                  {t('common.save')}
-                </Button>
-              }
-            >
-              <Alert type="info" showIcon style={{ marginBottom: 16 }} message={t('p115.pathMappingHint')} />
-              <Form form={mappingForm} layout="vertical" size="small"
-                initialValues={{ media_prefix: '', cloud_prefix: '', strm_prefix: '', local_media_prefix: '' }}
-              >
-                {/* 网盘媒体库根目录 + 选择按钮 */}
-                <Form.Item name="cloud_prefix" label={t('p115.cloudPrefix')} tooltip={t('p115.cloudPrefixHint')}>
-                  <Input
-                    placeholder="/影视/电影"
-                    addonAfter={
-                      <Button
-                        type="link" size="small" icon={<FolderOpenOutlined />}
-                        onClick={() => openDirPicker('cloud_prefix')}
-                        style={{ padding: 0, height: 'auto' }}
-                      >
-                        {t('p115.selectDir')}
-                      </Button>
-                    }
-                  />
-                </Form.Item>
-                {/* 媒体库挂载路径 */}
-                <Form.Item name="media_prefix" label={t('p115.mediaPrefix')} tooltip={t('p115.mediaPrefixHint')}>
-                  <Input placeholder="/media/movies" />
-                </Form.Item>
-                {/* 本地 STRM 根目录 */}
-                <Form.Item name="strm_prefix" label={t('p115.strmPrefix')} tooltip={t('p115.strmPrefixHint')}>
-                  <Input
-                    placeholder="/config/strm/movies"
-                    addonAfter={
-                      <Button
-                        type="link" size="small" icon={<FolderOpenOutlined />}
-                        onClick={() => openLocalDirPicker('strm_prefix')}
-                        style={{ padding: 0, height: 'auto' }}
-                      >
-                        {t('p115.selectDir')}
-                      </Button>
-                    }
-                  />
-                </Form.Item>
-                {/* 本地媒体路径 — 带左侧来源选择下拉 */}
-                <Form.Item name="local_media_prefix" label={t('p115.localMediaPrefix')} tooltip={t('p115.localMediaPrefixHint')}>
-                  <Input
-                    placeholder="/cd2/115open"
-                    addonBefore={
-                      <Select
-                        value={localMediaSource}
-                        onChange={setLocalMediaSource}
-                        style={{ width: 120 }}
-                        options={[
-                          { value: 'local', label: t('p115.localMediaSourceLocal') },
-                          ...storageSources
-                            .filter(s => s.is_active)
-                            .map(s => ({ value: String(s.id), label: s.name }))
-                        ]}
-                      />
-                    }
-                    addonAfter={
-                      <Button
-                        type="link" size="small" icon={<FolderOpenOutlined />}
-                        onClick={() => {
-                          if (localMediaSource && localMediaSource !== 'local') {
-                            setStorageDirPickerOpen(true)
-                          } else {
-                            openLocalDirPicker('local_media_prefix')
-                          }
-                        }}
-                        style={{ padding: 0, height: 'auto' }}
-                      >
-                        {t('p115.selectDir')}
-                      </Button>
-                    }
-                  />
-                </Form.Item>
-              </Form>
-            </Card>
-          </Spin>
-        </Col>
-      </Row>
-
-      {/* ========== 目录选择弹窗 ========== */}
-      <DirPickerModal
-        open={dirPickerOpen}
-        onClose={() => setDirPickerOpen(false)}
-        onSelect={handleDirSelected}
+      <Tabs
+        items={[
+          { key: 'p115',     label: <Space><CloudSyncOutlined />{t('p115.tabDriveStrm')}</Space>,    children: tab1 },
+          { key: 'organize', label: <Space><FolderAddOutlined />{t('p115.tabOrganizePath')}</Space>,  children: tab2 },
+          { key: 'monitor',  label: <Space><ClockCircleOutlined />{t('p115.tabLifeMonitor')}</Space>, children: tab3 },
+        ]}
       />
 
-      {/* ========== 本地目录选择弹窗 ========== */}
-      <LocalDirPickerModal
-        open={localDirPickerOpen}
-        onClose={() => setLocalDirPickerOpen(false)}
-        onSelect={handleLocalDirSelected}
-      />
-
-      {/* ========== 存储源目录选择弹窗 ========== */}
-      <StorageDirPickerModal
-        open={storageDirPickerOpen}
-        onClose={() => setStorageDirPickerOpen(false)}
-        storageId={localMediaSource !== 'local' ? Number(localMediaSource) : null}
-        onSelect={(path) => mappingForm.setFieldValue('local_media_prefix', path)}
-      />
-
-      {/* ========== Cookie 弹窗 ========== */}
-      <Modal
-        title={t('p115.setCookie')} open={cookieModal}
-        onCancel={() => setCookieModal(false)}
-        onOk={handleSetCookie} confirmLoading={cookieSaving}
-      >
-        <TextArea rows={4} value={cookieValue}
-          onChange={(e) => setCookieValue(e.target.value)}
-          placeholder={t('p115.cookiePlaceholder')}
-        />
+      {/* Cookie 弹窗 */}
+      <Modal title={t('p115.setCookie')} open={cookieModal} onCancel={() => setCookieModal(false)} onOk={handleSetCookie} confirmLoading={cookieSaving}>
+        <TextArea rows={4} value={cookieValue} onChange={e => setCookieValue(e.target.value)} placeholder={t('p115.cookiePlaceholder')} />
       </Modal>
 
-      {/* ========== 扫码弹窗 ========== */}
-      <Modal
-        title={t('p115.scanLogin')} open={qrModal}
-        onCancel={handleCloseQr} footer={null} width={420}
-      >
+      {/* 扫码弹窗 */}
+      <Modal title={t('p115.scanLogin')} open={qrModal} onCancel={handleCloseQr} footer={null} width={420}>
         <div style={{ marginBottom: 12 }}>
           <Text type="secondary">{t('p115.selectAppType')}</Text>
-          <Select
-            value={qrApp} onChange={(v) => setQrApp(v)}
-            style={{ width: '100%', marginTop: 8 }}
+          <Select value={qrApp} onChange={v => setQrApp(v)} style={{ width: '100%', marginTop: 8 }}
             options={APP_OPTIONS.map(o => ({ value: o.value, label: <Space>{o.icon}{o.label}</Space> }))}
           />
         </div>
         <div style={{ textAlign: 'center', padding: '16px 0' }}>
           {qrStatus === 'loading' && <Spin tip={t('p115.qrLoading')} />}
-          {qrStatus === 'waiting' && qrData?.qrcode_content && (
-            <QRCode value={qrData.qrcode_content} size={200} />
-          )}
-          {qrStatus === 'scanned' && <Alert type="info" message={t('p115.qrScanned')} showIcon />}
+          {qrStatus === 'waiting' && qrData?.qrcode_content && <QRCode value={qrData.qrcode_content} size={200} />}
+          {qrStatus === 'scanned' && <Alert type="info"    message={t('p115.qrScanned')} showIcon />}
           {qrStatus === 'success' && <Alert type="success" message={t('p115.qrSuccess')} showIcon />}
-          {qrStatus === 'expired' && (
-            <Space direction="vertical">
-              <Alert type="warning" message={t('p115.qrExpired')} showIcon />
-              <Button onClick={handleOpenQr}>{t('p115.qrRetry')}</Button>
-            </Space>
-          )}
-          {qrStatus === 'failed' && (
-            <Space direction="vertical">
-              <Alert type="error" message={t('p115.qrFailed')} showIcon />
-              <Button onClick={handleOpenQr}>{t('p115.qrRetry')}</Button>
-            </Space>
-          )}
+          {qrStatus === 'expired' && <Space direction="vertical"><Alert type="warning" message={t('p115.qrExpired')} showIcon /><Button onClick={handleOpenQr}>{t('p115.qrRetry')}</Button></Space>}
+          {qrStatus === 'failed'  && <Space direction="vertical"><Alert type="error"   message={t('p115.qrFailed')}  showIcon /><Button onClick={handleOpenQr}>{t('p115.qrRetry')}</Button></Space>}
         </div>
-        <div style={{ textAlign: 'center' }}>
-          <Text type="secondary">{qrStatusHint[qrStatus]}</Text>
-        </div>
+        <div style={{ textAlign: 'center' }}><Text type="secondary">{qrStatusHint[qrStatus]}</Text></div>
       </Modal>
+
+      {/* 目录选择器 */}
+      <DirPickerModal open={dirPickerOpen} onClose={() => setDirPickerOpen(false)} onSelect={handleDirSelected} />
+      <LocalDirPickerModal open={localDirPickerOpen} onClose={() => setLocalDirPickerOpen(false)} onSelect={handleLocalDirSelected} />
+      <StorageDirPickerModal
+        open={storageDirPickerOpen} onClose={() => setStorageDirPickerOpen(false)}
+        storageId={localMediaSource !== 'local' ? Number(localMediaSource) : null}
+        onSelect={p => mappingForm.setFieldValue('local_media_prefix', p)}
+      />
     </div>
   )
 }
-
 export default Drive115
