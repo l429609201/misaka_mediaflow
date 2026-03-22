@@ -8,7 +8,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import {
   Card, Descriptions, Tag, Button, Input, InputNumber, Modal, message,
   Space, Alert, Row, Col, Spin, Typography, Form, Select, QRCode,
-  Avatar, Progress, Divider, Switch, Badge,
+  Avatar, Progress, Divider, Switch, Badge, Tooltip,
 } from 'antd'
 import {
   CheckCircleOutlined, CloseCircleOutlined, CloudSyncOutlined,
@@ -16,10 +16,10 @@ import {
   MobileOutlined, DesktopOutlined, WechatOutlined, AlipayCircleOutlined,
   NodeIndexOutlined, FolderOpenOutlined, UserOutlined,
   ThunderboltOutlined, SyncOutlined, PlayCircleOutlined,
-  PauseCircleOutlined, ClockCircleOutlined,
+  PauseCircleOutlined, ClockCircleOutlined, CodeOutlined,
 } from '@ant-design/icons'
 import { useTranslation } from 'react-i18next'
-import { p115Api, storageApi, p115StrmApi } from '@/apis'
+import { p115Api, storageApi, p115StrmApi, strmApi } from '@/apis'
 import DirPickerModal from '@/components/DirPickerModal'
 import LocalDirPickerModal from '@/components/LocalDirPickerModal'
 import StorageDirPickerModal from '@/components/StorageDirPickerModal'
@@ -27,10 +27,19 @@ import StorageDirPickerModal from '@/components/StorageDirPickerModal'
 const { TextArea } = Input
 const { Text } = Typography
 
-const getDefaultStrmHost = () => {
-  if (typeof window === 'undefined' || !window.location) return ''
-  return window.location.origin || ''
-}
+const DEFAULT_TEMPLATE =
+  '{{ base_url }}?pickcode={{ pickcode }}{% if file_name %}&file_name={{ file_name | urlencode }}{% endif %}'
+
+const TEMPLATE_PARAMS = [
+  { label: '{{ base_url }}',                 insert: '{{ base_url }}',                 desc: '反代服务根地址' },
+  { label: '{{ pickcode }}',                 insert: '{{ pickcode }}',                 desc: '115 pickcode' },
+  { label: '{{ file_name }}',                insert: '{{ file_name }}',                desc: '文件名（原始）' },
+  { label: 'file_name | urlencode',          insert: '{{ file_name | urlencode }}',    desc: '文件名 URL 编码' },
+  { label: '{{ file_path }}',                insert: '{{ file_path }}',                desc: '网盘内文件完整路径' },
+  { label: 'file_path | urlencode',          insert: '{{ file_path | urlencode }}',   desc: '网盘路径 URL 编码' },
+  { label: '{{ sha1 }}',                     insert: '{{ sha1 }}',                     desc: '文件 SHA1' },
+  { label: '{% if file_name %}…{% endif %}', insert: '{% if file_name %}{% endif %}',  desc: '条件块（含文件名时输出）' },
+]
 
 const StatTag = ({ value, label, color }) => (
   <Tag color={color} style={{ fontSize: 13, padding: '2px 10px' }}>
@@ -69,14 +78,22 @@ export const Drive115 = () => {
   const [storageSources,       setStorageSources]       = useState([])
   const [localMediaSource,     setLocalMediaSource]     = useState('local')
   const [storageDirPickerOpen, setStorageDirPickerOpen] = useState(false)
-  const defaultStrmHost = getDefaultStrmHost()
 
   const [strmStatus,  setStrmStatus]  = useState({})
   const [strmSyncing, setStrmSyncing] = useState(false)
 
-  const [monitorCfg,    setMonitorCfg]    = useState({ poll_interval: 30, auto_inc_sync: true })
+  const [monitorCfg,    setMonitorCfg]    = useState({ poll_interval: 30, auto_inc_sync: true, monitor_dir: '', strm_dir: '' })
   const [monitorStatus, setMonitorStatus] = useState({})
   const [monitorSaving, setMonitorSaving] = useState(false)
+
+  // 监控目录 / STRM目录 选择器
+  const [monitorDirPickerOpen, setMonitorDirPickerOpen] = useState(false)
+  const [strmDirPickerOpen,    setStrmDirPickerOpen]    = useState(false)
+
+  // STRM URL 模板
+  const [urlTemplate,    setUrlTemplate]    = useState('')
+  const [templateSaving, setTemplateSaving] = useState(false)
+  const templateRef = useRef(null)
 
   // ----------------------------------------------------------------
   //  数据加载
@@ -140,12 +157,19 @@ export const Drive115 = () => {
     } catch { /* ignore */ }
   }, [])
 
+  const fetchUrlTemplate = useCallback(async () => {
+    try {
+      const { data } = await strmApi.getUrlTemplate()
+      setUrlTemplate(data.template || DEFAULT_TEMPLATE)
+    } catch { setUrlTemplate(DEFAULT_TEMPLATE) }
+  }, [])
+
   useEffect(() => {
     fetchStatus(); fetchAccount(); fetchPathMapping()
     fetchSettings(); fetchStorageSources()
-    fetchStrmAll(); fetchMonitorAll()
+    fetchStrmAll(); fetchMonitorAll(); fetchUrlTemplate()
   }, [fetchStatus, fetchAccount, fetchPathMapping, fetchSettings,
-      fetchStorageSources, fetchStrmAll, fetchMonitorAll])
+      fetchStorageSources, fetchStrmAll, fetchMonitorAll, fetchUrlTemplate])
 
   useEffect(() => {
     if (status.cookie && !monitorStatus.running) {
@@ -281,6 +305,27 @@ export const Drive115 = () => {
       }
       setTimeout(fetchMonitorAll, 800)
     } catch { message.error(t('p115.operateFailed')) }
+  }
+
+  // STRM URL 模板
+  const insertAtCursor = (snippet) => {
+    const el = templateRef.current
+    if (!el) { setUrlTemplate(s => s + snippet); return }
+    const start = el.selectionStart ?? urlTemplate.length
+    const end   = el.selectionEnd   ?? urlTemplate.length
+    const next  = urlTemplate.slice(0, start) + snippet + urlTemplate.slice(end)
+    setUrlTemplate(next)
+    requestAnimationFrame(() => {
+      el.focus()
+      el.setSelectionRange(start + snippet.length, start + snippet.length)
+    })
+  }
+
+  const handleSaveTemplate = async () => {
+    setTemplateSaving(true)
+    try { await strmApi.saveUrlTemplate(urlTemplate); message.success('模板已保存') }
+    catch { message.error('保存失败') }
+    finally { setTemplateSaving(false) }
   }
 
   // ----------------------------------------------------------------
@@ -421,7 +466,7 @@ export const Drive115 = () => {
             {/* 生活事件监控 */}
             <Col span={24}>
               <Card
-                title={<Space><ClockCircleOutlined />{t('p115.monitorStatusTitle')}</Space>}
+                title={<Space><ClockCircleOutlined />生活事件监控</Space>}
                 extra={<Button icon={<SyncOutlined />} size="small" onClick={fetchMonitorAll}>{t('common.refresh')}</Button>}
               >
                 <div style={{ marginBottom: 16 }}>
@@ -438,7 +483,7 @@ export const Drive115 = () => {
                       : '—'}
                   </Text>
                 </div>
-                <div style={{ marginBottom: 20 }}>
+                <div style={{ marginBottom: 16 }}>
                   <Button
                     type={monitorStatus.running ? 'default' : 'primary'}
                     icon={monitorStatus.running ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
@@ -449,6 +494,32 @@ export const Drive115 = () => {
                 </div>
                 <Divider style={{ margin: '0 0 16px' }} />
                 <Form layout="vertical" size="small">
+                  <Form.Item label="监控目录" tooltip="生活事件监控扫描的115网盘目录">
+                    <Input
+                      placeholder="/待整理"
+                      value={monitorCfg.monitor_dir || ''}
+                      onChange={e => setMonitorCfg(c => ({ ...c, monitor_dir: e.target.value }))}
+                      addonAfter={
+                        <Button type="link" size="small" icon={<FolderOpenOutlined />}
+                          onClick={() => setMonitorDirPickerOpen(true)} style={{ padding: 0, height: 'auto' }}>
+                          选择
+                        </Button>
+                      }
+                    />
+                  </Form.Item>
+                  <Form.Item label="STRM目录" tooltip="监控到新文件后生成 STRM 的本地目录">
+                    <Input
+                      placeholder="/config/strm"
+                      value={monitorCfg.strm_dir || ''}
+                      onChange={e => setMonitorCfg(c => ({ ...c, strm_dir: e.target.value }))}
+                      addonAfter={
+                        <Button type="link" size="small" icon={<FolderOpenOutlined />}
+                          onClick={() => setStrmDirPickerOpen(true)} style={{ padding: 0, height: 'auto' }}>
+                          选择
+                        </Button>
+                      }
+                    />
+                  </Form.Item>
                   <Form.Item label={t('p115.pollInterval')}>
                     <InputNumber min={10} max={3600} value={monitorCfg.poll_interval}
                       style={{ width: '100%' }} addonAfter={t('p115.seconds')}
@@ -627,11 +698,41 @@ export const Drive115 = () => {
 
             <Divider style={{ margin: '12px 0' }} />
 
-            <Form form={settingsForm} layout="vertical" size="small">
-              <Form.Item name="strm_link_host" label={t('p115.strmLinkHost')} tooltip={t('p115.strmLinkHostHint')}>
-                <Input placeholder={defaultStrmHost} />
-              </Form.Item>
-            </Form>
+            {/* STRM URL 模板 */}
+            <Alert type="info" showIcon style={{ marginBottom: 12 }}
+              message="使用 Jinja2 语法拼接 STRM 文件内容。点击下方参数按钮可将其插入至光标所在位置。" />
+            <div style={{ marginBottom: 10 }}>
+              <Text type="secondary" style={{ display: 'block', marginBottom: 6, fontSize: 12 }}>
+                <CodeOutlined style={{ marginRight: 4 }} />可选参数（点击插入）
+              </Text>
+              <Space wrap size={[6, 6]}>
+                {TEMPLATE_PARAMS.map(p => (
+                  <Tooltip key={p.label} title={p.desc}>
+                    <Button size="small" onClick={() => insertAtCursor(p.insert)}>{p.label}</Button>
+                  </Tooltip>
+                ))}
+              </Space>
+            </div>
+            <textarea
+              ref={templateRef}
+              value={urlTemplate}
+              onChange={e => setUrlTemplate(e.target.value)}
+              rows={4}
+              spellCheck={false}
+              style={{
+                width: '100%', padding: '8px 12px', fontFamily: 'monospace', fontSize: 12,
+                border: '1px solid #d9d9d9', borderRadius: 6, resize: 'vertical',
+                outline: 'none', lineHeight: 1.6, boxSizing: 'border-box',
+                background: 'var(--ant-color-bg-container, #fff)',
+                color: 'var(--ant-color-text, #000)',
+              }}
+            />
+            <Space style={{ marginTop: 10 }}>
+              <Button type="primary" icon={<SaveOutlined />} loading={templateSaving} onClick={handleSaveTemplate}>
+                保存模板
+              </Button>
+              <Button onClick={() => setUrlTemplate(DEFAULT_TEMPLATE)}>恢复默认</Button>
+            </Space>
           </Card>
         </Col>
 
@@ -670,6 +771,16 @@ export const Drive115 = () => {
         open={storageDirPickerOpen} onClose={() => setStorageDirPickerOpen(false)}
         storageId={localMediaSource !== 'local' ? Number(localMediaSource) : null}
         onSelect={p => mappingForm.setFieldValue('local_media_prefix', p)}
+      />
+      {/* 监控目录选择器（115网盘目录） */}
+      <DirPickerModal
+        open={monitorDirPickerOpen} onClose={() => setMonitorDirPickerOpen(false)}
+        onSelect={p => { setMonitorCfg(c => ({ ...c, monitor_dir: p })); setMonitorDirPickerOpen(false) }}
+      />
+      {/* STRM目录选择器（本地目录） */}
+      <LocalDirPickerModal
+        open={strmDirPickerOpen} onClose={() => setStrmDirPickerOpen(false)}
+        onSelect={p => { setMonitorCfg(c => ({ ...c, strm_dir: p })); setStrmDirPickerOpen(false) }}
       />
     </div>
   )
