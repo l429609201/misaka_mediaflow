@@ -849,65 +849,49 @@ def _insert_fonts_section(ass_text: str, font_entries: dict) -> str:
 # Part 5: 主入口（含 reMap：同字体文件字符集合并，只子集化一次）
 # ═══════════════════════════════════════════════════════════
 
-def _get_embedded_font_names(ass_text: str) -> set:
-    """
-    提取 ASS [Fonts] 段中已内嵌字体的文件名集合（小写，去扩展名）。
-    直接复用 _extract_fonts_section 的解析结果，避免重复遍历。
-    """
-    _, existing_blocks = _extract_fonts_section(ass_text)
-    return set(existing_blocks.keys())
-
-
 async def _process_ass_content(ass_text: str, raw_bytes: bytes) -> tuple:
     """
     ASS 内容子集化核心。
     返回 (result_bytes, missing_fonts, content_type)
 
-    reMap 优化（对齐 MkvAutoSubset）：
-      同一字体文件被多个字体 key 引用时合并字符集，只子集化一次。
+    对齐 fontInAss subsetter.py 的处理逻辑：
+      1. [Fonts] 段已有内容 → 直接透传（字体已内嵌，无需重复处理）
+      2. [Fonts] 段存在但无内容 → 清除空段再处理
+      3. 无 [Fonts] 段 → 正常子集化流程
+    reMap 优化：同一字体文件被多个 key 引用时合并字符集，只子集化一次。
     """
-    font_chars = analyse_ass(ass_text)
+    # ── 第一步：检查 [Fonts] 段状态（对齐 fontInAss check_section 逻辑）────────
+    # fontInAss 原话：status==1（有内容）→ "已有内嵌字体"，直接返回原始内容
+    # 不解析字体名、不查找、不子集化，因为字体数据已经在里面了
+    ass_without_fonts, existing_blocks = _extract_fonts_section(ass_text)
+    if existing_blocks:
+        # [Fonts] 段有实际字体内容 → 直接透传
+        logger.info("[builtin] 字幕已含内嵌字体（%s），直接透传",
+                    ", ".join(sorted(existing_blocks.keys())))
+        return raw_bytes, [], "text/x-ssa; charset=utf-8"
+
+    # existing_blocks 为空但 [Fonts] 段可能存在（空段）→ 用去掉空段的文本处理
+    # ass_without_fonts 已移除 [Fonts] 段，后续写入时重新生成
+    # 使用 ass_without_fonts 进行解析和最终写入，避免空 [Fonts] 段干扰
+    font_chars = analyse_ass(ass_without_fonts)
     if not font_chars:
         logger.info("[builtin] ASS 无字体信息，直接返回原始内容")
         return raw_bytes, [], "text/x-ssa; charset=utf-8"
 
-    # ── 检测已内嵌字体（fontInAss 子集化产物）────────────────────────────────
-    # 这类字幕的字体名是随机 8 位大写字母（如 RM8KN26Q），字体数据已内嵌在
-    # [Fonts] 段，无需也无法再查找/下载——直接透传原始字幕即可。
-    embedded_names = _get_embedded_font_names(ass_text)
-    if embedded_names:
-        # 判断哪些 key 已内嵌（字体名小写后在 embedded_names 中）
-        all_embedded = all(
-            (key.rsplit("^", 1)[0] if "^" in key else key).lower() in embedded_names
-            for key in font_chars
-        )
-        if all_embedded:
-            logger.info("[builtin] 字幕已含内嵌字体（%s），直接透传",
-                        ", ".join(sorted(embedded_names)))
-            return raw_bytes, [], "text/x-ssa; charset=utf-8"
-
     logger.info("[builtin] ASS 解析: %d 个字体 key: %s",
                 len(font_chars),
-                ", ".join(f"{k}({v}字符)" for k, v in font_chars.items()))
+                ", ".join(f"{k}({len(v)}字符)" for k, v in font_chars.items()))
 
     font_resolved: dict = {}
     missing: list = []
 
     # ── 并发查找所有字体：DB → 在线下载，不走阻塞的内存全量扫描 ──────────────
-    # 内存扫描（find_local_font/_scan_fonts）会同步阻塞 event loop 长达 30s，
-    # 且 DB 入库后已无必要；downloads 目录由 find_downloaded_font 兜底，
-    # 但同样走内存扫描，故也移除——DB 里会索引 downloads 目录的字体。
     async def _resolve_one(key: str) -> tuple:
         """返回 (key, loc_or_None)"""
         fname, subfamily = (key.rsplit("^", 1) if "^" in key
                             else (key, _VARIANT_REGULAR))
         is_bold   = "Bold"   in subfamily
         is_italic = "Italic" in subfamily
-
-        # ── 已内嵌在 [Fonts] 段，无需查找 ───────────────────────────────────
-        if fname.lower() in embedded_names:
-            logger.debug("[builtin] 跳过已内嵌字体: %s", key)
-            return key, None   # None 表示不需要处理，调用方按 key 过滤
 
         # ── 1. 查持久化 DB（主路径，毫秒级）────────────────────────────────
         loc = None
@@ -923,17 +907,12 @@ async def _process_ass_content(ass_text: str, raw_bytes: bytes) -> tuple:
 
         return key, loc
 
-    # 过滤掉已内嵌的 key，只对需要查找的字体并发执行
-    keys_to_resolve = [
-        k for k in font_chars
-        if (k.rsplit("^", 1)[0] if "^" in k else k).lower() not in embedded_names
-    ]
-    resolve_results = await asyncio.gather(*[_resolve_one(k) for k in keys_to_resolve])
+    resolve_results = await asyncio.gather(*[_resolve_one(k) for k in font_chars])
 
     for key, loc in resolve_results:
         if loc:
             font_resolved[key] = loc
-        elif (key.rsplit("^", 1)[0] if "^" in key else key).lower() not in embedded_names:
+        else:
             missing.append(key)
 
     # 一条日志汇总查找结果
@@ -985,7 +964,7 @@ async def _process_ass_content(ass_text: str, raw_bytes: bytes) -> tuple:
                        ", ".join(missing))
         return raw_bytes, missing, "text/x-ssa; charset=utf-8"
 
-    ass_out = _insert_fonts_section(ass_text, font_entries)
+    ass_out = _insert_fonts_section(ass_without_fonts, font_entries)
     out_bytes = ass_out.encode("utf-8")
     logger.info(
         "[builtin] ✅ 子集化完成: %d→%d bytes  成功=%s%s",
