@@ -541,7 +541,8 @@ const DEFAULT_ORG_RULE = {
   // 目标（整理后存放）
   target_storage: 'local',
   target_root: '',
-  // 自动整理
+  // 整理行为
+  transfer_mode: 'move',         // 'move' | 'copy'
   auto_organize: 'monitor',      // 'monitor' | 'none'
   monitor_mode: 'compatibility', // 'compatibility' | 'performance'
   dry_run: false,
@@ -702,9 +703,19 @@ const OrgRuleModal = ({ open, rule, onOk, onCancel, storages }) => {
             browseLabel={tgtBrowseLabel}
           />
 
-          {/* ── 自动整理 + 监控模式 ── */}
+          {/* ── 转移方式 + 自动整理 + 监控模式 ── */}
           <Row gutter={16}>
-            <Col span={12}>
+            <Col span={8}>
+              <Form.Item label="转移方式" tooltip="决定文件从监控目录移动到目标目录的方式" style={{ marginBottom: 12 }}>
+                <Select value={draft.transfer_mode || 'move'} onChange={v => set({ transfer_mode: v })}
+                  style={{ width: '100%' }}
+                  options={[
+                    { value: 'move', label: '移动' },
+                    { value: 'copy', label: '复制' },
+                  ]} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
               <Form.Item label="自动整理" tooltip="选择自动整理触发方式" style={{ marginBottom: 12 }}>
                 <Select value={draft.auto_organize || 'monitor'} onChange={v => set({ auto_organize: v })}
                   style={{ width: '100%' }}
@@ -714,7 +725,7 @@ const OrgRuleModal = ({ open, rule, onOk, onCancel, storages }) => {
                   ]} />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={8}>
               <Form.Item label="监控模式"
                 tooltip="兼容模式：轮询检测，稳定但有延迟；性能模式：系统事件驱动，实时但对部分网络盘不兼容"
                 style={{ marginBottom: 12 }}>
