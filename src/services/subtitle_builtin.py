@@ -783,6 +783,39 @@ def _insert_fonts_section(ass_text: str, font_entries: dict) -> str:
 # Part 5: 主入口（含 reMap：同字体文件字符集合并，只子集化一次）
 # ═══════════════════════════════════════════════════════════
 
+def _get_embedded_font_names(ass_text: str) -> set:
+    """
+    提取 ASS [Fonts] 段中已内嵌字体的文件名集合（小写，去扩展名）。
+
+    fontInAss 子集化后的字幕：
+      - 把字体名替换为随机 8 位大写字母（如 RM8KN26Q）
+      - 把子集化字体以 UUEncoded 格式写入 [Fonts] 段，每段开头是
+        "filename: RM8KN26Q"（无扩展名）
+
+    返回的集合用于快速判断某个字体名是否已内嵌，无需再查找/下载。
+    """
+    embedded: set = set()
+    in_fonts = False
+    for line in ass_text.splitlines():
+        s = line.strip()
+        if s.startswith("["):
+            in_fonts = (s.lower() == "[fonts]")
+            continue
+        if not in_fonts:
+            continue
+        if s.lower().startswith("filename:"):
+            fname = s[9:].strip()                   # "RM8KN26Q" 或 "RM8KN26Q.ttf"
+            fname_lower = fname.lower()
+            # 去掉可能的扩展名
+            for ext in (".ttf", ".otf", ".ttc", ".otc"):
+                if fname_lower.endswith(ext):
+                    fname_lower = fname_lower[: -len(ext)]
+                    break
+            if fname_lower:
+                embedded.add(fname_lower)
+    return embedded
+
+
 async def _process_ass_content(ass_text: str, raw_bytes: bytes) -> tuple:
     """
     ASS 内容子集化核心。
@@ -796,6 +829,21 @@ async def _process_ass_content(ass_text: str, raw_bytes: bytes) -> tuple:
         logger.info("[builtin] ASS 无字体信息，直接返回原始内容")
         return raw_bytes, [], "text/x-ssa; charset=utf-8"
 
+    # ── 检测已内嵌字体（fontInAss 子集化产物）────────────────────────────────
+    # 这类字幕的字体名是随机 8 位大写字母（如 RM8KN26Q），字体数据已内嵌在
+    # [Fonts] 段，无需也无法再查找/下载——直接透传原始字幕即可。
+    embedded_names = _get_embedded_font_names(ass_text)
+    if embedded_names:
+        # 判断哪些 key 已内嵌（字体名小写后在 embedded_names 中）
+        all_embedded = all(
+            (key.rsplit("^", 1)[0] if "^" in key else key).lower() in embedded_names
+            for key in font_chars
+        )
+        if all_embedded:
+            logger.info("[builtin] 字幕已含内嵌字体（%s），直接透传",
+                        ", ".join(sorted(embedded_names)))
+            return raw_bytes, [], "text/x-ssa; charset=utf-8"
+
     logger.info("[builtin] ASS 解析: %d 个字体 key: %s",
                 len(font_chars),
                 ", ".join(f"{k}({v}字符)" for k, v in font_chars.items()))
@@ -808,6 +856,11 @@ async def _process_ass_content(ass_text: str, raw_bytes: bytes) -> tuple:
                             else (key, _VARIANT_REGULAR))
         is_bold   = "Bold"   in subfamily
         is_italic = "Italic" in subfamily
+
+        # ── 该字体已内嵌在 [Fonts] 段，跳过查找 ─────────────────────────────
+        if fname.lower() in embedded_names:
+            logger.debug("[builtin] 跳过已内嵌字体: %s", key)
+            continue
 
         # ── 优先查 DB 字体索引（持久化缓存，重启不丢失）─────────────────────────
         loc = None
