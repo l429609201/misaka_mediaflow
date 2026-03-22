@@ -82,7 +82,7 @@ export const Drive115 = () => {
   const [strmStatus,  setStrmStatus]  = useState({})
   const [strmSyncing, setStrmSyncing] = useState(false)
 
-  const [monitorCfg,    setMonitorCfg]    = useState({ poll_interval: 30, auto_inc_sync: true, monitor_dir: '', strm_dir: '' })
+  const [monitorCfg,    setMonitorCfg]    = useState({ poll_interval: 30, auto_inc_sync: true, monitor_dir: '', strm_dir: '', use_custom_dir: false })
   const [monitorStatus, setMonitorStatus] = useState({})
   const [monitorSaving, setMonitorSaving] = useState(false)
 
@@ -494,14 +494,41 @@ export const Drive115 = () => {
                 </div>
                 <Divider style={{ margin: '0 0 16px' }} />
                 <Form layout="vertical" size="small">
+                  {/* 全局 / 自定义 目录开关 */}
+                  <Form.Item style={{ marginBottom: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      background: monitorCfg.use_custom_dir ? '#f6ffed' : '#f5f5f5',
+                      border: `1px solid ${monitorCfg.use_custom_dir ? '#b7eb8f' : '#d9d9d9'}`,
+                      borderRadius: 8, padding: '8px 14px', transition: 'all .25s' }}>
+                      <div>
+                        <Text strong style={{ fontSize: 13 }}>
+                          {monitorCfg.use_custom_dir ? '自定义目录' : '使用全局配置'}
+                        </Text>
+                        <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>
+                          {monitorCfg.use_custom_dir
+                            ? '使用下方目录，覆盖全局路径映射'
+                            : '沿用「整理与路径映射」中的云盘/STRM路径'}
+                        </div>
+                      </div>
+                      <Switch
+                        checkedChildren="自定义"
+                        unCheckedChildren="全局"
+                        checked={monitorCfg.use_custom_dir}
+                        onChange={v => setMonitorCfg(c => ({ ...c, use_custom_dir: v }))}
+                      />
+                    </div>
+                  </Form.Item>
                   <Form.Item label="监控目录" tooltip="生活事件监控扫描的115网盘目录">
                     <Input
-                      placeholder="/待整理"
+                      placeholder={monitorCfg.use_custom_dir ? '/待整理' : '（使用全局云盘根目录）'}
+                      disabled={!monitorCfg.use_custom_dir}
                       value={monitorCfg.monitor_dir || ''}
                       onChange={e => setMonitorCfg(c => ({ ...c, monitor_dir: e.target.value }))}
                       addonAfter={
                         <Button type="link" size="small" icon={<FolderOpenOutlined />}
-                          onClick={() => setMonitorDirPickerOpen(true)} style={{ padding: 0, height: 'auto' }}>
+                          disabled={!monitorCfg.use_custom_dir}
+                          onClick={() => monitorCfg.use_custom_dir && setMonitorDirPickerOpen(true)}
+                          style={{ padding: 0, height: 'auto' }}>
                           选择
                         </Button>
                       }
@@ -509,12 +536,15 @@ export const Drive115 = () => {
                   </Form.Item>
                   <Form.Item label="STRM目录" tooltip="监控到新文件后生成 STRM 的本地目录">
                     <Input
-                      placeholder="/config/strm"
+                      placeholder={monitorCfg.use_custom_dir ? '/config/strm' : '（使用全局STRM根目录）'}
+                      disabled={!monitorCfg.use_custom_dir}
                       value={monitorCfg.strm_dir || ''}
                       onChange={e => setMonitorCfg(c => ({ ...c, strm_dir: e.target.value }))}
                       addonAfter={
                         <Button type="link" size="small" icon={<FolderOpenOutlined />}
-                          onClick={() => setStrmDirPickerOpen(true)} style={{ padding: 0, height: 'auto' }}>
+                          disabled={!monitorCfg.use_custom_dir}
+                          onClick={() => monitorCfg.use_custom_dir && setStrmDirPickerOpen(true)}
+                          style={{ padding: 0, height: 'auto' }}>
                           选择
                         </Button>
                       }
