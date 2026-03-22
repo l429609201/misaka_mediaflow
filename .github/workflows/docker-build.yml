@@ -41,8 +41,6 @@ jobs:
       # ==================== 1. 检出代码 ====================
       - name: 检出代码
         uses: actions/checkout@v6
-        with:
-          lfs: true  # 拉取 Git LFS 文件（ffmpeg-image/ 下的静态二进制）
 
       # ==================== 2. 确定构建平台 ====================
       - name: 设置构建平台
@@ -135,15 +133,17 @@ jobs:
       # ==================== 10. 输出结果 ====================
       - name: 输出镜像结果
         run: |
-          echo "### 🐳 Docker 镜像已发布" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**版本:** ${{ steps.vars.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "**提交:** ${{ steps.vars.outputs.git_commit }}" >> $GITHUB_STEP_SUMMARY
-          echo "**分支/标签:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "**平台:** ${{ steps.platforms.outputs.platform_display }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**镜像标签:**" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          {
+            echo "### 🐳 Docker 镜像已发布"
+            echo ""
+            echo "**版本:** ${{ steps.vars.outputs.version }}"
+            echo "**提交:** ${{ steps.vars.outputs.git_commit }}"
+            echo "**分支/标签:** ${{ github.ref_name }}"
+            echo "**平台:** ${{ steps.platforms.outputs.platform_display }}"
+            echo ""
+            echo "**镜像标签:**"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY
 
