@@ -534,7 +534,8 @@ tv:
 const DEFAULT_ORG_RULE = {
   name: '新规则',
   enabled: true,
-  media_type: 'all',
+  media_type: 'all',             // 'all' | 'movie' | 'tv'
+  media_category: 'all',         // 'all' | 分类规则中的分类名（动态）
   // 监控目录（单条）
   source_storage: 'local',
   monitor_path: '',
@@ -543,6 +544,7 @@ const DEFAULT_ORG_RULE = {
   target_root: '',
   // 整理行为
   transfer_mode: 'move',         // 'move' | 'copy'
+  overwrite_mode: 'never',       // 'never' | 'always' | 'by_size' | 'keep_newest'
   auto_organize: 'monitor',      // 'monitor' | 'none'
   monitor_mode: 'compatibility', // 'compatibility' | 'performance'
   dry_run: false,
@@ -616,7 +618,7 @@ const StoragePathRow = ({ label, tooltip, storageVal, pathVal, storageOptions,
   </Form.Item>
 )
 
-const OrgRuleModal = ({ open, rule, onOk, onCancel, storages }) => {
+const OrgRuleModal = ({ open, rule, onOk, onCancel, storages, categories }) => {
   const [draft, setDraft] = useState(rule)
   // 目录选择器：src用源存储，target/unrecognized用目标存储
   const [pickerState, setPickerState] = useState({ open: false, type: null, field: null })
@@ -664,17 +666,30 @@ const OrgRuleModal = ({ open, rule, onOk, onCancel, storages }) => {
         okText="确定" cancelText="取消" width={660} destroyOnHidden>
         <Form layout="vertical" size="small" style={{ marginTop: 8 }}>
 
-          {/* ── 行1：规则别名 / 媒体类型 ── */}
+          {/* ── 行1：规则别名 ── */}
+          <Form.Item label="规则别名" style={{ marginBottom: 12 }}>
+            <Input value={draft.name} onChange={e => set({ name: e.target.value })} placeholder="如：网盘-电影" />
+          </Form.Item>
+
+          {/* ── 行2：媒体类型 + 媒体类别 ── */}
           <Row gutter={16}>
-            <Col span={14}>
-              <Form.Item label="规则别名" style={{ marginBottom: 12 }}>
-                <Input value={draft.name} onChange={e => set({ name: e.target.value })} placeholder="如：网盘待整理" />
+            <Col span={12}>
+              <Form.Item label="媒体类型" tooltip="限定该规则处理的媒体大类" style={{ marginBottom: 12 }}>
+                <Select value={draft.media_type || 'all'} onChange={v => set({ media_type: v })} style={{ width: '100%' }}
+                  options={[
+                    { value: 'all',   label: '全部' },
+                    { value: 'movie', label: '电影' },
+                    { value: 'tv',    label: '剧集' },
+                  ]} />
               </Form.Item>
             </Col>
-            <Col span={10}>
-              <Form.Item label="媒体类型" style={{ marginBottom: 12 }}>
-                <Select value={draft.media_type || 'all'} onChange={v => set({ media_type: v })} style={{ width: '100%' }}
-                  options={[{ value: 'all', label: '全部' }, { value: 'movie', label: '电影' }, { value: 'tv', label: '剧集' }]} />
+            <Col span={12}>
+              <Form.Item label="媒体类别" tooltip="对应「分类规则」Tab中配置的分类名称，选全部则不限类别" style={{ marginBottom: 12 }}>
+                <Select value={draft.media_category || 'all'} onChange={v => set({ media_category: v })} style={{ width: '100%' }}
+                  options={[
+                    { value: 'all', label: '全部' },
+                    ...categories.map(c => ({ value: c, label: c })),
+                  ]} />
               </Form.Item>
             </Col>
           </Row>
@@ -862,28 +877,33 @@ const OrgRuleCard = ({ rule, idx, total, onEdit, onDelete, onMove, onRun, runnin
 // Tab1 — 目录整理
 // =============================================================================
 const OrganizeTab = () => {
-  const [rules,       setRules]       = useState([])
-  const [saving,      setSaving]      = useState(false)
-  const [loading,     setLoading]     = useState(true)
-  const [running,     setRunning]     = useState({})
-  const [orgStatus,   setOrgStatus]   = useState({})
-  const [editingIdx,  setEditingIdx]  = useState(null)
-  const [storages,    setStorages]    = useState([])
-  const [unrecognizedDir, setUnrecognizedDir] = useState('')  // 只读，来自 path-mapping
+  const [rules,            setRules]            = useState([])
+  const [saving,           setSaving]           = useState(false)
+  const [loading,          setLoading]          = useState(true)
+  const [running,          setRunning]          = useState({})
+  const [orgStatus,        setOrgStatus]        = useState({})
+  const [editingIdx,       setEditingIdx]       = useState(null)
+  const [storages,         setStorages]         = useState([])
+  const [categories,       setCategories]       = useState([])   // 来自分类规则的分类名列表
+  const [unrecognizedDir,  setUnrecognizedDir]  = useState('')   // 只读，来自 path-mapping
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [rulesRes, stRes, storageRes, pmRes] = await Promise.all([
+      const [rulesRes, stRes, storageRes, pmRes, cfgRes] = await Promise.all([
         classifyApi.getOrganizeRules(),
         p115StrmApi.getOrganizeStatus(),
         storageApi.list(),
         p115Api.getPathMapping(),
+        classifyApi.getConfig(),
       ])
       const rulesData = rulesRes.data?.rules || rulesRes.data || []
       setRules(Array.isArray(rulesData) ? rulesData : [])
       setOrgStatus(stRes.data || {})
       setUnrecognizedDir(pmRes.data?.organize_unrecognized || '')
+      // 从分类引擎配置中提取所有分类名
+      const cats = (cfgRes.data?.categories || []).map(c => c.name).filter(Boolean)
+      setCategories(cats)
       const storageList = Array.isArray(storageRes.data?.items)
         ? storageRes.data.items.filter(s => s.is_active !== 0)
         : Array.isArray(storageRes.data) ? storageRes.data.filter(s => s.is_active !== 0) : []
@@ -1003,6 +1023,7 @@ const OrganizeTab = () => {
         open={editingIdx !== null}
         rule={editingIdx !== null ? rules[editingIdx] : null}
         storages={storages}
+        categories={categories}
         onOk={(updated) => { updateRule(editingIdx, updated); setEditingIdx(null) }}
         onCancel={() => setEditingIdx(null)}
       />
