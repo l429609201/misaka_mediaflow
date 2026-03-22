@@ -1,16 +1,19 @@
 // web/src/pages/classify/index.jsx
-// 整理分类引擎 — 通用模块（MP 风格）
+// 整理分类引擎 — 通用独立模块
+// 图形化：MP风格弹窗式编辑（每个维度专属控件）
+// 代码模式：自定义 ini-like 格式，有专属解析器
 
 import { useEffect, useState, useCallback } from 'react'
 import {
-  Card, Row, Col, Input, Switch, Button, Select,
-  Space, Alert, Tooltip, Divider, message, Segmented,
-  Tag, Typography, Form, Spin,
+  Card, Row, Col, Input, Switch, Button, Select, Modal, Form,
+  Space, Alert, Tooltip, Divider, message, Segmented, Tag,
+  Typography, Spin, InputNumber,
 } from 'antd'
 import {
   PlusOutlined, DeleteOutlined, SaveOutlined, ReloadOutlined,
-  ArrowUpOutlined, ArrowDownOutlined, CodeOutlined, AppstoreOutlined,
-  FolderOpenOutlined, CheckCircleFilled, ExclamationCircleFilled,
+  EditOutlined, ArrowUpOutlined, ArrowDownOutlined,
+  CodeOutlined, AppstoreOutlined, FolderOpenOutlined,
+  CheckCircleFilled, ExclamationCircleFilled, CopyOutlined,
 } from '@ant-design/icons'
 import { classifyApi } from '@/apis'
 import DirPickerModal from '@/components/DirPickerModal'
@@ -18,200 +21,428 @@ import DirPickerModal from '@/components/DirPickerModal'
 const { Text, Title } = Typography
 const { TextArea } = Input
 
+// ─── 默认配置 ─────────────────────────────────────────────────────────────────
 const DEFAULT_CONFIG = {
   enabled: true, dry_run: false, target_root: '', unrecognized_dir: '', categories: [],
 }
 
+// ─── 分类颜色 ─────────────────────────────────────────────────────────────────
 const CAT_COLORS = [
   '#6366f1','#10b981','#f59e0b','#ef4444',
   '#8b5cf6','#06b6d4','#f97316','#ec4899','#84cc16','#14b8a6',
 ]
 
-const RULE_TYPE_GROUPS = [
-  { label: '本地匹配', options: [
-    { value: 'keyword', label: '关键词' },
-    { value: 'regex',   label: '正则表达式' },
-  ]},
-  { label: '元数据匹配', options: [
-    { value: 'genre_ids',         label: 'TMDB 类型 ID' },
-    { value: 'origin_country',    label: '产地代码' },
-    { value: 'original_language', label: '原始语言' },
-  ]},
+// ─── TMDB 流派 ID 选项 ────────────────────────────────────────────────────────
+const GENRE_OPTIONS = [
+  { value: '16',    label: '动画 Animation' },
+  { value: '99',    label: '纪录片 Documentary' },
+  { value: '10767', label: '脱口秀 Talk' },
+  { value: '10764', label: '真人秀 Reality' },
+  { value: '28',    label: '动作 Action' },
+  { value: '12',    label: '冒险 Adventure' },
+  { value: '35',    label: '喜剧 Comedy' },
+  { value: '18',    label: '剧情 Drama' },
+  { value: '10751', label: '家庭 Family' },
+  { value: '14',    label: '奇幻 Fantasy' },
+  { value: '36',    label: '历史 History' },
+  { value: '27',    label: '恐怖 Horror' },
+  { value: '10402', label: '音乐 Music' },
+  { value: '9648',  label: '悬疑 Mystery' },
+  { value: '10749', label: '爱情 Romance' },
+  { value: '878',   label: '科幻 Sci-Fi' },
+  { value: '10770', label: 'TV Movie' },
+  { value: '53',    label: '惊悚 Thriller' },
+  { value: '10752', label: '战争 War' },
+  { value: '37',    label: '西部 Western' },
+  { value: '10759', label: '动作冒险 Action&Adventure' },
+  { value: '10762', label: '儿童 Kids' },
+  { value: '10763', label: '新闻 News' },
+  { value: '10766', label: '肥皂剧 Soap' },
 ]
 
-const FIELD_OPTIONS = [
-  { value: 'filename', label: '文件名' },
-  { value: 'dirname',  label: '目录名' },
+// ─── 产地选项 ─────────────────────────────────────────────────────────────────
+const COUNTRY_OPTIONS = [
+  { value: 'JP', label: '日本 JP' },
+  { value: 'CN', label: '中国 CN' },
+  { value: 'US', label: '美国 US' },
+  { value: 'KR', label: '韩国 KR' },
+  { value: 'GB', label: '英国 GB' },
+  { value: 'FR', label: '法国 FR' },
+  { value: 'DE', label: '德国 DE' },
+  { value: 'TH', label: '泰国 TH' },
+  { value: 'IN', label: '印度 IN' },
+  { value: 'HK', label: '香港 HK' },
+  { value: 'TW', label: '台湾 TW' },
 ]
-const LOCAL_TYPES = ['keyword', 'regex']
 
-// ─── 单条规则行 ───────────────────────────────────────────────────────────────
-const RuleRow = ({ rule, onChange, onDelete }) => {
-  const needsField = LOCAL_TYPES.includes(rule.type)
+// ─── 语言选项 ─────────────────────────────────────────────────────────────────
+const LANG_OPTIONS = [
+  { value: 'ja', label: '日语 ja' },
+  { value: 'zh', label: '中文 zh' },
+  { value: 'en', label: '英语 en' },
+  { value: 'ko', label: '韩语 ko' },
+  { value: 'fr', label: '法语 fr' },
+  { value: 'de', label: '德语 de' },
+  { value: 'th', label: '泰语 th' },
+]
+
+// ─── 适用对象 ─────────────────────────────────────────────────────────────────
+const MEDIA_TYPE_OPTIONS = [
+  { value: 'all',   label: '全部' },
+  { value: 'movie', label: '电影' },
+  { value: 'tv',    label: '剧集' },
+]
+
+// =============================================================================
+// 自定义代码格式解析器
+// 格式示例:
+//   [动漫]
+//   target_dir = 动漫
+//   media_type = all
+//   genre_ids  = 16, 10762
+//   country    = JP
+//   language   = ja
+//   keyword    = 动漫, 动画, 番剧
+//   keyword_dir= 动漫, 番剧
+//   regex      = (?i)(anime|OVA)
+//   match_all  = false
+// =============================================================================
+
+const CFG_TEMPLATE = `# 整理分类引擎配置
+# 每个 [分类名] 块定义一条分类规则，匹配优先级从上到下
+# 空 rules 的分类为"兜底分类"，匹配所有未归类文件
+
+[动漫]
+target_dir = 动漫
+media_type = all
+genre_ids  = 16
+country    = JP
+language   = ja
+keyword    = 动漫, 动画, 番剧
+regex      = (?i)(anime|OVA|OAD)
+match_all  = false
+
+[电影]
+target_dir = 电影
+media_type = movie
+keyword    =
+match_all  = false
+
+[其他]
+target_dir = 其他
+# 空规则 = 兜底分类
+`
+
+function parseCfgText(text) {
+  const categories = []
+  let cur = null
+  for (const rawLine of text.split('\n')) {
+    const line = rawLine.trim()
+    if (!line || line.startsWith('#')) continue
+    const secMatch = line.match(/^\[(.+)\]$/)
+    if (secMatch) {
+      if (cur) categories.push(cur)
+      cur = { name: secMatch[1], target_dir: '', media_type: 'all', genre_ids: [], country: [], language: [], keyword: [], keyword_dir: [], regex: [], match_all: false }
+      continue
+    }
+    if (!cur) continue
+    const eqIdx = line.indexOf('=')
+    if (eqIdx < 0) continue
+    const key = line.slice(0, eqIdx).trim()
+    const val = line.slice(eqIdx + 1).trim()
+    if (key === 'target_dir') { cur.target_dir = val }
+    else if (key === 'media_type') { cur.media_type = val || 'all' }
+    else if (key === 'match_all') { cur.match_all = val.toLowerCase() === 'true' }
+    else if (key === 'genre_ids') { cur.genre_ids = val ? val.split(',').map(s => s.trim()).filter(Boolean) : [] }
+    else if (key === 'country') { cur.country = val ? val.split(',').map(s => s.trim()).filter(Boolean) : [] }
+    else if (key === 'language') { cur.language = val ? val.split(',').map(s => s.trim()).filter(Boolean) : [] }
+    else if (key === 'keyword') { cur.keyword = val ? val.split(',').map(s => s.trim()).filter(Boolean) : [] }
+    else if (key === 'keyword_dir') { cur.keyword_dir = val ? val.split(',').map(s => s.trim()).filter(Boolean) : [] }
+    else if (key === 'regex') { cur.regex = val ? val.split(',').map(s => s.trim()).filter(Boolean) : [] }
+  }
+  if (cur) categories.push(cur)
+  return categories
+}
+
+function catToText(cat) {
+  const lines = [`[${cat.name}]`]
+  lines.push(`target_dir = ${cat.target_dir || ''}`)
+  lines.push(`media_type = ${cat.media_type || 'all'}`)
+  if (cat.genre_ids?.length)   lines.push(`genre_ids  = ${cat.genre_ids.join(', ')}`)
+  if (cat.country?.length)     lines.push(`country    = ${cat.country.join(', ')}`)
+  if (cat.language?.length)    lines.push(`language   = ${cat.language.join(', ')}`)
+  if (cat.keyword?.length)     lines.push(`keyword    = ${cat.keyword.join(', ')}`)
+  if (cat.keyword_dir?.length) lines.push(`keyword_dir= ${cat.keyword_dir.join(', ')}`)
+  if (cat.regex?.length)       lines.push(`regex      = ${cat.regex.join(', ')}`)
+  lines.push(`match_all  = ${cat.match_all ? 'true' : 'false'}`)
+  return lines.join('\n')
+}
+
+function cfgToText(cats) {
+  return [
+    '# 整理分类引擎配置',
+    '# 每个 [分类名] 块定义一条分类规则，匹配优先级从上到下',
+    '# 空 rules 的分类为"兜底分类"，匹配所有未归类文件',
+    '',
+    ...cats.map(c => catToText(c) + '\n'),
+  ].join('\n')
+}
+
+// 把 UI 内部格式 → 后端 API categories 格式
+function uiCatToApiCat(cat) {
+  const rules = []
+  if (cat.genre_ids?.length)   rules.push({ type:'genre_ids',         value: cat.genre_ids.join(',') })
+  if (cat.country?.length)     rules.push({ type:'origin_country',    value: cat.country.join(',') })
+  if (cat.language?.length)    rules.push({ type:'original_language', value: cat.language.join(',') })
+  for (const k of (cat.keyword    || [])) rules.push({ type:'keyword', field:'filename', value:k })
+  for (const k of (cat.keyword_dir|| [])) rules.push({ type:'keyword', field:'dirname',  value:k })
+  for (const r of (cat.regex      || [])) rules.push({ type:'regex',   field:'filename', value:r })
+  return { name: cat.name, target_dir: cat.target_dir, match_all: cat.match_all, rules }
+}
+
+// 把后端 API categories 格式 → UI 内部格式
+function apiCatToUiCat(cat) {
+  const ui = { name: cat.name, target_dir: cat.target_dir||'', media_type:'all', match_all:!!cat.match_all, genre_ids:[], country:[], language:[], keyword:[], keyword_dir:[], regex:[] }
+  for (const r of (cat.rules || [])) {
+    if (r.type === 'genre_ids')         ui.genre_ids.push(...(r.value||'').split(',').map(s=>s.trim()).filter(Boolean))
+    else if (r.type === 'origin_country')    ui.country.push(...(r.value||'').split(',').map(s=>s.trim()).filter(Boolean))
+    else if (r.type === 'original_language') ui.language.push(...(r.value||'').split(',').map(s=>s.trim()).filter(Boolean))
+    else if (r.type === 'keyword' && r.field === 'dirname')  ui.keyword_dir.push(r.value)
+    else if (r.type === 'keyword')  ui.keyword.push(r.value)
+    else if (r.type === 'regex')    ui.regex.push(r.value)
+  }
+  return ui
+}
+
+// =============================================================================
+// 分类编辑弹窗（MP 风格：每个维度专属控件）
+// =============================================================================
+const EditCategoryModal = ({ open, cat, onOk, onCancel }) => {
+  const [form] = Form.useForm()
+
+  useEffect(() => {
+    if (open && cat) form.setFieldsValue({ ...cat })
+  }, [open, cat, form])
+
+  const handleOk = () => {
+    form.validateFields().then(vals => onOk({ ...cat, ...vals }))
+  }
+
   return (
-    <div style={{ display:'flex', alignItems:'center', gap:6, padding:'4px 0' }}>
-      <Select size="small" value={rule.type} style={{ width:132, flexShrink:0 }}
-        options={RULE_TYPE_GROUPS}
-        onChange={v => onChange({ ...rule, type:v, field: LOCAL_TYPES.includes(v)?(rule.field||'filename'):undefined })}
-      />
-      {needsField
-        ? <Select size="small" value={rule.field||'filename'} style={{ width:88, flexShrink:0 }}
-            options={FIELD_OPTIONS} onChange={v => onChange({ ...rule, field:v })} />
-        : <div style={{ width:88, flexShrink:0 }} />
-      }
-      <Input size="small" value={rule.value} style={{ flex:1 }}
-        placeholder={
-          rule.type==='genre_ids'         ? '如：16（动画）、28（动作）' :
-          rule.type==='origin_country'    ? '如：JP、CN、US' :
-          rule.type==='original_language' ? '如：ja、zh、en' : '匹配值'
-        }
-        onChange={e => onChange({ ...rule, value:e.target.value })}
-      />
-      <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={onDelete} />
-    </div>
+    <Modal
+      open={open}
+      title={<Space><EditOutlined />{cat?.name ? `编辑分类：${cat.name}` : '新建分类'}</Space>}
+      onOk={handleOk}
+      onCancel={onCancel}
+      width={600}
+      okText="确定"
+      cancelText="取消"
+      destroyOnClose
+    >
+      <Form form={form} layout="vertical" size="middle" style={{ marginTop: 8 }}>
+        <Row gutter={16}>
+          <Col span={12}>
+            <Form.Item name="name" label="分类名称" rules={[{ required:true, message:'请输入分类名称' }]}>
+              <Input placeholder="如：动漫" />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="target_dir" label="目标子目录" tooltip="相对于目标根目录的子目录名">
+              <Input placeholder="如：动漫 / Anime" />
+            </Form.Item>
+          </Col>
+        </Row>
+
+        <Row gutter={16}>
+          <Col span={12}>
+            <Form.Item name="media_type" label="适用对象">
+              <Select options={MEDIA_TYPE_OPTIONS} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="match_all" label="规则匹配逻辑" tooltip="AND=所有条件都满足；OR=任意条件满足">
+              <Select options={[{ value:false, label:'任意满足 (OR)' },{ value:true, label:'全部满足 (AND)' }]} />
+            </Form.Item>
+          </Col>
+        </Row>
+
+        <Divider style={{ margin:'8px 0 16px' }}>TMDB 元数据匹配</Divider>
+
+        <Form.Item name="genre_ids" label="流派 / 类型">
+          <Select mode="multiple" allowClear placeholder="选择流派（可多选）" options={GENRE_OPTIONS}
+            optionFilterProp="label" maxTagCount="responsive" />
+        </Form.Item>
+
+        <Row gutter={16}>
+          <Col span={12}>
+            <Form.Item name="country" label="原始国家 / 地区">
+              <Select mode="multiple" allowClear placeholder="如：JP、CN" options={COUNTRY_OPTIONS}
+                optionFilterProp="label" maxTagCount="responsive" />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="language" label="原始语言">
+              <Select mode="multiple" allowClear placeholder="如：ja、zh" options={LANG_OPTIONS}
+                optionFilterProp="label" maxTagCount="responsive" />
+            </Form.Item>
+          </Col>
+        </Row>
+
+        <Divider style={{ margin:'8px 0 16px' }}>本地文件名匹配</Divider>
+
+        <Form.Item name="keyword" label="文件名关键词" tooltip="包含任意关键词即命中，多个关键词用回车或逗号分隔">
+          <Select mode="tags" allowClear placeholder="输入关键词后回车，如：动漫、动画" tokenSeparators={[',']} />
+        </Form.Item>
+
+        <Form.Item name="keyword_dir" label="目录名关键词" tooltip="匹配文件所在目录名">
+          <Select mode="tags" allowClear placeholder="输入目录关键词后回车" tokenSeparators={[',']} />
+        </Form.Item>
+
+        <Form.Item name="regex" label="正则表达式" tooltip="匹配文件名，多条正则分别匹配（任一命中）">
+          <Select mode="tags" allowClear placeholder="如：(?i)(anime|OVA|OAD)" tokenSeparators={[',']} />
+        </Form.Item>
+
+        <Alert type="info" showIcon style={{ marginTop:8 }} message={
+          <span>无任何匹配条件的分类将作为<b>兜底分类</b>，匹配所有未归类文件，建议放在列表最末。</span>
+        } />
+      </Form>
+    </Modal>
   )
 }
 
-// ─── 分类卡片 ─────────────────────────────────────────────────────────────────
-const CategoryCard = ({ cat, idx, total, color, onUpdate, onDelete, onMove }) => {
-  const rules = cat.rules || []
-  const isDefault = rules.length === 0
-  const addRule = () => onUpdate({ rules:[...rules,{ type:'keyword', field:'filename', value:'' }] })
-  const updateRule = (ri,r) => onUpdate({ rules:rules.map((x,i)=>i===ri?r:x) })
-  const deleteRule = (ri) => onUpdate({ rules:rules.filter((_,i)=>i!==ri) })
+// =============================================================================
+// 分类卡片（列表项）
+// =============================================================================
+const CategoryItem = ({ cat, idx, total, color, onEdit, onDelete, onMove }) => {
+  const hasRules = (cat.genre_ids?.length || cat.country?.length || cat.language?.length ||
+    cat.keyword?.length || cat.keyword_dir?.length || cat.regex?.length)
+  const isDefault = !hasRules
+
+  const tagStyle = { fontSize:11 }
 
   return (
     <div style={{
-      borderRadius:10, overflow:'hidden',
+      display:'flex', alignItems:'center', gap:10,
+      padding:'10px 14px',
+      borderRadius:10,
       border:'1px solid var(--ant-color-border,#e5e7eb)',
-      marginBottom:10,
+      marginBottom:8,
       background:'var(--ant-color-bg-container,#fff)',
-      boxShadow:'0 1px 4px rgba(0,0,0,.05)',
+      boxShadow:'0 1px 3px rgba(0,0,0,.05)',
+      borderLeft:`4px solid ${color}`,
+      cursor:'default',
     }}>
-      {/* ── 头部 ── */}
+      {/* 序号 */}
       <div style={{
-        display:'flex', alignItems:'center', gap:8, padding:'8px 12px',
-        borderLeft:`4px solid ${color}`,
-        background:'var(--ant-color-fill-quaternary,rgba(0,0,0,.02))',
-        borderBottom:'1px solid var(--ant-color-border-secondary,#f0f0f0)',
-      }}>
-        <div style={{
-          width:22, height:22, borderRadius:'50%', background:color, color:'#fff',
-          display:'flex', alignItems:'center', justifyContent:'center',
-          fontSize:11, fontWeight:700, flexShrink:0,
-        }}>{idx+1}</div>
+        width:24, height:24, borderRadius:'50%', background:color,
+        color:'#fff', display:'flex', alignItems:'center', justifyContent:'center',
+        fontSize:12, fontWeight:700, flexShrink:0,
+      }}>{idx+1}</div>
 
-        <Input variant="borderless" size="small" value={cat.name} placeholder="分类名称"
-          style={{ fontWeight:600, fontSize:13, flex:'0 0 130px', padding:'0 4px' }}
-          onChange={e=>onUpdate({ name:e.target.value })} />
-
-        <Text type="secondary" style={{ fontSize:12, flexShrink:0 }}>→</Text>
-
-        <Input variant="borderless" size="small" value={cat.target_dir} placeholder="目标子目录（相对根目录）"
-          style={{ flex:1, fontSize:12, color:'#888', padding:'0 4px' }}
-          onChange={e=>onUpdate({ target_dir:e.target.value })} />
-
-        {isDefault && <Tag color="orange" style={{ fontSize:11, flexShrink:0 }}>兜底</Tag>}
-        <Tag style={{ fontSize:11, flexShrink:0, color:'#888' }}>{rules.length} 条规则</Tag>
-
-        <Tooltip title="命中多条规则时：任一=OR，全部=AND">
-          <Select size="small" variant="borderless" value={cat.match_all?'all':'any'}
-            style={{ width:66, flexShrink:0 }}
-            options={[{ value:'any', label:'任一' },{ value:'all', label:'全部' }]}
-            onChange={v=>onUpdate({ match_all:v==='all' })} />
-        </Tooltip>
-
-        <Space size={2} style={{ flexShrink:0 }}>
-          <Tooltip title="上移">
-            <Button size="small" type="text" icon={<ArrowUpOutlined />} disabled={idx===0} onClick={()=>onMove(-1)} />
-          </Tooltip>
-          <Tooltip title="下移">
-            <Button size="small" type="text" icon={<ArrowDownOutlined />} disabled={idx===total-1} onClick={()=>onMove(1)} />
-          </Tooltip>
-          <Tooltip title="删除">
-            <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={onDelete} />
-          </Tooltip>
-        </Space>
+      {/* 分类名 + 目标目录 */}
+      <div style={{ flex:1, minWidth:0 }}>
+        <div style={{ fontWeight:600, fontSize:14 }}>{cat.name || <Text type="secondary">（未命名）</Text>}</div>
+        <div style={{ fontSize:12, color:'#888', marginTop:1 }}>
+          → {cat.target_dir || <Text type="secondary">未设置目标目录</Text>}
+        </div>
       </div>
 
-      {/* ── 规则区 ── */}
-      <div style={{ padding:'8px 12px' }}>
-        {isDefault ? (
-          <div style={{ padding:'7px 12px', borderRadius:6, fontSize:12, color:'#b45309', background:'rgba(251,191,36,.08)', border:'1px dashed #fbbf24' }}>
-            ⚡ 兜底分类：无规则时匹配所有未归类文件，建议放在列表最末。
-          </div>
-        ) : (
-          <>
-            <div style={{ display:'flex', gap:6, padding:'0 0 2px', fontSize:11, color:'#bbb' }}>
-              <div style={{ width:132 }}>规则类型</div>
-              <div style={{ width:88 }}>字段</div>
-              <div style={{ flex:1 }}>匹配值</div>
-              <div style={{ width:32 }} />
-            </div>
-            {rules.map((r,ri)=>(
-              <RuleRow key={ri} rule={r} onChange={nr=>updateRule(ri,nr)} onDelete={()=>deleteRule(ri)} />
-            ))}
-          </>
-        )}
-        <Button size="small" type="dashed" icon={<PlusOutlined />} block style={{ marginTop:6, fontSize:12 }} onClick={addRule}>
-          添加规则
-        </Button>
+      {/* 条件标签 */}
+      <div style={{ display:'flex', flexWrap:'wrap', gap:4, flex:2, minWidth:0 }}>
+        {isDefault
+          ? <Tag color="orange" style={tagStyle}>⚡ 兜底</Tag>
+          : <>
+              {cat.genre_ids?.map(id => {
+                const opt = GENRE_OPTIONS.find(o => o.value === id)
+                return <Tag key={id} color="blue" style={tagStyle}>{opt ? opt.label.split(' ')[0] : `类型${id}`}</Tag>
+              })}
+              {cat.country?.map(c => <Tag key={c} color="green" style={tagStyle}>{c}</Tag>)}
+              {cat.language?.map(l => <Tag key={l} color="purple" style={tagStyle}>{l}</Tag>)}
+              {cat.keyword?.map(k => <Tag key={k} color="default" style={tagStyle}>🔑{k}</Tag>)}
+              {cat.keyword_dir?.map(k => <Tag key={k} color="default" style={tagStyle}>📁{k}</Tag>)}
+              {cat.regex?.map(r => <Tag key={r} color="magenta" style={tagStyle}>正则</Tag>)}
+            </>
+        }
       </div>
+
+      {/* 逻辑标签 */}
+      <Tag style={{ flexShrink:0, fontSize:11, color:'#888' }}>
+        {cat.match_all ? 'AND' : 'OR'}
+      </Tag>
+
+      {/* 操作 */}
+      <Space size={2} style={{ flexShrink:0 }}>
+        <Tooltip title="编辑"><Button type="primary" ghost size="small" icon={<EditOutlined />} onClick={onEdit} /></Tooltip>
+        <Tooltip title="上移"><Button size="small" type="text" icon={<ArrowUpOutlined />} disabled={idx===0} onClick={()=>onMove(-1)} /></Tooltip>
+        <Tooltip title="下移"><Button size="small" type="text" icon={<ArrowDownOutlined />} disabled={idx===total-1} onClick={()=>onMove(1)} /></Tooltip>
+        <Tooltip title="删除"><Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={onDelete} /></Tooltip>
+      </Space>
     </div>
   )
 }
 
-// ─── 代码模式面板 ─────────────────────────────────────────────────────────────
+// =============================================================================
+// 代码模式面板
+// =============================================================================
 const CodePanel = ({ value, onChange }) => (
   <Row gutter={16}>
-    <Col xs={24} lg={15}>
-      <Card size="small" title={<span style={{ fontSize:13 }}>JSON 配置</span>} style={{ height:'100%' }}>
-        <TextArea
-          value={value}
-          onChange={e => onChange(e.target.value)}
-          autoSize={{ minRows:20, maxRows:40 }}
-          style={{ fontFamily:'monospace', fontSize:12 }}
+    <Col xs={24} lg={16}>
+      <Card size="small" title={
+        <Space>
+          <CodeOutlined />
+          <span>分类规则配置</span>
+          <Tag color="blue">自定义格式 · 非 JSON</Tag>
+        </Space>
+      }>
+        <TextArea value={value} onChange={e=>onChange(e.target.value)}
+          autoSize={{ minRows:24, maxRows:50 }}
+          style={{ fontFamily:'monospace', fontSize:12, lineHeight:1.7 }}
         />
       </Card>
     </Col>
-    <Col xs={24} lg={9}>
-      <Card size="small" title={<span style={{ fontSize:13 }}>字段说明</span>}
-        style={{ position:'sticky', top:24, fontSize:12, lineHeight:1.9 }}>
-        <div style={{ fontWeight:600, marginBottom:4 }}>顶层字段</div>
-        <div><Text code>enabled</Text> 启用分类引擎</div>
-        <div><Text code>dry_run</Text> 试运行（不移动文件）</div>
-        <div><Text code>target_root</Text> 目标根目录</div>
-        <div><Text code>unrecognized_dir</Text> 未识别目录</div>
+    <Col xs={24} lg={8}>
+      <Card size="small" title="格式说明" style={{ position:'sticky', top:24, fontSize:12, lineHeight:2 }}>
+        <div style={{ fontWeight:600, marginBottom:4 }}>块格式</div>
+        <pre style={{ fontSize:11, background:'rgba(0,0,0,.04)', borderRadius:6, padding:'8px 10px', margin:'0 0 10px' }}>{
+`[分类名称]
+target_dir = 目标子目录
+media_type = all | movie | tv
+genre_ids  = 16, 28, 35
+country    = JP, CN
+language   = ja, zh
+keyword    = 动漫, 动画
+keyword_dir= 番剧, 动漫
+regex      = (?i)(OVA|OAD)
+match_all  = false`
+        }</pre>
         <Divider style={{ margin:'8px 0' }} />
-        <div style={{ fontWeight:600, marginBottom:4 }}>categories[]</div>
-        <div><Text code>name</Text> 分类名称</div>
-        <div><Text code>target_dir</Text> 目标子目录</div>
-        <div><Text code>match_all</Text> true=AND / false=OR</div>
-        <div><Text code>rules[]</Text> 空数组 = 兜底分类</div>
-        <Divider style={{ margin:'8px 0' }} />
-        <div style={{ fontWeight:600, marginBottom:4 }}>rules[].type 取值</div>
-        <div><Text code>keyword</Text> 关键词（不区分大小写）</div>
-        <div><Text code>regex</Text> 正则表达式</div>
         <div><Text code>genre_ids</Text> TMDB 类型 ID</div>
-        <div><Text code>origin_country</Text> TMDB 产地代码</div>
-        <div><Text code>original_language</Text> TMDB 原始语言</div>
+        <div><Text code>country</Text> 产地代码（JP/CN/US…）</div>
+        <div><Text code>language</Text> 语言（ja/zh/en…）</div>
+        <div><Text code>keyword</Text> 文件名关键词（逗号分隔）</div>
+        <div><Text code>keyword_dir</Text> 目录名关键词</div>
+        <div><Text code>regex</Text> 正则（文件名）</div>
         <Divider style={{ margin:'8px 0' }} />
-        <div style={{ fontWeight:600, marginBottom:4 }}>常用 genre_ids</div>
-        <div style={{ color:'#888' }}>16=动画　99=纪录片　10767=脱口秀</div>
-        <div style={{ color:'#888' }}>28=动作　12=冒险　35=喜剧　18=剧情</div>
+        <div style={{ color:'#888' }}>无任何条件字段 = 兜底分类</div>
+        <div style={{ color:'#888' }}># 开头行为注释</div>
       </Card>
     </Col>
   </Row>
 )
 
-// ─── 主页面 ───────────────────────────────────────────────────────────────────
+// =============================================================================
+// 主页面
+// =============================================================================
 export const Classify = () => {
   const [cfg,       setCfg]       = useState(DEFAULT_CONFIG)
+  const [uiCats,    setUiCats]    = useState([])   // UI 内部格式
   const [mode,      setMode]      = useState('gui')
   const [codeText,  setCodeText]  = useState('')
   const [saving,    setSaving]    = useState(false)
   const [loading,   setLoading]   = useState(true)
   const [providers, setProviders] = useState([])
+  const [editCat,   setEditCat]   = useState(null)  // 当前编辑的分类
+  const [editIdx,   setEditIdx]   = useState(null)
   const [dirOpen,   setDirOpen]   = useState(false)
   const [dirField,  setDirField]  = useState(null)
 
@@ -225,7 +456,9 @@ export const Classify = () => {
       ])
       const data = r1.data || DEFAULT_CONFIG
       setCfg(data)
-      setCodeText(JSON.stringify(data, null, 2))
+      const ui = (data.categories || []).map(apiCatToUiCat)
+      setUiCats(ui)
+      setCodeText(cfgToText(ui))
       setProviders(Array.isArray(r2.data) ? r2.data : [])
     } catch {
       message.error('加载分类配置失败')
@@ -239,26 +472,31 @@ export const Classify = () => {
   // ── 模式切换 ──
   const switchMode = m => {
     if (m === 'code') {
-      setCodeText(JSON.stringify(cfg, null, 2))
+      setCodeText(cfgToText(uiCats))
     } else {
-      try { setCfg(JSON.parse(codeText)) }
-      catch { message.warning('JSON 格式有误，已保留图形化设置') }
+      try {
+        const parsed = parseCfgText(codeText)
+        setUiCats(parsed)
+      } catch {
+        message.warning('格式解析失败，已保留图形化设置')
+      }
     }
     setMode(m)
   }
 
   // ── 保存 ──
   const handleSave = async () => {
-    let payload = cfg
+    let cats = uiCats
     if (mode === 'code') {
-      try { payload = JSON.parse(codeText) }
-      catch { message.error('JSON 格式错误，无法保存'); return }
+      try { cats = parseCfgText(codeText) }
+      catch { message.error('格式解析错误'); return }
+      setUiCats(cats)
     }
+    const payload = { ...cfg, categories: cats.map(uiCatToApiCat) }
     setSaving(true)
     try {
       await classifyApi.saveConfig(payload)
       setCfg(payload)
-      setCodeText(JSON.stringify(payload, null, 2))
       message.success('分类配置已保存')
     } catch {
       message.error('保存失败')
@@ -268,120 +506,118 @@ export const Classify = () => {
   }
 
   // ── 分类操作 ──
-  const cats = cfg.categories || []
-  const updateCats = next => setCfg(c => ({ ...c, categories: next }))
-  const addCat = () => updateCats([...cats, { name:'新分类', target_dir:'', match_all:false, rules:[] }])
-  const updateCat = (i, patch) => updateCats(cats.map((c,ci) => ci===i ? { ...c, ...patch } : c))
-  const deleteCat = i => updateCats(cats.filter((_,ci) => ci!==i))
+  const addCat = () => {
+    const newCat = { name:'新分类', target_dir:'', media_type:'all', match_all:false, genre_ids:[], country:[], language:[], keyword:[], keyword_dir:[], regex:[] }
+    setUiCats(c => [...c, newCat])
+    setEditCat(newCat)
+    setEditIdx(uiCats.length)
+  }
+  const openEdit = (cat, idx) => { setEditCat({ ...cat }); setEditIdx(idx) }
+  const onEditOk = updated => {
+    setUiCats(c => c.map((x,i) => i===editIdx ? updated : x))
+    setEditCat(null); setEditIdx(null)
+  }
+  const deleteCat = i => setUiCats(c => c.filter((_,ci) => ci!==i))
   const moveCat = (i, dir) => {
-    const ni = i + dir
-    if (ni < 0 || ni >= cats.length) return
-    const next = [...cats]; [next[i], next[ni]] = [next[ni], next[i]]; updateCats(next)
+    const ni = i+dir
+    if (ni<0||ni>=uiCats.length) return
+    const next=[...uiCats]; [next[i],next[ni]]=[next[ni],next[i]]; setUiCats(next)
   }
   const setCfgField = patch => setCfg(c => ({ ...c, ...patch }))
 
-  // ── 目录选择器 ──
+  // ── 目录选择 ──
   const openDir = field => { setDirField(field); setDirOpen(true) }
-  const onDirSelect = val => {
-    if (dirField) setCfgField({ [dirField]: val })
-    setDirOpen(false)
-  }
+  const onDirSelect = val => { if(dirField) setCfgField({ [dirField]:val }); setDirOpen(false) }
 
-  const allUnavailable = providers.length > 0 && providers.every(p => !p.available)
+  const allUnavailable = providers.length>0 && providers.every(p=>!p.available)
+  const metaProviders  = providers.filter(p=>!p.available)
 
   return (
     <div style={{ padding:24 }}>
       {/* ── 页头 ── */}
-      <div style={{
-        display:'flex', alignItems:'center', justifyContent:'space-between',
-        flexWrap:'wrap', gap:12, marginBottom:20,
-      }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:12, marginBottom:20 }}>
         <Space align="center" size={10}>
           <Title level={4} style={{ margin:0 }}>整理分类引擎</Title>
-          <Tag color="purple" style={{ borderRadius:20, fontWeight:600 }}>{cats.length} 个分类</Tag>
-          {providers.map(p => (
+          <Tag color="purple" style={{ borderRadius:20, fontWeight:600 }}>{uiCats.length} 个分类</Tag>
+          {providers.map(p=>(
             <Tag key={p.name}
-              icon={p.available ? <CheckCircleFilled /> : <ExclamationCircleFilled />}
-              color={p.available ? 'success' : 'warning'} style={{ fontSize:12 }}>
-              {p.label} {p.available ? '已配置' : '未配置'}
+              icon={p.available?<CheckCircleFilled />:<ExclamationCircleFilled />}
+              color={p.available?'success':'warning'} style={{ fontSize:12 }}>
+              {p.label} {p.available?'已配置':'未配置'}
             </Tag>
           ))}
         </Space>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>刷新</Button>
-          <Segmented value={mode} onChange={switchMode}
-            options={[
-              { value:'gui',  label:<Space size={4}><AppstoreOutlined />图形化</Space> },
-              { value:'code', label:<Space size={4}><CodeOutlined />代码</Space> },
-            ]}
-          />
+          <Segmented value={mode} onChange={switchMode} options={[
+            { value:'gui',  label:<Space size={4}><AppstoreOutlined />图形化</Space> },
+            { value:'code', label:<Space size={4}><CodeOutlined />代码</Space> },
+          ]} />
           <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave}>保存配置</Button>
         </Space>
       </div>
 
-      {/* ── 未配置提示 ── */}
+      {/* ── Provider 未配置提示 ── */}
       {allUnavailable && (
         <Alert type="warning" showIcon style={{ marginBottom:16 }}
-          message="所有元数据 Provider 均未配置，TMDB 类型 / 产地 / 语言规则不生效，仅关键词和正则规则有效。"
-          description='可在「搜索源」或「系统设置」中配置 Provider API Key。' />
+          message="元数据 Provider 均未配置，流派 / 产地 / 语言规则将不生效，仅文件名关键词和正则有效。"
+          description='可在「搜索源」或「系统设置」中配置 API Key。' />
       )}
 
       <Spin spinning={loading}>
-        {mode === 'gui' ? (
+        {mode==='gui' ? (
           <>
             {/* ── 全局设置 ── */}
             <Card size="small" style={{ marginBottom:16 }}
               styles={{ body:{ padding:'14px 20px' } }}>
-              <Row gutter={[32, 0]} align="middle" wrap>
-                <Col xs={24} sm={12} md={6} lg={5}>
+              <Row gutter={[32,0]} align="middle" wrap>
+                <Col xs={24} sm={12} md={5}>
                   <Form.Item label="启用分类引擎" style={{ margin:0 }}>
-                    <Switch checked={cfg.enabled}
-                      checkedChildren="启用" unCheckedChildren="禁用"
-                      onChange={v => setCfgField({ enabled:v })} />
+                    <Switch checked={cfg.enabled} checkedChildren="启用" unCheckedChildren="禁用"
+                      onChange={v=>setCfgField({ enabled:v })} />
                   </Form.Item>
                 </Col>
-                <Col xs={24} sm={12} md={6} lg={4}>
-                  <Form.Item label="试运行" tooltip="只记录日志，不实际移动文件" style={{ margin:0 }}>
-                    <Switch checked={cfg.dry_run}
-                      checkedChildren="开" unCheckedChildren="关"
-                      onChange={v => setCfgField({ dry_run:v })} />
+                <Col xs={24} sm={12} md={4}>
+                  <Form.Item label="试运行" tooltip="只记录日志，不移动文件" style={{ margin:0 }}>
+                    <Switch checked={cfg.dry_run} checkedChildren="开" unCheckedChildren="关"
+                      onChange={v=>setCfgField({ dry_run:v })} />
                   </Form.Item>
                 </Col>
-                <Col xs={24} sm={24} md={12} lg={8}>
+                <Col xs={24} sm={24} md={8}>
                   <Form.Item label="目标根目录" style={{ margin:0 }}>
                     <Input value={cfg.target_root} placeholder="/整理后"
                       suffix={<Tooltip title="选择目录"><FolderOpenOutlined style={{ cursor:'pointer', color:'#999' }} onClick={()=>openDir('target_root')} /></Tooltip>}
-                      onChange={e => setCfgField({ target_root:e.target.value })} />
+                      onChange={e=>setCfgField({ target_root:e.target.value })} />
                   </Form.Item>
                 </Col>
-                <Col xs={24} sm={24} md={12} lg={7}>
+                <Col xs={24} sm={24} md={7}>
                   <Form.Item label="未识别目录" style={{ margin:0 }}>
                     <Input value={cfg.unrecognized_dir} placeholder="/未识别"
                       suffix={<Tooltip title="选择目录"><FolderOpenOutlined style={{ cursor:'pointer', color:'#999' }} onClick={()=>openDir('unrecognized_dir')} /></Tooltip>}
-                      onChange={e => setCfgField({ unrecognized_dir:e.target.value })} />
+                      onChange={e=>setCfgField({ unrecognized_dir:e.target.value })} />
                   </Form.Item>
                 </Col>
               </Row>
             </Card>
 
             {/* ── 分类列表 ── */}
-            <div style={{ marginBottom:8, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-              <Text type="secondary" style={{ fontSize:12 }}>匹配优先级从上到下，排在前面的分类优先匹配</Text>
-              <Button type="primary" ghost size="small" icon={<PlusOutlined />} onClick={addCat}>
-                添加分类
-              </Button>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+              <Text type="secondary" style={{ fontSize:12 }}>
+                匹配优先级从上到下 · 点击「编辑」修改分类条件
+              </Text>
+              <Button type="primary" icon={<PlusOutlined />} onClick={addCat}>添加分类</Button>
             </div>
 
-            {cats.length === 0
-              ? <div style={{ padding:'48px 0', textAlign:'center', color:'#bbb', fontSize:14 }}>
+            {uiCats.length===0
+              ? <div style={{ padding:'60px 0', textAlign:'center', color:'#bbb', fontSize:14, border:'2px dashed #e5e7eb', borderRadius:10 }}>
                   暂无分类规则，点击「添加分类」开始配置
                 </div>
-              : cats.map((cat, i) => (
-                <CategoryCard key={i} cat={cat} idx={i} total={cats.length}
-                  color={CAT_COLORS[i % CAT_COLORS.length]}
-                  onUpdate={patch => updateCat(i, patch)}
-                  onDelete={() => deleteCat(i)}
-                  onMove={dir => moveCat(i, dir)}
+              : uiCats.map((cat,i)=>(
+                <CategoryItem key={i} cat={cat} idx={i} total={uiCats.length}
+                  color={CAT_COLORS[i%CAT_COLORS.length]}
+                  onEdit={()=>openEdit(cat,i)}
+                  onDelete={()=>deleteCat(i)}
+                  onMove={dir=>moveCat(i,dir)}
                 />
               ))
             }
@@ -391,7 +627,16 @@ export const Classify = () => {
         )}
       </Spin>
 
-      <DirPickerModal open={dirOpen} onCancel={() => setDirOpen(false)} onSelect={onDirSelect} />
+      {/* ── 编辑弹窗 ── */}
+      <EditCategoryModal
+        open={editCat!==null}
+        cat={editCat}
+        onOk={onEditOk}
+        onCancel={()=>{ setEditCat(null); setEditIdx(null) }}
+      />
+
+      {/* ── 目录选择器 ── */}
+      <DirPickerModal open={dirOpen} onCancel={()=>setDirOpen(false)} onSelect={onDirSelect} />
     </div>
   )
 }

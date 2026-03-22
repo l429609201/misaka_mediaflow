@@ -641,7 +641,7 @@ export const Drive115 = () => {
     <Row gutter={[24, 24]} align="stretch">
 
       {/* ── 左列：STRM 生成 ── */}
-      <Col xs={24} lg={8} style={{ display: 'flex', flexDirection: 'column' }}>
+      <Col xs={24} lg={12} style={{ display: 'flex', flexDirection: 'column' }}>
         <Card
           title={<Space><ThunderboltOutlined />{t('p115.strmGeneration')}</Space>}
           style={{ flex: 1 }}
@@ -711,7 +711,7 @@ export const Drive115 = () => {
       </Col>
 
       {/* ── 中列：整理与路径 ── */}
-      <Col xs={24} lg={8} style={{ display: 'flex', flexDirection: 'column' }}>
+      <Col xs={24} lg={12} style={{ display: 'flex', flexDirection: 'column' }}>
         <Spin spinning={mappingLoading} style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
           <Card title={<Space><NodeIndexOutlined />{t('p115.pathMappingTitle')}</Space>}
             style={{ flex: 1 }}
@@ -771,8 +771,8 @@ export const Drive115 = () => {
         </Spin>
       </Col>
 
-      {/* ── 右列：整理分类 ── */}
-      <Col xs={24} lg={8} style={{ display: 'flex', flexDirection: 'column' }}>
+      {/* 整理分类已移至独立「整理分类」菜单页 */}
+      {false && <Col xs={24} lg={8} style={{ display: 'flex', flexDirection: 'column' }}>
         <Card title={<Space><FolderAddOutlined />{t('p115.organizeTitle')}</Space>}
           style={{ flex: 1, overflow: 'auto' }}
           extra={
@@ -998,6 +998,7 @@ export const Drive115 = () => {
           </div>
         </Card>
       </Col>
+      }
 
     </Row>
   )
