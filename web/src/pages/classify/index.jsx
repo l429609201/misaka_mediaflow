@@ -1391,8 +1391,8 @@ export const Classify = () => {
                 暂无分类规则，点击「添加分类」开始配置
               </div>
             : (() => {
-                const movieCats = uiCats.map((cat, i) => ({ cat, i })).filter(({ cat }) => cat.media_type === 'movie' || cat.media_type === 'all')
-                const tvCats    = uiCats.map((cat, i) => ({ cat, i })).filter(({ cat }) => cat.media_type === 'tv')
+                const movieCats = uiCats.map((cat, i) => ({ cat, i })).filter(({ cat }) => cat.media_type === 'movie' || cat.media_type === 'all' || !cat.media_type)
+                const tvCats    = uiCats.map((cat, i) => ({ cat, i })).filter(({ cat }) => cat.media_type === 'tv'    || cat.media_type === 'all' || !cat.media_type)
                 const sectionStyle = {
                   fontSize: 12, fontWeight: 600, color: 'var(--ant-color-text-secondary)',
                   letterSpacing: 1, padding: '4px 0 6px', marginTop: 8,
