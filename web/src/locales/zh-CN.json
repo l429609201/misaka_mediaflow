@@ -52,7 +52,6 @@
     "dashboard": "仪表盘",
     "proxy": "反代状态",
     "storage": "存储管理",
-    "mappings": "路径映射",
     "strm": "STRM 管理",
     "drive115": "115 网盘",
     "mediaProxy": "媒体库与 302 反代",
@@ -124,20 +123,6 @@
     "alist": "Alist",
     "p115": "115 网盘",
     "browseTree": "查看路径"
-  },
-  "mappings": {
-    "title": "路径映射",
-    "hint": "配置本地挂载路径与 115 网盘路径的对应关系。direct链接解析时，若 FsCache 无数据，会自动用此映射直接调用 115 API 搜索文件。",
-    "addMapping": "添加映射",
-    "editMapping": "编辑映射",
-    "storageSource": "存储源",
-    "localPrefix": "本地路径前缀",
-    "localPrefixHint": "Emby/媒体服务器或本地挂载看到的路径，例如 /mnt/115 或 /media/movies",
-    "cloudPrefix": "云端路径前缀",
-    "cloudPrefixHint": "对应的 115 网盘路径，例如 / 表示网盘根目录，/影视 表示网盘的「影视」文件夹",
-    "priority": "优先级",
-    "priorityHint": "数字越大优先级越高，当多条规则都能匹配时取优先级最高的",
-    "deleteConfirm": "确定删除该映射规则？"
   },
   "strm": {
     "title": "STRM 管理",

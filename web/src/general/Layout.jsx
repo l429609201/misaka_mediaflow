@@ -22,7 +22,6 @@ import {
   LockOutlined,
   BulbOutlined,
   BulbFilled,
-  NodeIndexOutlined,
   SearchOutlined,
   FontSizeOutlined,
   FolderAddOutlined,
@@ -53,7 +52,6 @@ export const Layout = () => {
   const menuItems = [
     { key: RoutePaths.HOME,              icon: <DashboardOutlined />,    label: t('menu.dashboard') },
     { key: RoutePaths.STORAGE,           icon: <DatabaseOutlined />,     label: t('menu.storage') },
-    { key: RoutePaths.MAPPINGS,          icon: <NodeIndexOutlined />,    label: t('menu.mappings') },
     { key: RoutePaths.STRM,              icon: <FileTextOutlined />,     label: t('menu.strm') },
     { key: RoutePaths.DRIVE115,          icon: <CloudOutlined />,        label: t('menu.drive115') },
     { key: RoutePaths.CLASSIFY,          icon: <FolderAddOutlined />,    label: t('menu.classify') },

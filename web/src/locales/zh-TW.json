@@ -52,7 +52,6 @@
     "dashboard": "儀表板",
     "proxy": "反代狀態",
     "storage": "儲存管理",
-    "mappings": "路徑映射",
     "strm": "STRM 管理",
     "drive115": "115 網盤",
     "mediaProxy": "媒體庫與 302 反代",
@@ -124,20 +123,6 @@
     "alist": "Alist",
     "p115": "115 網盤",
     "browseTree": "瀏覽路徑"
-  },
-  "mappings": {
-    "title": "路徑映射",
-    "hint": "設定本機掛載路徑與 115 網盤路徑的對應關係。當 FsCache 無資料時，系統會自動用此映射直接呼叫 115 API 搜尋檔案。",
-    "addMapping": "新增映射",
-    "editMapping": "編輯映射",
-    "storageSource": "儲存源",
-    "localPrefix": "本機路徑前綴",
-    "localPrefixHint": "Emby/媒體伺服器或本機掛載看到的路徑，例如 /mnt/115 或 /media/movies",
-    "cloudPrefix": "雲端路徑前綴",
-    "cloudPrefixHint": "對應的 115 網盤路徑，例如 / 表示網盤根目錄，/影視 表示網盤的「影視」資料夾",
-    "priority": "優先順序",
-    "priorityHint": "數字越大優先順序越高，當多條規則都能匹配時取優先順序最高的",
-    "deleteConfirm": "確定要刪除該映射規則嗎？"
   },
   "strm": {
     "title": "STRM 管理",
