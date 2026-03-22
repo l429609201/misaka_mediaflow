@@ -893,18 +893,23 @@ async def _process_ass_content(ass_text: str, raw_bytes: bytes) -> tuple:
     font_resolved: dict = {}
     missing: list = []
 
-    for key in font_chars:
+    # ── 并发查找所有字体：DB → 在线下载，不走阻塞的内存全量扫描 ──────────────
+    # 内存扫描（find_local_font/_scan_fonts）会同步阻塞 event loop 长达 30s，
+    # 且 DB 入库后已无必要；downloads 目录由 find_downloaded_font 兜底，
+    # 但同样走内存扫描，故也移除——DB 里会索引 downloads 目录的字体。
+    async def _resolve_one(key: str) -> tuple:
+        """返回 (key, loc_or_None)"""
         fname, subfamily = (key.rsplit("^", 1) if "^" in key
                             else (key, _VARIANT_REGULAR))
         is_bold   = "Bold"   in subfamily
         is_italic = "Italic" in subfamily
 
-        # ── 该字体已内嵌在 [Fonts] 段，跳过查找 ─────────────────────────────
+        # ── 已内嵌在 [Fonts] 段，无需查找 ───────────────────────────────────
         if fname.lower() in embedded_names:
             logger.debug("[builtin] 跳过已内嵌字体: %s", key)
-            continue
+            return key, None   # None 表示不需要处理，调用方按 key 过滤
 
-        # ── 优先查 DB 字体索引（持久化缓存，重启不丢失）─────────────────────────
+        # ── 1. 查持久化 DB（主路径，毫秒级）────────────────────────────────
         loc = None
         try:
             from src.services.font_index_service import find_font_in_db
@@ -912,17 +917,23 @@ async def _process_ass_content(ass_text: str, raw_bytes: bytes) -> tuple:
         except Exception:
             pass
 
-        # ── DB 未命中 → 降级内存扫描（兜底，保持兼容）──────────────────────────
-        if not loc:
-            loc = find_local_font(fname, subfamily)
-        if not loc:
-            loc = find_downloaded_font(fname, subfamily)
+        # ── 2. DB 未命中 → 在线下载（CDN / 旧格式 URL）──────────────────────
         if not loc:
             loc = await download_font(fname, is_bold=is_bold, is_italic=is_italic)
 
+        return key, loc
+
+    # 过滤掉已内嵌的 key，只对需要查找的字体并发执行
+    keys_to_resolve = [
+        k for k in font_chars
+        if (k.rsplit("^", 1)[0] if "^" in k else k).lower() not in embedded_names
+    ]
+    resolve_results = await asyncio.gather(*[_resolve_one(k) for k in keys_to_resolve])
+
+    for key, loc in resolve_results:
         if loc:
             font_resolved[key] = loc
-        else:
+        elif (key.rsplit("^", 1)[0] if "^" in key else key).lower() not in embedded_names:
             missing.append(key)
 
     # 一条日志汇总查找结果
