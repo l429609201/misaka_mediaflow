@@ -112,26 +112,34 @@ export const p115Api = {
   saveScrapeConfig: (payload) => api.post('/p115/scrape-config', payload),
 }
 
-// ==================== 115 STRM 同步 + 监控 + 整理 ====================
+// ==================== 通用整理分类引擎 ====================
+export const classifyApi = {
+  getConfig:          ()        => api.get('/classify/config'),
+  saveConfig:         (payload) => api.post('/classify/config', payload),
+  // 通用：返回所有已注册 Provider 的可用状态列表
+  getMetadataStatus:  ()        => api.get('/classify/metadata-status'),
+  // 兼容旧调用（仅 TMDB）
+  getTmdbStatus:      ()        => api.get('/classify/tmdb-status'),
+}
+
+// ==================== 115 STRM 同步 + 监控 ====================
 export const p115StrmApi = {
   // STRM 同步配置
-  getSyncConfig: () => api.get('/p115-strm/sync/config'),
-  saveSyncConfig: (payload) => api.post('/p115-strm/sync/config', payload),
-  getSyncStatus: () => api.get('/p115-strm/sync/status'),
-  fullSync: () => api.post('/p115-strm/sync/full'),
-  incSync: () => api.post('/p115-strm/sync/inc'),
+  getSyncConfig:   ()        => api.get('/p115-strm/sync/config'),
+  saveSyncConfig:  (payload) => api.post('/p115-strm/sync/config', payload),
+  getSyncStatus:   ()        => api.get('/p115-strm/sync/status'),
+  fullSync:        ()        => api.post('/p115-strm/sync/full'),
+  incSync:         ()        => api.post('/p115-strm/sync/inc'),
   // 生活事件监控
-  getMonitorConfig: () => api.get('/p115-strm/monitor/config'),
+  getMonitorConfig:  ()        => api.get('/p115-strm/monitor/config'),
   saveMonitorConfig: (payload) => api.post('/p115-strm/monitor/config', payload),
-  getMonitorStatus: () => api.get('/p115-strm/monitor/status'),
-  startMonitor: () => api.post('/p115-strm/monitor/start'),
-  stopMonitor: () => api.post('/p115-strm/monitor/stop'),
-  // 整理分类
-  getOrganizeConfig: () => api.get('/p115-strm/organize/config'),
-  saveOrganizeConfig: (payload) => api.post('/p115-strm/organize/config', payload),
-  getOrganizeStatus: () => api.get('/p115-strm/organize/status'),
-  runOrganize: () => api.post('/p115-strm/organize/run'),
-  getOrganizeTmdbStatus: () => api.get('/p115-strm/organize/tmdb-status'),
+  getMonitorStatus:  ()        => api.get('/p115-strm/monitor/status'),
+  startMonitor:      ()        => api.post('/p115-strm/monitor/start'),
+  stopMonitor:       ()        => api.post('/p115-strm/monitor/stop'),
+  // 整理执行（分类规则由 classifyApi 管理，此处只触发）
+  getOrganizeStatus: ()              => api.get('/p115-strm/organize/status'),
+  runOrganize:       (sourcePaths)   => api.post('/p115-strm/organize/run',
+    sourcePaths?.length ? { source_paths: sourcePaths } : {}),
 }
 
 

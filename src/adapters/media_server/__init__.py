@@ -4,10 +4,12 @@
 from src.adapters.media_server.base import MediaServerAdapter
 from src.adapters.media_server.emby import EmbyAdapter
 from src.adapters.media_server.jellyfin import JellyfinAdapter
+from src.adapters.media_server.factory import MediaServerFactory
 
 __all__ = [
     "MediaServerAdapter",
     "EmbyAdapter",
     "JellyfinAdapter",
+    "MediaServerFactory",
 ]
 

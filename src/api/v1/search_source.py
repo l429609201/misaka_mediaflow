@@ -84,7 +84,7 @@ class SavePayload(BaseModel):
 
 @router.post("/save", dependencies=[Depends(verify_token)])
 async def save_source(payload: SavePayload):
-    """保存单个搜索源的启用状态和字段值"""
+    """保存单个搜索源的启用状态和字段值，同时刷新 metadata_service 缓存"""
     async with get_async_session_local() as db:
         enabled_map = await _load_json(db, _ENABLED_KEY)
         override_map = await _load_json(db, _OVERRIDE_KEY)
@@ -94,6 +94,10 @@ async def save_source(payload: SavePayload):
 
         await _save_json(db, _ENABLED_KEY, enabled_map)
         await _save_json(db, _OVERRIDE_KEY, override_map)
+
+    # 配置更新后刷新该 Provider 的实例缓存，确保新配置立即生效
+    from src.services.metadata_service import metadata_service
+    metadata_service.invalidate_cache(payload.name)
 
     return {"success": True}
 

@@ -37,11 +37,9 @@ class MonitorConfigPayload(BaseModel):
     auto_inc_sync: bool = True
 
 
-class OrganizeConfigPayload(BaseModel):
+class OrganizeRunPayload(BaseModel):
+    """触发整理任务时，可选传入待整理目录列表（覆盖 path_mapping 中的配置）"""
     source_paths: List[str] = []
-    target_root: str = ""
-    categories: list = []      # 新结构：列表，兼容旧 dict 格式（service 层自动迁移）
-    dry_run: bool = False
 
 
 # ─────────────────────── STRM 同步配置 ───────────────────────
@@ -118,46 +116,23 @@ async def stop_monitor():
     return await svc.stop()
 
 
-# ─────────────────────── 整理分类 ───────────────────────
-
-@router.get("/organize/config", dependencies=[Depends(verify_token)])
-async def get_organize_config():
-    """获取整理分类配置"""
-    return await _organize_svc.get_config()
-
-
-@router.post("/organize/config", dependencies=[Depends(verify_token)])
-async def save_organize_config(payload: OrganizeConfigPayload):
-    """保存整理分类配置"""
-    await _organize_svc.save_config(payload.model_dump())
-    return {"success": True}
-
+# ─────────────────────── 整理分类触发 ───────────────────────
+# 分类规则配置由 /classify 模块统一管理，此处只负责触发执行
 
 @router.get("/organize/status", dependencies=[Depends(verify_token)])
 async def get_organize_status():
-    """获取整理分类状态"""
+    """获取整理分类执行状态"""
     return await _organize_svc.get_status()
 
 
-@router.get("/organize/tmdb-status", dependencies=[Depends(verify_token)])
-async def get_organize_tmdb_status():
-    """检测 TMDB API Key 是否已配置（供前端显示规则有效性提示）"""
-    try:
-        import json
-        from sqlalchemy import select
-        from src.db import get_async_session_local
-        from src.db.models.system import SystemConfig
-        async with get_async_session_local() as db:
-            row = await db.execute(
-                select(SystemConfig).where(SystemConfig.key == "metadata_tmdb")
-            )
-            cfg = row.scalars().first()
-            if cfg and cfg.value:
-                data = json.loads(cfg.value)
-                return {"available": bool(data.get("api_key", "").strip())}
-    except Exception:
-        pass
-    return {"available": False}
+@router.post("/organize/run", dependencies=[Depends(verify_token)])
+async def run_organize(payload: OrganizeRunPayload = None):
+    """
+    触发整理分类任务。
+    payload.source_paths 可选；为空时从 path_mapping.organize_source 读取。
+    """
+    paths = (payload.source_paths or []) if payload else []
+    return await _organize_svc.trigger_organize(source_paths=paths or None)
 
 
 

@@ -13,6 +13,7 @@ import Storage from '@/pages/storage/index.jsx'
 import Mappings from '@/pages/mappings/index.jsx'
 import Strm from '@/pages/strm/index.jsx'
 import Drive115 from '@/pages/drive115/index.jsx'
+import Classify from '@/pages/classify/index.jsx'
 import { RealtimeSubtitle } from '@/pages/realtime-subtitle/index.jsx'
 import P115 from '@/pages/media-proxy/index.jsx'
 import SearchSource from '@/pages/search-source/index.jsx'
@@ -72,6 +73,7 @@ export const router = createBrowserRouter(
         { path: RoutePaths.MAPPINGS.slice(1),    element: <Mappings /> },
         { path: RoutePaths.STRM.slice(1),              element: <Strm /> },
         { path: RoutePaths.DRIVE115.slice(1),          element: <Drive115 /> },
+        { path: RoutePaths.CLASSIFY.slice(1),          element: <Classify /> },
         { path: 'p115', loader: () => redirect(RoutePaths.MEDIA_PROXY) },
         { path: RoutePaths.MEDIA_PROXY.slice(1),       element: <P115 /> },
         { path: RoutePaths.REALTIME_SUBTITLE.slice(1), element: <RealtimeSubtitle /> },

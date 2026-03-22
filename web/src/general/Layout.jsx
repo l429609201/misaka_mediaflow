@@ -25,6 +25,7 @@ import {
   NodeIndexOutlined,
   SearchOutlined,
   FontSizeOutlined,
+  FolderAddOutlined,
 } from '@ant-design/icons'
 import { useTranslation } from 'react-i18next'
 import LanguageSwitch from '@/components/LanguageSwitch'
@@ -55,6 +56,7 @@ export const Layout = () => {
     { key: RoutePaths.MAPPINGS,          icon: <NodeIndexOutlined />,    label: t('menu.mappings') },
     { key: RoutePaths.STRM,              icon: <FileTextOutlined />,     label: t('menu.strm') },
     { key: RoutePaths.DRIVE115,          icon: <CloudOutlined />,        label: t('menu.drive115') },
+    { key: RoutePaths.CLASSIFY,          icon: <FolderAddOutlined />,    label: t('menu.classify') },
     { key: RoutePaths.MEDIA_PROXY,       icon: <CloudServerOutlined />,  label: t('menu.mediaProxy') },
     { key: RoutePaths.REALTIME_SUBTITLE, icon: <FontSizeOutlined />,     label: t('menu.realtimeSubtitle') },
     { key: RoutePaths.SEARCH_SOURCE,     icon: <SearchOutlined />,       label: t('menu.searchSource') },

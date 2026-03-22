@@ -251,23 +251,13 @@ async def update_ip_whitelist(payload: IpWhitelistPayload):
 
 # ==================== 媒体库配置 ====================
 
+from src.services.media_server_service import media_server_service as _ms_svc
+
+
 @router.get("/media-server", dependencies=[Depends(verify_token)])
 async def get_media_server():
-    """获取媒体库配置（从 systemconfig 读，首次用 config.yaml 值）"""
-    async with get_async_session_local() as db:
-        keys = ["media_server_type", "media_server_host", "media_server_api_key", "media_server_user_id"]
-        result = {}
-        defaults = {
-            "media_server_type": "emby",
-            "media_server_host": settings.media_server.host,
-            "media_server_api_key": settings.media_server.api_key,
-            "media_server_user_id": "",
-        }
-        for k in keys:
-            row = await db.execute(select(SystemConfig).where(SystemConfig.key == k))
-            cfg = row.scalars().first()
-            result[k.replace("media_server_", "")] = cfg.value if cfg else defaults[k]
-    return result
+    """获取媒体库配置（通过 media_server_service 统一读取）"""
+    return await _ms_svc.get_config()
 
 
 class MediaServerPayload(BaseModel):
@@ -279,47 +269,33 @@ class MediaServerPayload(BaseModel):
 
 @router.post("/media-server", dependencies=[Depends(verify_token)])
 async def update_media_server(payload: MediaServerPayload):
-    """保存媒体库配置到 systemconfig 表"""
-    saves = {
-        "media_server_type": "emby",
-        "media_server_host": payload.host.rstrip("/"),
-        "media_server_api_key": payload.api_key,
-        "media_server_user_id": payload.user_id,
-    }
-    async with get_async_session_local() as db:
-        for k, v in saves.items():
-            row = await db.execute(select(SystemConfig).where(SystemConfig.key == k))
-            cfg = row.scalars().first()
-            if cfg:
-                cfg.value = v
-                cfg.updated_at = tm.now()
-            else:
-                db.add(SystemConfig(key=k, value=v, description=f"媒体服务器配置: {k}", updated_at=tm.now()))
-        await db.commit()
+    """保存媒体库配置（通过 media_server_service 统一写入）"""
+    await _ms_svc.save_config(payload.model_dump())
     logger.info("媒体服务器配置已更新: host=%s user_id=%s", payload.host, payload.user_id)
     return {"success": True}
 
 
 @router.post("/media-server/test", dependencies=[Depends(verify_token)])
 async def test_media_server(payload: MediaServerPayload):
-    """测试媒体库连接并返回完整库列表"""
+    """测试媒体库连接（使用传入参数，不影响已保存配置）"""
     host = payload.host.rstrip("/")
     try:
-        from src.adapters.media_server.emby import EmbyAdapter
-        adapter = EmbyAdapter(host=host, api_key=payload.api_key)
+        adapter = await _ms_svc.get_adapter_with_params(
+            host=host, api_key=payload.api_key, server_type=payload.type
+        )
         libs = await adapter.get_libraries()
         lib_list = [
             {
-                "id": lib.get("ItemId", lib.get("Id", "")),
+                "id":   lib.get("ItemId", lib.get("Id", "")),
                 "name": lib.get("Name", ""),
                 "type": lib.get("CollectionType", "unknown"),
             }
             for lib in libs
         ]
         return {
-            "success": True,
+            "success":   True,
             "libraries": lib_list,
-            "message": f"连接成功，找到 {len(lib_list)} 个媒体库",
+            "message":   f"连接成功，找到 {len(lib_list)} 个媒体库",
         }
     except Exception as e:
         return {"success": False, "message": str(e)}
@@ -328,15 +304,16 @@ async def test_media_server(payload: MediaServerPayload):
 class MediaServerUsersPayload(BaseModel):
     host: str
     api_key: str
+    type: str = "emby"
 
 
 @router.post("/media-server/users", dependencies=[Depends(verify_token)])
 async def get_media_server_users(payload: MediaServerUsersPayload):
-    """用传入的 host+api_key 实时查询 Emby 用户列表"""
-    host = payload.host.rstrip("/")
+    """用传入的 host+api_key 实时查询用户列表"""
     try:
-        from src.adapters.media_server.emby import EmbyAdapter
-        adapter = EmbyAdapter(host=host, api_key=payload.api_key)
+        adapter = await _ms_svc.get_adapter_with_params(
+            host=payload.host, api_key=payload.api_key, server_type=payload.type
+        )
         users = await adapter.get_users()
         return {"success": True, "users": users}
     except Exception as e:
@@ -345,19 +322,15 @@ async def get_media_server_users(payload: MediaServerUsersPayload):
 
 @router.get("/media-server/libraries", dependencies=[Depends(verify_token)])
 async def get_media_libraries():
-    """使用已保存的配置获取媒体库列表（用于刷新库列表而非测试连接）"""
-    cfg = await get_media_server()
-    host = cfg.get("host", "").rstrip("/")
-    api_key = cfg.get("api_key", "")
-    if not host or not api_key:
+    """使用已保存的配置获取媒体库列表"""
+    cfg = await _ms_svc.get_config()
+    if not cfg.get("host") or not cfg.get("api_key"):
         return {"success": False, "message": "媒体服务器未配置", "libraries": []}
     try:
-        from src.adapters.media_server.emby import EmbyAdapter
-        adapter = EmbyAdapter(host=host, api_key=api_key)
-        libs = await adapter.get_libraries()
+        libs = await _ms_svc.get_libraries()
         lib_list = [
             {
-                "id": lib.get("ItemId", lib.get("Id", "")),
+                "id":   lib.get("ItemId", lib.get("Id", "")),
                 "name": lib.get("Name", ""),
                 "type": lib.get("CollectionType", "unknown"),
             }
@@ -661,15 +634,10 @@ async def get_log_file_content(filename: str, tail: int = 500):
 
 @router.post("/sync-media-items", dependencies=[Depends(verify_token)])
 async def sync_media_items(library_id: str = ""):
-    """从 Emby/Jellyfin 同步媒体条目到 mediaitem 表"""
-    from src.adapters.media_server.emby import EmbyAdapter
-
-    server_cfg = settings.media_server
-    if server_cfg.type == "emby":
-        adapter = EmbyAdapter(host=server_cfg.host, api_key=server_cfg.api_key)
-    else:
-        from src.adapters.media_server.jellyfin import JellyfinAdapter
-        adapter = JellyfinAdapter(host=server_cfg.host, api_key=server_cfg.api_key)
+    """从 Emby/Jellyfin 同步媒体条目到 mediaitem 表（通过 media_server_service 获取适配器）"""
+    adapter = await _ms_svc.get_adapter()
+    if adapter is None:
+        return {"success": False, "error": "媒体服务器未配置，请先在系统设置中配置媒体服务器", "synced": 0}
 
     try:
         # 获取媒体库

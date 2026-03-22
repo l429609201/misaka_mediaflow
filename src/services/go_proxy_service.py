@@ -79,16 +79,16 @@ async def start() -> dict:
     if not binary:
         return {"success": False, "message": "未找到 Go 反代可执行文件，请将 go-proxy 放在 go-proxy/ 目录下"}
 
-    # 从数据库读端口、Emby 地址、API Key
-    go_port = settings.server.go_port
-    emby_host = settings.media_server.host
+    # Go 反代只支持 Emby，直接从数据库读取所需配置
+    go_port    = settings.server.go_port
+    emby_host  = settings.media_server.host
     emby_apikey = settings.media_server.api_key
 
     async with get_async_session_local() as db:
         for key, attr in [
-            ("proxy_go_port", "go_port"),
-            ("media_server_host", "emby_host"),
-            ("media_server_api_key", "emby_apikey"),
+            ("proxy_go_port",       "go_port"),
+            ("media_server_host",   "emby_host"),
+            ("media_server_api_key","emby_apikey"),
         ]:
             row = await db.execute(select(SystemConfig).where(SystemConfig.key == key))
             cfg = row.scalars().first()

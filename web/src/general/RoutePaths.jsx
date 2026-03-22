@@ -8,6 +8,7 @@ export const RoutePaths = {
   MAPPINGS: '/mappings',
   STRM: '/strm',
   DRIVE115: '/115',
+  CLASSIFY: '/classify',
   P115_TOOLS: '/115-tools',
   SEARCH_SOURCE: '/search-source',
   REALTIME_SUBTITLE: '/realtime-subtitle',

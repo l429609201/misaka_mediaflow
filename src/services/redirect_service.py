@@ -423,20 +423,14 @@ class RedirectService:
     # ──────────────────────────────────────────────────────────────────────
 
     @staticmethod
-    async def _get_media_server_config(db: AsyncSession) -> tuple:
-        """从数据库读取媒体服务器配置"""
-        host = settings.media_server.host
-        api_key = settings.media_server.api_key
-        for key, attr in [("media_server_host", "host"), ("media_server_api_key", "api_key")]:
-            row = await db.execute(select(SystemConfig).where(SystemConfig.key == key))
-            cfg = row.scalars().first()
-            if cfg and cfg.value:
-                val = cfg.value.strip().strip('"')
-                if attr == "host":
-                    host = val
-                else:
-                    api_key = val
-        return (host or "").rstrip("/"), api_key or ""
+    async def _get_media_server_config(_db=None) -> tuple:
+        """
+        获取媒体服务器配置 (host, api_key)。
+        委托给 media_server_service，不再直接读 SystemConfig。
+        保留此方法签名以兼容内部调用方。
+        """
+        from src.services.media_server_service import media_server_service
+        return await media_server_service.get_host_and_key()
 
     @staticmethod
     async def _fetch_playback_path(host: str, api_key: str, item_id: str) -> str:

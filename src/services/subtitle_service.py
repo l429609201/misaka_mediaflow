@@ -31,6 +31,16 @@ _cfg_cache: dict = {}
 _cfg_cache_at: float = 0.0
 _CFG_CACHE_TTL = 60  # 秒
 
+# ── 字幕配置键常量（集中定义，避免硬编码字符串散落各处）──────────────────────
+_CFG_KEYS = [
+    "font_in_ass_enabled",
+    "font_in_ass_url",
+    "subtitle_engine",            # "builtin" | "external"（默认 external）
+    "embedded_sub_enabled",
+    "embedded_sub_tracks",
+    "embedded_sub_include_movies",
+]
+
 # ── 内封字幕内存缓存（item_id → 字幕内容字节）──────────────────────────────────
 # 使用简单 dict + TTL，避免引入额外依赖
 _sub_cache: dict[str, tuple[bytes, float]] = {}       # {item_id: (data, expire_ts)}
@@ -65,17 +75,9 @@ async def _load_config() -> dict:
         from src.db.models import SystemConfig
         from sqlalchemy import select
 
-        keys = [
-            "font_in_ass_enabled",
-            "font_in_ass_url",
-            "subtitle_engine",           # "builtin" | "external"（默认 external）
-            "embedded_sub_enabled",
-            "embedded_sub_tracks",
-            "embedded_sub_include_movies",
-        ]
         result = {}
         async with get_async_session_local() as db:
-            for k in keys:
+            for k in _CFG_KEYS:
                 row = await db.execute(select(SystemConfig).where(SystemConfig.key == k))
                 cfg = row.scalars().first()
                 result[k] = cfg.value if cfg else ""

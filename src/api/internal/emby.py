@@ -3,10 +3,8 @@
 
 import logging
 from fastapi import APIRouter
-from sqlalchemy import select
 
-from src.db import get_async_session_local
-from src.db.models import SystemConfig
+from src.services.media_server_service import media_server_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Internal-Emby"])
@@ -17,7 +15,7 @@ async def check_strm(item_id: str, api_key: str = ""):
     """
     Go 反代调用 — 判断 Emby Item 是否为 STRM 文件。
 
-    使用数据库中保存的 media_server_host / media_server_user_id / media_server_api_key，
+    使用 media_server_service 获取媒体服务器配置（不再直接读 SystemConfig），
     调用 /emby/Users/{user_id}/Items/{item_id}?Fields=Path 接口查询 Item.Path。
 
     返回:
@@ -25,18 +23,11 @@ async def check_strm(item_id: str, api_key: str = ""):
     """
     import httpx
 
-    # 从数据库读取媒体服务器配置
-    async with get_async_session_local() as db:
-        keys_needed = ["media_server_host", "media_server_api_key", "media_server_user_id"]
-        cfg = {}
-        for k in keys_needed:
-            row = await db.execute(select(SystemConfig).where(SystemConfig.key == k))
-            item = row.scalars().first()
-            cfg[k] = item.value if item else ""
-
-    host = cfg.get("media_server_host", "").rstrip("/")
-    saved_api_key = cfg.get("media_server_api_key", "")
-    user_id = cfg.get("media_server_user_id", "")
+    # 通过统一服务层获取媒体服务器配置
+    ms_cfg = await media_server_service.get_config()
+    host         = ms_cfg.get("host", "").rstrip("/")
+    saved_api_key = ms_cfg.get("api_key", "")
+    user_id      = ms_cfg.get("user_id", "")
 
     # api_key 优先用请求传入的（Go 从 PlaybackInfo 请求里提取），其次用数据库保存的
     effective_api_key = api_key or saved_api_key
