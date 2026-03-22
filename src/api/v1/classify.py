@@ -2,13 +2,19 @@
 # 通用整理分类引擎 API
 # 前端「整理分类」模块唯一对接点；与 115 平台无关。
 
+import json
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from typing import List, Optional
+from sqlalchemy import select
 
 from src.core.security import verify_token
 import src.services.classify_engine as classify_engine
 from src.services.metadata_service import metadata_service
+from src.db import get_async_session_local
+from src.db.models.system import SystemConfig
+
+_ORG_RULES_KEY = "classify_organize_rules"
 
 router = APIRouter(prefix="/classify", tags=["整理分类引擎"])
 
@@ -67,3 +73,48 @@ async def get_tmdb_status():
     available = await metadata_service.is_provider_available("tmdb")
     return {"available": available}
 
+
+# ─── 目录整理规则读写 ──────────────────────────────────────────────────────────
+
+class OrgRulesPayload(BaseModel):
+    rules: List[dict] = []
+
+
+@router.get("/organize-rules", dependencies=[Depends(verify_token)])
+async def get_organize_rules():
+    """获取目录整理规则列表"""
+    async with get_async_session_local() as db:
+        result = await db.execute(
+            select(SystemConfig).where(SystemConfig.key == _ORG_RULES_KEY)
+        )
+        cfg = result.scalars().first()
+        if cfg and cfg.value:
+            try:
+                return {"rules": json.loads(cfg.value)}
+            except Exception:
+                pass
+    return {"rules": []}
+
+
+@router.post("/organize-rules", dependencies=[Depends(verify_token)])
+async def save_organize_rules(payload: OrgRulesPayload):
+    """保存目录整理规则列表"""
+    from src.core.timezone import tm
+    value = json.dumps(payload.rules, ensure_ascii=False)
+    async with get_async_session_local() as db:
+        result = await db.execute(
+            select(SystemConfig).where(SystemConfig.key == _ORG_RULES_KEY)
+        )
+        cfg = result.scalars().first()
+        if cfg:
+            cfg.value = value
+            cfg.updated_at = tm.now()
+        else:
+            cfg = SystemConfig(
+                key=_ORG_RULES_KEY,
+                value=value,
+                description="目录整理规则列表",
+            )
+            db.add(cfg)
+        await db.commit()
+    return {"success": True}

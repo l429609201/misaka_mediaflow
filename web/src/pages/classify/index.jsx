@@ -699,22 +699,13 @@ const OrganizeTab = () => {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [cfgRes, stRes] = await Promise.all([
-        p115StrmApi.getOrganizeConfig(),
+      const [rulesRes, stRes] = await Promise.all([
+        classifyApi.getOrganizeRules(),
         p115StrmApi.getOrganizeStatus(),
       ])
-      const cfg = cfgRes.data || {}
-      // 兼容旧格式（单一配置 → 包装成规则数组）
-      if (Array.isArray(cfg.rules)) {
-        setRules(cfg.rules)
-      } else if (cfg.source_paths || cfg.target_root) {
-        setRules([{
-          name: '默认规则', enabled: true, media_type: 'all',
-          source_paths: cfg.source_paths || [],
-          target_root: cfg.target_root || '',
-          unrecognized_dir: cfg.unrecognized_dir || '',
-          dry_run: cfg.dry_run || false,
-        }])
+      const rulesData = rulesRes.data?.rules || rulesRes.data || []
+      if (Array.isArray(rulesData) && rulesData.length > 0) {
+        setRules(rulesData)
       } else {
         setRules([])
       }
@@ -728,15 +719,7 @@ const OrganizeTab = () => {
   const save = async () => {
     setSaving(true)
     try {
-      // 以第一条规则的字段兼容后端旧格式，同时附带完整 rules 数组
-      const first = rules[0] || {}
-      await p115StrmApi.saveOrganizeConfig({
-        source_paths: first.source_paths || [],
-        target_root:  first.target_root  || '',
-        unrecognized_dir: first.unrecognized_dir || '',
-        dry_run: first.dry_run || false,
-        rules,
-      })
+      await classifyApi.saveOrganizeRules(rules)
       message.success('整理配置已保存')
     } catch { message.error('保存失败') }
     finally { setSaving(false) }
@@ -746,7 +729,7 @@ const OrganizeTab = () => {
     setRunning(r => ({ ...r, [idx]: true }))
     try {
       const rule = rules[idx]
-      const r = await p115StrmApi.runOrganize(rule.source_paths?.length ? { source_paths: rule.source_paths } : undefined)
+      const r = await p115StrmApi.runOrganize(rule.source_paths?.length ? rule.source_paths : undefined)
       r.data?.success ? message.success('整理任务已启动') : message.warning(r.data?.message || '启动失败')
       setTimeout(async () => {
         try { const s = await p115StrmApi.getOrganizeStatus(); setOrgStatus(s.data || {}) } catch { /* ignore */ }

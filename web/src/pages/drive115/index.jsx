@@ -89,16 +89,8 @@ export const Drive115 = () => {
   const [monitorStatus, setMonitorStatus] = useState({})
   const [monitorSaving, setMonitorSaving] = useState(false)
 
-  // ── 整理分类 ──────────────────────────────────────────────────────────
-  const [orgCfg,         setOrgCfg]         = useState({
-    source_paths: [], target_root: '', dry_run: false,
-    categories: [],  // 新结构：数组，每项 {name, target_dir, match_all, rules:[]}
-  })
+  // ── 整理分类（功能已移至「整理分类刮削」页面，仅保留状态轮询占位）──────────
   const [orgStatus,      setOrgStatus]      = useState({})
-  const [orgPaths,       setOrgPaths]       = useState([])
-  const [orgSaving,      setOrgSaving]      = useState(false)
-  const [orgRunning,     setOrgRunning]     = useState(false)
-  const [tmdbConfigured, setTmdbConfigured] = useState(null) // null=未知, true/false
 
   // ===================================================================
   //                          数据加载
@@ -142,29 +134,17 @@ export const Drive115 = () => {
   }, [])
   const fetchOrganizeAll = useCallback(async () => {
     try {
-      const [cfgRes, stRes, tmdbRes] = await Promise.all([
-        p115StrmApi.getOrganizeConfig(),
-        p115StrmApi.getOrganizeStatus(),
-        p115StrmApi.getOrganizeTmdbStatus(),
-      ])
-      const cfg = cfgRes.data || {}
-      setOrgCfg(cfg); setOrgPaths(cfg.source_paths || []); setOrgStatus(stRes.data || {})
-      setTmdbConfigured(!!tmdbRes.data?.available)
+      const stRes = await p115StrmApi.getOrganizeStatus()
+      setOrgStatus(stRes.data || {})
     } catch { /* ignore */ }
-  }, [])
-
-  const fetchScrapeConfig = useCallback(async () => {
-    // 刮削配置已移至「整理分类刮削」页面，此处保留占位避免引用错误
   }, [])
 
   useEffect(() => {
     fetchStatus(); fetchAccount(); fetchPathMapping()
     fetchSettings(); fetchStorageSources()
     fetchStrmAll(); fetchMonitorAll(); fetchOrganizeAll()
-    fetchScrapeConfig()
   }, [fetchStatus, fetchAccount, fetchPathMapping, fetchSettings,
-      fetchStorageSources, fetchStrmAll, fetchMonitorAll, fetchOrganizeAll,
-      fetchScrapeConfig])
+      fetchStorageSources, fetchStrmAll, fetchMonitorAll, fetchOrganizeAll])
 
   // Cookie 就绪时自动启动生活事件监控
   useEffect(() => {
@@ -327,20 +307,6 @@ export const Drive115 = () => {
     } catch { message.error(t('p115.operateFailed')) }
   }
 
-  // 整理
-  const handleOrgSave = async () => {
-    setOrgSaving(true)
-    try { await p115StrmApi.saveOrganizeConfig({ ...orgCfg, source_paths: orgPaths }); message.success(t('p115.configSaved')) }
-    catch { message.error(t('p115.saveFailed')) } finally { setOrgSaving(false) }
-  }
-  const handleOrgRun = async () => {
-    setOrgRunning(true)
-    try {
-      const r = await p115StrmApi.runOrganize()
-      r.data?.success ? message.success(t('p115.organizeStarted')) : message.warning(r.data?.message || t('p115.organizeStartFailed'))
-      setTimeout(fetchOrganizeAll, 1500)
-    } catch { message.error(t('common.failed')) } finally { setOrgRunning(false) }
-  }
 
   // ===================================================================
   //                        未启用提示

@@ -120,6 +120,9 @@ export const classifyApi = {
   getMetadataStatus:  ()        => api.get('/classify/metadata-status'),
   // 兼容旧调用（仅 TMDB）
   getTmdbStatus:      ()        => api.get('/classify/tmdb-status'),
+  // 目录整理规则（Tab1 独立存储）
+  getOrganizeRules:   ()        => api.get('/classify/organize-rules'),
+  saveOrganizeRules:  (rules)   => api.post('/classify/organize-rules', { rules }),
 }
 
 // ==================== 115 STRM 同步 + 监控 ====================
