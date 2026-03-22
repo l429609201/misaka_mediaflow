@@ -327,7 +327,9 @@
     "monitorStopped2": "監控已停止",
     "operateFailed": "操作失敗",
     "configSaved": "設定已儲存",
-    "saveFailed": "儲存失敗"
+    "saveFailed": "儲存失敗",
+    "syncConfigTitle": "同步設定",
+    "strmPathFromMapping": "同步路徑讀取自「整理與路徑」中設定的網盤根目錄和 STRM 根目錄"
   },
   "logs": {
     "title": "日誌中心",

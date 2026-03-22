@@ -322,7 +322,9 @@
     "monitorStopped2": "Monitor stopped",
     "operateFailed": "Operation failed",
     "configSaved": "Config saved",
-    "saveFailed": "Save failed"
+    "saveFailed": "Save failed",
+    "syncConfigTitle": "Sync Config",
+    "strmPathFromMapping": "Sync paths are read from the cloud prefix and STRM prefix configured in 'Organize & Paths'"
   },
   "logs": {
     "title": "Logs",
