@@ -58,6 +58,7 @@
     "mediaProxy": "Media & 302 Proxy",
     "searchSource": "Search Sources",
     "realtimeSubtitle": "Realtime Subtitle Subsetting",
+    "classify": "Organize & Scrape",
     "logs": "Logs",
     "settings": "Settings"
   },

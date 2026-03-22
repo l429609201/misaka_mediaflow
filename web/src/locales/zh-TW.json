@@ -58,6 +58,7 @@
     "mediaProxy": "媒體庫與 302 反代",
     "searchSource": "搜尋源",
     "realtimeSubtitle": "即時字幕子集化",
+    "classify": "整理分類刮削",
     "logs": "日誌中心",
     "settings": "系統設定"
   },

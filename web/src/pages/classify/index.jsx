@@ -1,23 +1,27 @@
 // web/src/pages/classify/index.jsx
-// 整理分类引擎 — 通用独立模块
-// 图形化：MP风格弹窗式编辑（每个维度专属控件）
-// 代码模式：自定义 ini-like 格式，有专属解析器
+// 整理分类刮削 — 三Tab页面
+// Tab1：目录整理（MP风格自定义转移规则）
+// Tab2：分类规则（原分类引擎配置）
+// Tab3：重命名刮削（格式模板配置）
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import {
   Card, Row, Col, Input, Switch, Button, Select, Modal, Form,
   Space, Alert, Tooltip, Divider, message, Segmented, Tag,
-  Typography, Spin,
+  Typography, Spin, Tabs, Collapse,
 } from 'antd'
 import {
   PlusOutlined, DeleteOutlined, SaveOutlined, ReloadOutlined,
   EditOutlined, ArrowUpOutlined, ArrowDownOutlined,
   CodeOutlined, AppstoreOutlined,
   CheckCircleFilled, ExclamationCircleFilled,
+  FolderAddOutlined, FolderOpenOutlined, NodeIndexOutlined,
+  PlayCircleOutlined, SyncOutlined,
 } from '@ant-design/icons'
-import { classifyApi } from '@/apis'
+import { classifyApi, p115Api, p115StrmApi } from '@/apis'
+import DirPickerModal from '@/components/DirPickerModal'
 
-const { Text, Title } = Typography
+const { Text } = Typography
 const { TextArea } = Input
 
 // ─── 默认配置 ─────────────────────────────────────────────────────────────────
@@ -523,6 +527,416 @@ tv:
 )
 
 // =============================================================================
+// 目录整理 — 默认规则结构
+// =============================================================================
+const DEFAULT_ORG_RULE = {
+  name: '新规则', enabled: true, media_type: 'all',
+  source_paths: [], target_root: '', unrecognized_dir: '', dry_run: false,
+}
+
+// =============================================================================
+// 刮削参数定义
+// =============================================================================
+const SCRAPE_PARAMS_MOVIE = [
+  { param: '{title}',          label: '标题' },
+  { param: '{original_title}', label: '原始标题' },
+  { param: '{en_title}',       label: '英文标题' },
+  { param: '{year}',           label: '年份' },
+  { param: '{tmdbid}',         label: 'TMDB ID' },
+  { param: '{imdbid}',         label: 'IMDB ID' },
+  { param: '{resource_type}',  label: '资源类型' },
+  { param: '{resource_pix}',   label: '分辨率' },
+  { param: '{video_encode}',   label: '视频编码' },
+  { param: '{audio_encode}',   label: '音频编码' },
+  { param: '{edition}',        label: '版本' },
+  { param: '{resource_team}',  label: '制作组' },
+]
+const SCRAPE_PARAMS_TV = [
+  ...SCRAPE_PARAMS_MOVIE,
+  { param: '{season}',         label: '季数（数字）' },
+  { param: '{season:02d}',     label: '季数（补零）' },
+  { param: '{episode}',        label: '集数（数字）' },
+  { param: '{episode:02d}',    label: '集数（补零）' },
+  { param: '{season_episode}', label: '季集（SxxExx）' },
+  { param: '{episode_title}',  label: '集标题' },
+]
+const MOVIE_SAMPLE = {
+  title: '星际穿越', original_title: 'Interstellar', en_title: 'Interstellar',
+  year: '2014', tmdbid: '157336', imdbid: 'tt0816692', resource_type: 'BluRay',
+  resource_pix: '2160p', video_encode: 'HEVC', audio_encode: 'TrueHD', edition: 'Remux', resource_team: 'CHDBits',
+}
+const TV_SAMPLE = {
+  ...MOVIE_SAMPLE, title: '权力的游戏', en_title: 'Game of Thrones',
+  year: '2011', tmdbid: '1399', season: 1, 'season:02d': '01', episode: 1,
+  'episode:02d': '01', season_episode: 'S01E01', episode_title: '凛冬将至',
+}
+const previewFormat = (fmt, sample) => {
+  if (!fmt) return '—'
+  return fmt.replace(/\{([^}]+)\}/g, (_, k) => sample[k] !== undefined ? sample[k] : `{${k}}`)
+}
+
+// =============================================================================
+// 目录整理 — 单条规则卡片
+// =============================================================================
+const OrgRuleCard = ({ rule, idx, total, onChange, onDelete, onMove, onRun, running }) => {
+  const [expanded, setExpanded] = useState(idx === 0)
+  const [dirPickerOpen, setDirPickerOpen]   = useState(false)
+  const [dirPickerField, setDirPickerField] = useState(null)
+
+  const set = (patch) => onChange({ ...rule, ...patch })
+  const openPicker = (field) => { setDirPickerField(field); setDirPickerOpen(true) }
+  const handleDirSelected = (p) => {
+    if (dirPickerField === '__src__') {
+      set({ source_paths: [...(rule.source_paths || []), p] })
+    } else if (dirPickerField) {
+      set({ [dirPickerField]: p })
+    }
+  }
+
+  const mediaTypeColors = { all: 'default', movie: 'blue', tv: 'purple' }
+  const mediaTypeLabels = { all: '全部', movie: '电影', tv: '剧集' }
+
+  const headerExtra = (
+    <Space size={4} onClick={e => e.stopPropagation()}>
+      <Tag color={mediaTypeColors[rule.media_type || 'all']}>{mediaTypeLabels[rule.media_type || 'all']}</Tag>
+      {rule.dry_run && <Tag color="orange">试运行</Tag>}
+      <Switch size="small" checked={rule.enabled !== false}
+        onChange={v => set({ enabled: v })} checkedChildren="启用" unCheckedChildren="禁用" />
+      <Tooltip title="上移"><Button size="small" icon={<ArrowUpOutlined />} disabled={idx === 0}
+        onClick={() => onMove(-1)} /></Tooltip>
+      <Tooltip title="下移"><Button size="small" icon={<ArrowDownOutlined />} disabled={idx === total - 1}
+        onClick={() => onMove(1)} /></Tooltip>
+      <Button size="small" type="primary" icon={<PlayCircleOutlined />}
+        loading={running} onClick={onRun}>运行整理</Button>
+      <Button size="small" danger icon={<DeleteOutlined />} onClick={onDelete} />
+    </Space>
+  )
+
+  return (
+    <>
+      <Collapse size="small" style={{ marginBottom: 10 }}
+        activeKey={expanded ? ['0'] : []}
+        onChange={keys => setExpanded(keys.includes('0'))}
+        items={[{
+          key: '0',
+          label: (
+            <Space>
+              <span style={{ fontWeight: 600 }}>{rule.name || `规则 ${idx + 1}`}</span>
+              {rule.source_paths?.length > 0 && (
+                <Tag style={{ fontSize: 11 }}>{rule.source_paths.length} 个源目录</Tag>
+              )}
+              {rule.target_root && (
+                <span style={{ fontSize: 11, color: '#888' }}>→ {rule.target_root}</span>
+              )}
+            </Space>
+          ),
+          extra: headerExtra,
+          children: (
+            <Form layout="vertical" size="small">
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Form.Item label="规则名称">
+                    <Input value={rule.name} onChange={e => set({ name: e.target.value })} placeholder="如：网盘-电影" />
+                  </Form.Item>
+                </Col>
+                <Col span={6}>
+                  <Form.Item label="媒体类型">
+                    <Select value={rule.media_type || 'all'} onChange={v => set({ media_type: v })}
+                      options={[{ value: 'all', label: '全部' }, { value: 'movie', label: '电影' }, { value: 'tv', label: '剧集' }]} />
+                  </Form.Item>
+                </Col>
+                <Col span={6}>
+                  <Form.Item label="试运行" tooltip="只记录日志，不实际移动文件">
+                    <Switch checked={rule.dry_run} onChange={v => set({ dry_run: v })} />
+                  </Form.Item>
+                </Col>
+              </Row>
+              <Form.Item label="目标根目录" tooltip="115网盘中整理后的存放根目录">
+                <Input value={rule.target_root} placeholder="/影剧" onChange={e => set({ target_root: e.target.value })}
+                  addonAfter={<Button type="link" size="small" icon={<FolderOpenOutlined />}
+                    onClick={() => openPicker('target_root')} style={{ padding: 0, height: 'auto' }}>选择</Button>} />
+              </Form.Item>
+              <Form.Item label="未识别目录" tooltip="无法匹配任何分类的文件移入此目录">
+                <Input value={rule.unrecognized_dir} placeholder="/未识别（选填）" onChange={e => set({ unrecognized_dir: e.target.value })}
+                  addonAfter={<Button type="link" size="small" icon={<FolderOpenOutlined />}
+                    onClick={() => openPicker('unrecognized_dir')} style={{ padding: 0, height: 'auto' }}>选择</Button>} />
+              </Form.Item>
+              <Form.Item label="源目录（待整理目录）" tooltip="115网盘中存放待整理文件的目录，可添加多个">
+                {(rule.source_paths || []).map((p, si) => (
+                  <Row gutter={8} key={si} style={{ marginBottom: 6 }} align="middle">
+                    <Col flex="1"><Input value={p} placeholder="/待整理/下载"
+                      onChange={e => set({ source_paths: rule.source_paths.map((v, i) => i === si ? e.target.value : v) })} /></Col>
+                    <Col><Button danger size="small" icon={<DeleteOutlined />}
+                      onClick={() => set({ source_paths: rule.source_paths.filter((_, i) => i !== si) })} /></Col>
+                  </Row>
+                ))}
+                <Space style={{ marginTop: 4 }}>
+                  <Button size="small" icon={<PlusOutlined />}
+                    onClick={() => set({ source_paths: [...(rule.source_paths || []), ''] })}>手动输入</Button>
+                  <Button size="small" icon={<FolderOpenOutlined />}
+                    onClick={() => openPicker('__src__')}>从网盘选择</Button>
+                </Space>
+              </Form.Item>
+            </Form>
+          ),
+        }]}
+      />
+      <DirPickerModal open={dirPickerOpen} onClose={() => setDirPickerOpen(false)} onSelect={handleDirSelected} />
+    </>
+  )
+}
+
+// =============================================================================
+// Tab1 — 目录整理
+// =============================================================================
+const OrganizeTab = () => {
+  const [rules,   setRules]   = useState([])
+  const [saving,  setSaving]  = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [running, setRunning] = useState({})   // { ruleIdx: bool }
+  const [orgStatus, setOrgStatus] = useState({})
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [cfgRes, stRes] = await Promise.all([
+        p115StrmApi.getOrganizeConfig(),
+        p115StrmApi.getOrganizeStatus(),
+      ])
+      const cfg = cfgRes.data || {}
+      // 兼容旧格式（单一配置 → 包装成规则数组）
+      if (Array.isArray(cfg.rules)) {
+        setRules(cfg.rules)
+      } else if (cfg.source_paths || cfg.target_root) {
+        setRules([{
+          name: '默认规则', enabled: true, media_type: 'all',
+          source_paths: cfg.source_paths || [],
+          target_root: cfg.target_root || '',
+          unrecognized_dir: cfg.unrecognized_dir || '',
+          dry_run: cfg.dry_run || false,
+        }])
+      } else {
+        setRules([])
+      }
+      setOrgStatus(stRes.data || {})
+    } catch { message.error('加载整理配置失败') }
+    finally { setLoading(false) }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      // 以第一条规则的字段兼容后端旧格式，同时附带完整 rules 数组
+      const first = rules[0] || {}
+      await p115StrmApi.saveOrganizeConfig({
+        source_paths: first.source_paths || [],
+        target_root:  first.target_root  || '',
+        unrecognized_dir: first.unrecognized_dir || '',
+        dry_run: first.dry_run || false,
+        rules,
+      })
+      message.success('整理配置已保存')
+    } catch { message.error('保存失败') }
+    finally { setSaving(false) }
+  }
+
+  const runRule = async (idx) => {
+    setRunning(r => ({ ...r, [idx]: true }))
+    try {
+      const rule = rules[idx]
+      const r = await p115StrmApi.runOrganize(rule.source_paths?.length ? { source_paths: rule.source_paths } : undefined)
+      r.data?.success ? message.success('整理任务已启动') : message.warning(r.data?.message || '启动失败')
+      setTimeout(async () => {
+        try { const s = await p115StrmApi.getOrganizeStatus(); setOrgStatus(s.data || {}) } catch { /* ignore */ }
+      }, 1500)
+    } catch { message.error('操作失败') }
+    finally { setRunning(r => ({ ...r, [idx]: false })) }
+  }
+
+  const addRule = () => setRules(rs => [...rs, { ...DEFAULT_ORG_RULE, name: `规则 ${rs.length + 1}` }])
+  const updateRule = (idx, rule) => setRules(rs => rs.map((r, i) => i === idx ? rule : r))
+  const deleteRule = (idx) => setRules(rs => rs.filter((_, i) => i !== idx))
+  const moveRule   = (idx, dir) => {
+    const ni = idx + dir
+    if (ni < 0 || ni >= rules.length) return
+    const next = [...rules]; [next[idx], next[ni]] = [next[ni], next[idx]]; setRules(next)
+  }
+
+  return (
+    <Spin spinning={loading}>
+      {/* 页头操作栏 */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <Space>
+          <Tag color="blue">{rules.length} 条规则</Tag>
+          {orgStatus.running && <Tag color="processing" icon={<SyncOutlined spin />}>整理进行中</Tag>}
+          {orgStatus.last_organize && (
+            <span style={{ fontSize: 12, color: '#888' }}>
+              上次整理：{new Date(orgStatus.last_organize * 1000).toLocaleString()}
+              {orgStatus.last_organize_stats && (
+                <> · 移动 <b>{orgStatus.last_organize_stats.moved ?? 0}</b> · 失败 <b>{orgStatus.last_organize_stats.errors ?? 0}</b></>
+              )}
+            </span>
+          )}
+        </Space>
+        <Space>
+          <Button icon={<ReloadOutlined />} onClick={load} loading={loading}>刷新</Button>
+          <Button icon={<PlusOutlined />} onClick={addRule}>添加规则</Button>
+          <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={save}>保存配置</Button>
+        </Space>
+      </div>
+
+      {/* 说明 */}
+      <Alert type="info" showIcon style={{ marginBottom: 16 }}
+        message="目录整理：将源目录中的文件按「分类规则」（Tab2）自动移动到目标根目录下的对应子目录，支持多条规则独立配置和运行。"
+      />
+
+      {rules.length === 0
+        ? <div style={{ padding: '60px 0', textAlign: 'center', color: '#bbb', fontSize: 14,
+            border: '2px dashed #e5e7eb', borderRadius: 10 }}>
+            暂无整理规则，点击「添加规则」开始配置
+          </div>
+        : rules.map((rule, idx) => (
+          <OrgRuleCard key={idx} rule={rule} idx={idx} total={rules.length}
+            onChange={r => updateRule(idx, r)}
+            onDelete={() => deleteRule(idx)}
+            onMove={dir => moveRule(idx, dir)}
+            onRun={() => runRule(idx)}
+            running={!!running[idx]}
+          />
+        ))
+      }
+    </Spin>
+  )
+}
+
+// =============================================================================
+// Tab3 — 重命名刮削
+// =============================================================================
+const ScrapeTab = () => {
+  const [scrapeCfg, setScrapeCfg] = useState({
+    enabled: false,
+    movie_format: '{title} ({year})/{title} ({year})',
+    tv_format:    '{title} ({year})/Season {season:02d}/{title} - {season_episode} - {episode_title}',
+  })
+  const [saving,           setSaving]           = useState(false)
+  const [loading,          setLoading]          = useState(true)
+  const [scrapeActiveInput, setScrapeActiveInput] = useState('movie')
+  const movieFormatRef = useRef(null)
+  const tvFormatRef    = useRef(null)
+
+  useEffect(() => {
+    p115Api.getScrapeConfig()
+      .then(({ data }) => { if (data) setScrapeCfg(data) })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  const handleSave = async () => {
+    setSaving(true)
+    try { await p115Api.saveScrapeConfig(scrapeCfg); message.success('刮削配置已保存') }
+    catch { message.error('保存失败') }
+    finally { setSaving(false) }
+  }
+
+  const insertParam = (param) => {
+    const key = scrapeActiveInput === 'movie' ? 'movie_format' : 'tv_format'
+    const ref = scrapeActiveInput === 'movie' ? movieFormatRef : tvFormatRef
+    const el  = ref.current?.input || ref.current
+    if (el) {
+      const start = el.selectionStart ?? el.value.length
+      const end   = el.selectionEnd   ?? el.value.length
+      const val   = scrapeCfg[key] || ''
+      const next  = val.slice(0, start) + param + val.slice(end)
+      setScrapeCfg(c => ({ ...c, [key]: next }))
+      setTimeout(() => { el.focus(); el.setSelectionRange(start + param.length, start + param.length) }, 0)
+    } else {
+      setScrapeCfg(c => ({ ...c, [key]: (c[key] || '') + param }))
+    }
+  }
+
+  const currentParams = scrapeActiveInput === 'movie' ? SCRAPE_PARAMS_MOVIE : SCRAPE_PARAMS_TV
+
+  return (
+    <Spin spinning={loading}>
+      <Row gutter={[24, 24]}>
+        <Col xs={24} lg={14}>
+          <Card
+            title={<Space><NodeIndexOutlined />重命名格式配置</Space>}
+            extra={<Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave}>保存配置</Button>}
+          >
+            <Form layout="vertical" size="small">
+              <Form.Item label="启用刮削重命名">
+                <Switch checked={scrapeCfg.enabled} onChange={v => setScrapeCfg(c => ({ ...c, enabled: v }))}
+                  checkedChildren="启用" unCheckedChildren="禁用" />
+              </Form.Item>
+
+              <Divider orientation="left" orientationMargin={0} style={{ fontSize: 13 }}>
+                <i className="iconfont icon-dianying" style={{ marginRight: 6 }} />电影
+              </Divider>
+              <Form.Item label="电影命名格式" tooltip="支持 / 分隔目录层级">
+                <Input ref={movieFormatRef} value={scrapeCfg.movie_format}
+                  placeholder="{title} ({year})/{title} ({year})"
+                  onFocus={() => setScrapeActiveInput('movie')}
+                  onChange={e => setScrapeCfg(c => ({ ...c, movie_format: e.target.value }))}
+                  style={{ padding: '10px 11px' }} />
+              </Form.Item>
+              <div style={{ background: 'var(--ant-color-fill-quaternary,rgba(0,0,0,.04))', borderRadius: 6,
+                padding: '8px 12px', marginBottom: 16, fontSize: 12 }}>
+                <span style={{ color: '#888' }}>预览：</span>
+                <code style={{ color: 'var(--ant-color-primary,#1677ff)', wordBreak: 'break-all' }}>
+                  {previewFormat(scrapeCfg.movie_format, MOVIE_SAMPLE)}
+                </code>
+              </div>
+
+              <Divider orientation="left" orientationMargin={0} style={{ fontSize: 13 }}>
+                <i className="iconfont icon-dianshiju" style={{ marginRight: 6 }} />电视节目
+              </Divider>
+              <Form.Item label="剧集命名格式" tooltip="支持 / 分隔目录层级">
+                <Input ref={tvFormatRef} value={scrapeCfg.tv_format}
+                  placeholder="{title} ({year})/Season {season:02d}/{title} - {season_episode} - {episode_title}"
+                  onFocus={() => setScrapeActiveInput('tv')}
+                  onChange={e => setScrapeCfg(c => ({ ...c, tv_format: e.target.value }))}
+                  style={{ padding: '10px 11px' }} />
+              </Form.Item>
+              <div style={{ background: 'var(--ant-color-fill-quaternary,rgba(0,0,0,.04))', borderRadius: 6,
+                padding: '8px 12px', fontSize: 12 }}>
+                <span style={{ color: '#888' }}>预览：</span>
+                <code style={{ color: 'var(--ant-color-primary,#1677ff)', wordBreak: 'break-all' }}>
+                  {previewFormat(scrapeCfg.tv_format, TV_SAMPLE)}
+                </code>
+              </div>
+            </Form>
+          </Card>
+        </Col>
+
+        <Col xs={24} lg={10}>
+          <Card title={<Space><PlusOutlined />可用参数</Space>} style={{ position: 'sticky', top: 24 }}>
+            <Alert type="info" showIcon style={{ marginBottom: 12 }}
+              message={scrapeActiveInput === 'movie' ? '当前编辑：电影格式' : '当前编辑：剧集格式'} />
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {currentParams.map(({ param, label }) => (
+                <Tooltip key={param} title={param}>
+                  <Button size="small" onClick={() => insertParam(param)}
+                    style={{ fontFamily: 'monospace', fontSize: 12 }}>{label}</Button>
+                </Tooltip>
+              ))}
+            </div>
+            <Divider style={{ margin: '12px 0' }} />
+            <div style={{ fontSize: 11, color: '#888', lineHeight: 1.8 }}>
+              <div>• 点击参数按钮将其插入当前聚焦的格式输入框</div>
+              <div>• <code>/</code> 分隔文件夹层级，如 <code>{'{title}'} ({'{year}'})/...</code></div>
+              <div>• <code>:02d</code> 表示补零，如 <code>{'{season:02d}'}</code> → <code>01</code></div>
+            </div>
+          </Card>
+        </Col>
+      </Row>
+    </Spin>
+  )
+}
+
+// =============================================================================
 // 主页面
 // =============================================================================
 export const Classify = () => {
@@ -617,12 +1031,18 @@ export const Classify = () => {
 
   const allUnavailable = providers.length>0 && providers.every(p=>!p.available)
 
-  return (
-    <div style={{ padding:24 }}>
-      {/* ── 页头 ── */}
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:12, marginBottom:20 }}>
+  // ── Tab2 分类规则内容 ──
+  const classifyContent = (
+    <Spin spinning={loading}>
+      {/* Provider 未配置提示 */}
+      {allUnavailable && (
+        <Alert type="warning" showIcon style={{ marginBottom:16 }}
+          message="元数据 Provider 均未配置，流派 / 产地 / 语言规则将不生效，仅文件名关键词和正则有效。"
+          description='可在「搜索源」或「系统设置」中配置 API Key。' />
+      )}
+      {/* 页头操作区 */}
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:12, marginBottom:16 }}>
         <Space align="center" size={10}>
-          <Title level={4} style={{ margin:0 }}>整理分类引擎</Title>
           <Tag color="purple" style={{ borderRadius:20, fontWeight:600 }}>{uiCats.length} 个分类</Tag>
           {providers.map(p=>(
             <Tag key={p.name}
@@ -642,69 +1062,85 @@ export const Classify = () => {
         </Space>
       </div>
 
-      {/* ── Provider 未配置提示 ── */}
-      {allUnavailable && (
-        <Alert type="warning" showIcon style={{ marginBottom:16 }}
-          message="元数据 Provider 均未配置，流派 / 产地 / 语言规则将不生效，仅文件名关键词和正则有效。"
-          description='可在「搜索源」或「系统设置」中配置 API Key。' />
+      {mode==='gui' ? (
+        <>
+          {/* 全局设置 */}
+          <Card size="small" style={{ marginBottom:16 }}
+            styles={{ body:{ padding:'14px 20px' } }}>
+            <Row gutter={[32,0]} align="middle">
+              <Col>
+                <Form.Item label="启用分类引擎" style={{ margin:0 }}>
+                  <Switch checked={cfg.enabled} checkedChildren="启用" unCheckedChildren="禁用"
+                    onChange={v=>setCfgField({ enabled:v })} />
+                </Form.Item>
+              </Col>
+              <Col>
+                <Alert type="info" showIcon style={{ margin:0, padding:'4px 12px' }}
+                  message="分类引擎只定义规则，源目录和目标目录由各调用任务（如115整理）传入" />
+              </Col>
+            </Row>
+          </Card>
+
+          {/* 分类列表 */}
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+            <Typography.Text type="secondary" style={{ fontSize:12 }}>
+              匹配优先级从上到下 · 点击「编辑」修改分类条件
+            </Typography.Text>
+            <Button type="primary" icon={<PlusOutlined />} onClick={addCat}>添加分类</Button>
+          </div>
+
+          {uiCats.length===0
+            ? <div style={{ padding:'60px 0', textAlign:'center', color:'#bbb', fontSize:14, border:'2px dashed #e5e7eb', borderRadius:10 }}>
+                暂无分类规则，点击「添加分类」开始配置
+              </div>
+            : uiCats.map((cat,i)=>(
+              <CategoryItem key={i} cat={cat} idx={i} total={uiCats.length}
+                color={CAT_COLORS[i%CAT_COLORS.length]}
+                onEdit={()=>openEdit(cat,i)}
+                onDelete={()=>deleteCat(i)}
+                onMove={dir=>moveCat(i,dir)}
+              />
+            ))
+          }
+        </>
+      ) : (
+        <CodePanel value={codeText} onChange={setCodeText} />
       )}
 
-      <Spin spinning={loading}>
-        {mode==='gui' ? (
-          <>
-            {/* ── 全局设置 ── */}
-            <Card size="small" style={{ marginBottom:16 }}
-              styles={{ body:{ padding:'14px 20px' } }}>
-              <Row gutter={[32,0]} align="middle">
-                <Col>
-                  <Form.Item label="启用分类引擎" style={{ margin:0 }}>
-                    <Switch checked={cfg.enabled} checkedChildren="启用" unCheckedChildren="禁用"
-                      onChange={v=>setCfgField({ enabled:v })} />
-                  </Form.Item>
-                </Col>
-                <Col>
-                  <Alert type="info" showIcon style={{ margin:0, padding:'4px 12px' }}
-                    message="分类引擎只定义规则，源目录和目标目录由各调用任务（如115整理）传入" />
-                </Col>
-              </Row>
-            </Card>
-
-            {/* ── 分类列表 ── */}
-            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
-              <Text type="secondary" style={{ fontSize:12 }}>
-                匹配优先级从上到下 · 点击「编辑」修改分类条件
-              </Text>
-              <Button type="primary" icon={<PlusOutlined />} onClick={addCat}>添加分类</Button>
-            </div>
-
-            {uiCats.length===0
-              ? <div style={{ padding:'60px 0', textAlign:'center', color:'#bbb', fontSize:14, border:'2px dashed #e5e7eb', borderRadius:10 }}>
-                  暂无分类规则，点击「添加分类」开始配置
-                </div>
-              : uiCats.map((cat,i)=>(
-                <CategoryItem key={i} cat={cat} idx={i} total={uiCats.length}
-                  color={CAT_COLORS[i%CAT_COLORS.length]}
-                  onEdit={()=>openEdit(cat,i)}
-                  onDelete={()=>deleteCat(i)}
-                  onMove={dir=>moveCat(i,dir)}
-                />
-              ))
-            }
-          </>
-        ) : (
-          <CodePanel value={codeText} onChange={setCodeText} />
-        )}
-      </Spin>
-
-      {/* ── 编辑弹窗 ── */}
+      {/* 编辑弹窗 */}
       <EditCategoryModal
         open={editCat!==null}
         cat={editCat}
         onOk={onEditOk}
         onCancel={()=>{ setEditCat(null); setEditIdx(null) }}
       />
+    </Spin>
+  )
+
+  return (
+    <div style={{ padding: 24 }}>
+      <Tabs
+        items={[
+          {
+            key: 'organize',
+            label: <Space><FolderAddOutlined />目录整理</Space>,
+            children: <OrganizeTab />,
+          },
+          {
+            key: 'classify',
+            label: <Space><AppstoreOutlined />分类规则</Space>,
+            children: classifyContent,
+          },
+          {
+            key: 'scrape',
+            label: <Space><NodeIndexOutlined />重命名刮削</Space>,
+            children: <ScrapeTab />,
+          },
+        ]}
+      />
     </div>
   )
 }
 
 export default Classify
+

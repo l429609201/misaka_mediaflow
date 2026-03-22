@@ -2,8 +2,9 @@
 // 115 网盘 — Tab布局:
 //   Tab1: 115网盘（左：账号信息+高级设置，右：生活事件监控）
 //   Tab2: 整理&路径（左：路径映射，右：整理分类；下方：STRM生成三列卡片）
+// 注：刮削重命名功能已移至「整理分类刮削」页面（Tab3）
 
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import {
   Card, Descriptions, Tag, Button, Input, InputNumber, Modal, message,
   Space, Alert, Row, Col, Spin, Typography, Form, Select, QRCode,
@@ -99,18 +100,6 @@ export const Drive115 = () => {
   const [orgRunning,     setOrgRunning]     = useState(false)
   const [tmdbConfigured, setTmdbConfigured] = useState(null) // null=未知, true/false
 
-  // ── 刮削重命名 ────────────────────────────────────────────────────────
-  const [scrapeCfg,      setScrapeCfg]      = useState({
-    enabled: false,
-    movie_format: '{title} ({year})/{title} ({year})',
-    tv_format:    '{title} ({year})/Season {season:02d}/{title} - {season_episode} - {episode_title}',
-  })
-  const [scrapeSaving,   setScrapeSaving]   = useState(false)
-  // 当前聚焦的格式输入框：'movie' | 'tv'
-  const [scrapeActiveInput, setScrapeActiveInput] = useState('movie')
-  const movieFormatRef = useRef(null)
-  const tvFormatRef    = useRef(null)
-
   // ===================================================================
   //                          数据加载
   // ===================================================================
@@ -165,8 +154,7 @@ export const Drive115 = () => {
   }, [])
 
   const fetchScrapeConfig = useCallback(async () => {
-    try { const { data } = await p115Api.getScrapeConfig(); setScrapeCfg(data) }
-    catch { /* ignore */ }
+    // 刮削配置已移至「整理分类刮削」页面，此处保留占位避免引用错误
   }, [])
 
   useEffect(() => {
@@ -352,66 +340,6 @@ export const Drive115 = () => {
       r.data?.success ? message.success(t('p115.organizeStarted')) : message.warning(r.data?.message || t('p115.organizeStartFailed'))
       setTimeout(fetchOrganizeAll, 1500)
     } catch { message.error(t('common.failed')) } finally { setOrgRunning(false) }
-  }
-
-  // 刮削
-  const handleSaveScrapeConfig = async () => {
-    setScrapeSaving(true)
-    try { await p115Api.saveScrapeConfig(scrapeCfg); message.success(t('p115.configSaved')) }
-    catch { message.error(t('p115.saveFailed')) } finally { setScrapeSaving(false) }
-  }
-  // 将参数插入当前聚焦的格式输入框光标位置
-  const insertScrapeParam = (param) => {
-    const key    = scrapeActiveInput === 'movie' ? 'movie_format' : 'tv_format'
-    const ref    = scrapeActiveInput === 'movie' ? movieFormatRef : tvFormatRef
-    const el     = ref.current?.input || ref.current
-    if (el) {
-      const start = el.selectionStart ?? el.value.length
-      const end   = el.selectionEnd   ?? el.value.length
-      const val   = scrapeCfg[key] || ''
-      const next  = val.slice(0, start) + param + val.slice(end)
-      setScrapeCfg(c => ({ ...c, [key]: next }))
-      // 恢复光标
-      setTimeout(() => { el.focus(); el.setSelectionRange(start + param.length, start + param.length) }, 0)
-    } else {
-      setScrapeCfg(c => ({ ...c, [key]: (c[key] || '') + param }))
-    }
-  }
-
-  // 刮削参数定义（参考 MP MetaInfo + MediaInfo）
-  const SCRAPE_PARAMS_MOVIE = [
-    { param: '{title}',          labelKey: 'scrapeParamTitle' },
-    { param: '{original_title}', labelKey: 'scrapeParamOriginalTitle' },
-    { param: '{en_title}',       labelKey: 'scrapeParamEnTitle' },
-    { param: '{year}',           labelKey: 'scrapeParamYear' },
-    { param: '{tmdbid}',         labelKey: 'scrapeParamTmdbId' },
-    { param: '{imdbid}',         labelKey: 'scrapeParamImdbId' },
-    { param: '{resource_type}',  labelKey: 'scrapeParamResourceType' },
-    { param: '{resource_pix}',   labelKey: 'scrapeParamResourcePix' },
-    { param: '{video_encode}',   labelKey: 'scrapeParamVideoEncode' },
-    { param: '{audio_encode}',   labelKey: 'scrapeParamAudioEncode' },
-    { param: '{edition}',        labelKey: 'scrapeParamEdition' },
-    { param: '{resource_team}',  labelKey: 'scrapeParamResourceTeam' },
-  ]
-  const SCRAPE_PARAMS_TV = [
-    ...SCRAPE_PARAMS_MOVIE,
-    { param: '{season}',          labelKey: 'scrapeParamSeason' },
-    { param: '{season:02d}',      labelKey: 'scrapeParamSeasonZero' },
-    { param: '{episode}',         labelKey: 'scrapeParamEpisode' },
-    { param: '{episode:02d}',     labelKey: 'scrapeParamEpisodeZero' },
-    { param: '{season_episode}',  labelKey: 'scrapeParamSeasonEpisode' },
-  ]
-
-  // 格式预览（基于示例数据）
-  const MOVIE_SAMPLE = { title: '星际穿越', original_title: 'Interstellar', en_title: 'Interstellar',
-    year: '2014', tmdbid: '157336', imdbid: 'tt0816692', resource_type: 'BluRay',
-    resource_pix: '2160p', video_encode: 'HEVC', audio_encode: 'TrueHD', edition: 'Remux', resource_team: 'CHDBits' }
-  const TV_SAMPLE = { ...MOVIE_SAMPLE, title: '权力的游戏', en_title: 'Game of Thrones',
-    year: '2011', tmdbid: '1399', season: 1, 'season:02d': '01', episode: 1,
-    'episode:02d': '01', season_episode: 'S01E01', episode_title: '凛冬将至' }
-  const previewFormat = (fmt, sample) => {
-    if (!fmt) return '—'
-    return fmt.replace(/\{([^}]+)\}/g, (_, k) => sample[k] !== undefined ? sample[k] : `{${k}}`)
   }
 
   // ===================================================================
@@ -1004,99 +932,6 @@ export const Drive115 = () => {
   )
 
   // ===================================================================
-  //  Tab 3 — 刮削（重命名格式配置）
-  // ===================================================================
-  const currentParams = scrapeActiveInput === 'movie' ? SCRAPE_PARAMS_MOVIE : SCRAPE_PARAMS_TV
-  const tab3 = (
-    <Row gutter={[24, 24]}>
-      <Col xs={24} lg={14}>
-        <Card
-          title={<Space><NodeIndexOutlined />{t('p115.scrapeTitle')}</Space>}
-          extra={<Button type="primary" icon={<SaveOutlined />} loading={scrapeSaving} onClick={handleSaveScrapeConfig}>{t('p115.scrapeSave')}</Button>}
-        >
-          <Form layout="vertical" size="small">
-            <Form.Item label={t('p115.scrapeEnabled')}>
-              <Switch checked={scrapeCfg.enabled} onChange={v => setScrapeCfg(c => ({ ...c, enabled: v }))}
-                checkedChildren={t('common.enabled')} unCheckedChildren={t('common.disabled')} />
-            </Form.Item>
-
-            <Divider orientation="left" orientationMargin={0} style={{ fontSize: 13 }}>
-              <i className="iconfont icon-dianying" style={{ marginRight: 6 }} />
-              {t('p115.scrapeFormatMovieSection')}
-            </Divider>
-
-            <Form.Item label={t('p115.scrapeMovieFormat')} tooltip={t('p115.scrapeMovieFormatHint')}>
-              <Input
-                ref={movieFormatRef}
-                value={scrapeCfg.movie_format}
-                placeholder={t('p115.scrapeMovieDefaultFormat')}
-                onFocus={() => setScrapeActiveInput('movie')}
-                onChange={e => setScrapeCfg(c => ({ ...c, movie_format: e.target.value }))}
-                style={{ padding: '10px 11px' }}
-              />
-            </Form.Item>
-            <div style={{ background: 'var(--ant-color-fill-quaternary,rgba(0,0,0,.04))', borderRadius: 6, padding: '8px 12px', marginBottom: 16, fontSize: 12 }}>
-              <span style={{ color: '#888' }}>{t('p115.scrapeMoviePreview')}：</span>
-              <code style={{ color: 'var(--ant-color-primary,#1677ff)', wordBreak: 'break-all' }}>
-                {previewFormat(scrapeCfg.movie_format, MOVIE_SAMPLE)}
-              </code>
-            </div>
-
-            <Divider orientation="left" orientationMargin={0} style={{ fontSize: 13 }}>
-              <i className="iconfont icon-dianshiju" style={{ marginRight: 6 }} />
-              {t('p115.scrapeFormatTvSection')}
-            </Divider>
-
-            <Form.Item label={t('p115.scrapeTvFormat')} tooltip={t('p115.scrapeTvFormatHint')}>
-              <Input
-                ref={tvFormatRef}
-                value={scrapeCfg.tv_format}
-                placeholder={t('p115.scrapeTvDefaultFormat')}
-                onFocus={() => setScrapeActiveInput('tv')}
-                onChange={e => setScrapeCfg(c => ({ ...c, tv_format: e.target.value }))}
-                style={{ padding: '10px 11px' }}
-              />
-            </Form.Item>
-            <div style={{ background: 'var(--ant-color-fill-quaternary,rgba(0,0,0,.04))', borderRadius: 6, padding: '8px 12px', fontSize: 12 }}>
-              <span style={{ color: '#888' }}>{t('p115.scrapeTvPreview')}：</span>
-              <code style={{ color: 'var(--ant-color-primary,#1677ff)', wordBreak: 'break-all' }}>
-                {previewFormat(scrapeCfg.tv_format, TV_SAMPLE)}
-              </code>
-            </div>
-          </Form>
-        </Card>
-      </Col>
-
-      <Col xs={24} lg={10}>
-        <Card title={<Space><PlusOutlined />{t('p115.scrapeParamsTitle')}</Space>}
-          style={{ position: 'sticky', top: 24 }}>
-          <Alert type="info" showIcon style={{ marginBottom: 12 }}
-            message={scrapeActiveInput === 'movie'
-              ? <><i className="iconfont icon-dianying" style={{ marginRight: 6 }} />{t('p115.scrapeFormatMovieSection')} — {t('p115.scrapeParamsTitle')}</>
-              : <><i className="iconfont icon-dianshiju" style={{ marginRight: 6 }} />{t('p115.scrapeFormatTvSection')} — {t('p115.scrapeParamsTitle')}</>}
-          />
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            {currentParams.map(({ param, labelKey }) => (
-              <Tooltip key={param} title={param}>
-                <Button size="small" onClick={() => insertScrapeParam(param)}
-                  style={{ fontFamily: 'monospace', fontSize: 12 }}>
-                  {t(`p115.${labelKey}`)}
-                </Button>
-              </Tooltip>
-            ))}
-          </div>
-          <Divider style={{ margin: '12px 0' }} />
-          <div style={{ fontSize: 11, color: '#888', lineHeight: 1.8 }}>
-            <div>• 点击参数按钮将其插入当前聚焦的格式输入框</div>
-            <div>• <code>/</code> 分隔文件夹层级，如 <code>{'{title}'} ({'{year}'})/...</code></div>
-            <div>• <code>:02d</code> 表示补零，如 <code>{'{season:02d}'}</code> → <code>01</code></div>
-          </div>
-        </Card>
-      </Col>
-    </Row>
-  )
-
-  // ===================================================================
   //  主渲染
   // ===================================================================
   return (
@@ -1105,7 +940,6 @@ export const Drive115 = () => {
         items={[
           { key: 'p115',     label: <Space><CloudSyncOutlined />{t('p115.tabDrive')}</Space>,       children: tab1 },
           { key: 'organize', label: <Space><FolderAddOutlined />{t('p115.tabOrganizePath')}</Space>, children: tab2 },
-          { key: 'scrape',   label: <Space><NodeIndexOutlined />{t('p115.tabScrape')}</Space>,      children: tab3 },
         ]}
       />
 
