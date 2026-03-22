@@ -7,23 +7,22 @@ import { useEffect, useState, useCallback } from 'react'
 import {
   Card, Row, Col, Input, Switch, Button, Select, Modal, Form,
   Space, Alert, Tooltip, Divider, message, Segmented, Tag,
-  Typography, Spin, InputNumber,
+  Typography, Spin,
 } from 'antd'
 import {
   PlusOutlined, DeleteOutlined, SaveOutlined, ReloadOutlined,
   EditOutlined, ArrowUpOutlined, ArrowDownOutlined,
-  CodeOutlined, AppstoreOutlined, FolderOpenOutlined,
-  CheckCircleFilled, ExclamationCircleFilled, CopyOutlined,
+  CodeOutlined, AppstoreOutlined,
+  CheckCircleFilled, ExclamationCircleFilled,
 } from '@ant-design/icons'
 import { classifyApi } from '@/apis'
-import DirPickerModal from '@/components/DirPickerModal'
 
 const { Text, Title } = Typography
 const { TextArea } = Input
 
 // ─── 默认配置 ─────────────────────────────────────────────────────────────────
 const DEFAULT_CONFIG = {
-  enabled: true, dry_run: false, target_root: '', unrecognized_dir: '', categories: [],
+  enabled: true, categories: [],
 }
 
 // ─── 分类颜色 ─────────────────────────────────────────────────────────────────
@@ -528,16 +527,14 @@ tv:
 // =============================================================================
 export const Classify = () => {
   const [cfg,       setCfg]       = useState(DEFAULT_CONFIG)
-  const [uiCats,    setUiCats]    = useState([])   // UI 内部格式
+  const [uiCats,    setUiCats]    = useState([])
   const [mode,      setMode]      = useState('gui')
   const [codeText,  setCodeText]  = useState('')
   const [saving,    setSaving]    = useState(false)
   const [loading,   setLoading]   = useState(true)
   const [providers, setProviders] = useState([])
-  const [editCat,   setEditCat]   = useState(null)  // 当前编辑的分类
+  const [editCat,   setEditCat]   = useState(null)
   const [editIdx,   setEditIdx]   = useState(null)
-  const [dirOpen,   setDirOpen]   = useState(false)
-  const [dirField,  setDirField]  = useState(null)
 
   // ── 加载 ──
   const load = useCallback(async () => {
@@ -618,12 +615,7 @@ export const Classify = () => {
   }
   const setCfgField = patch => setCfg(c => ({ ...c, ...patch }))
 
-  // ── 目录选择 ──
-  const openDir = field => { setDirField(field); setDirOpen(true) }
-  const onDirSelect = val => { if(dirField) setCfgField({ [dirField]:val }); setDirOpen(false) }
-
   const allUnavailable = providers.length>0 && providers.every(p=>!p.available)
-  const metaProviders  = providers.filter(p=>!p.available)
 
   return (
     <div style={{ padding:24 }}>
@@ -663,32 +655,16 @@ export const Classify = () => {
             {/* ── 全局设置 ── */}
             <Card size="small" style={{ marginBottom:16 }}
               styles={{ body:{ padding:'14px 20px' } }}>
-              <Row gutter={[32,0]} align="middle" wrap>
-                <Col xs={24} sm={12} md={5}>
+              <Row gutter={[32,0]} align="middle">
+                <Col>
                   <Form.Item label="启用分类引擎" style={{ margin:0 }}>
                     <Switch checked={cfg.enabled} checkedChildren="启用" unCheckedChildren="禁用"
                       onChange={v=>setCfgField({ enabled:v })} />
                   </Form.Item>
                 </Col>
-                <Col xs={24} sm={12} md={4}>
-                  <Form.Item label="试运行" tooltip="只记录日志，不移动文件" style={{ margin:0 }}>
-                    <Switch checked={cfg.dry_run} checkedChildren="开" unCheckedChildren="关"
-                      onChange={v=>setCfgField({ dry_run:v })} />
-                  </Form.Item>
-                </Col>
-                <Col xs={24} sm={24} md={8}>
-                  <Form.Item label="目标根目录" style={{ margin:0 }}>
-                    <Input value={cfg.target_root} placeholder="/整理后"
-                      suffix={<Tooltip title="选择目录"><FolderOpenOutlined style={{ cursor:'pointer', color:'#999' }} onClick={()=>openDir('target_root')} /></Tooltip>}
-                      onChange={e=>setCfgField({ target_root:e.target.value })} />
-                  </Form.Item>
-                </Col>
-                <Col xs={24} sm={24} md={7}>
-                  <Form.Item label="未识别目录" style={{ margin:0 }}>
-                    <Input value={cfg.unrecognized_dir} placeholder="/未识别"
-                      suffix={<Tooltip title="选择目录"><FolderOpenOutlined style={{ cursor:'pointer', color:'#999' }} onClick={()=>openDir('unrecognized_dir')} /></Tooltip>}
-                      onChange={e=>setCfgField({ unrecognized_dir:e.target.value })} />
-                  </Form.Item>
+                <Col>
+                  <Alert type="info" showIcon style={{ margin:0, padding:'4px 12px' }}
+                    message="分类引擎只定义规则，源目录和目标目录由各调用任务（如115整理）传入" />
                 </Col>
               </Row>
             </Card>
@@ -727,9 +703,6 @@ export const Classify = () => {
         onOk={onEditOk}
         onCancel={()=>{ setEditCat(null); setEditIdx(null) }}
       />
-
-      {/* ── 目录选择器 ── */}
-      <DirPickerModal open={dirOpen} onCancel={()=>setDirOpen(false)} onSelect={onDirSelect} />
     </div>
   )
 }

@@ -30,9 +30,6 @@ class CategoryItem(BaseModel):
 
 class ClassifyConfigPayload(BaseModel):
     enabled: bool = True
-    dry_run: bool = False
-    target_root: str = ""
-    unrecognized_dir: str = ""
     categories: List[CategoryItem] = []
 
 

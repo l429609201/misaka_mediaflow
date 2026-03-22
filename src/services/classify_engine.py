@@ -13,9 +13,6 @@
 # 分类规则数据结构：
 # {
 #   "enabled": true,
-#   "dry_run": false,
-#   "target_root": "/整理后",
-#   "unrecognized_dir": "/未识别",
 #   "categories": [
 #     {
 #       "name": "动漫",
@@ -107,9 +104,6 @@ DEFAULT_CATEGORIES = [
 
 _DEFAULT_CONFIG = {
     "enabled": True,
-    "dry_run": False,
-    "target_root": "",
-    "unrecognized_dir": "",
     "categories": DEFAULT_CATEGORIES,
 }
 
