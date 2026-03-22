@@ -146,13 +146,22 @@ export const Drive115 = () => {
     } catch { /* ignore */ }
   }, [mappingForm])
 
+  const MONITOR_CFG_DEFAULTS = {
+    poll_interval:  30,
+    auto_inc_sync:  true,
+    monitor_dir:    '',
+    strm_dir:       '',
+    use_custom_dir: false,
+  }
+
   const fetchMonitorAll = useCallback(async () => {
     try {
       const [cfgRes, stRes] = await Promise.all([
         p115StrmApi.getMonitorConfig(),
         p115StrmApi.getMonitorStatus(),
       ])
-      setMonitorCfg(cfgRes.data || {})
+      // 用默认值兜底，防止后端缺字段导致 state 出现 undefined
+      setMonitorCfg(prev => ({ ...MONITOR_CFG_DEFAULTS, ...prev, ...(cfgRes.data || {}) }))
       setMonitorStatus(stRes.data || {})
     } catch { /* ignore */ }
   }, [])
@@ -289,7 +298,16 @@ export const Drive115 = () => {
 
   const handleMonitorSave = async () => {
     setMonitorSaving(true)
-    try { await p115StrmApi.saveMonitorConfig(monitorCfg); message.success(t('p115.configSaved')) }
+    try {
+      // use_custom_dir=false 时不传目录字段，避免覆盖后端已有值
+      const payload = { ...monitorCfg }
+      if (!monitorCfg.use_custom_dir) {
+        delete payload.monitor_dir
+        delete payload.strm_dir
+      }
+      await p115StrmApi.saveMonitorConfig(payload)
+      message.success(t('p115.configSaved'))
+    }
     catch { message.error(t('p115.saveFailed')) }
     finally { setMonitorSaving(false) }
   }
