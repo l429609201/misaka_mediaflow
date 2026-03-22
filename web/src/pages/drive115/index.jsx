@@ -545,191 +545,176 @@ export const Drive115 = () => {
   )
 
   // ===================================================================
-  //  Tab 2 — 整理 & 路径
+  //  Tab 2 — 整理 & 路径（三列等宽等高：STRM生成 | 整理与路径 | 整理分类）
   // ===================================================================
   const tab2 = (
-    <>
-      {/* 上方：路径映射 + 整理分类 左右布局 */}
-      <Row gutter={[24, 24]}>
-        {/* 路径映射 */}
-        <Col xs={24} lg={12}>
-          <Spin spinning={mappingLoading}>
-            <Card title={<Space><NodeIndexOutlined />{t('p115.pathMappingTitle')}</Space>}
-              extra={<Button type="primary" icon={<SaveOutlined />} loading={mappingSaving} onClick={handleSavePathMapping}>{t('common.save')}</Button>}
-            >
-              <Alert type="info" showIcon style={{ marginBottom: 16 }} message={t('p115.pathMappingHint')} />
-              <Form form={mappingForm} layout="vertical" size="small"
-                initialValues={{ media_prefix: '', cloud_prefix: '', strm_prefix: '', local_media_prefix: '' }}>
-                <Form.Item name="cloud_prefix" label={t('p115.cloudPrefix')} tooltip={t('p115.cloudPrefixHint')}>
-                  <Input placeholder="/media" addonAfter={
-                    <Button type="link" size="small" icon={<FolderOpenOutlined />} onClick={() => openDirPicker('cloud_prefix')} style={{ padding: 0, height: 'auto' }}>
-                      {t('p115.selectDir')}
-                    </Button>} />
-                </Form.Item>
-                <Form.Item name="media_prefix" label={t('p115.mediaPrefix')} tooltip={t('p115.mediaPrefixHint')}>
-                  <Input placeholder="/media/movies" />
-                </Form.Item>
-                <Form.Item name="strm_prefix" label={t('p115.strmPrefix')} tooltip={t('p115.strmPrefixHint')}>
-                  <Input placeholder="/config/strm/movies" addonAfter={
-                    <Button type="link" size="small" icon={<FolderOpenOutlined />} onClick={() => openLocalDirPicker('strm_prefix')} style={{ padding: 0, height: 'auto' }}>
-                      {t('p115.selectDir')}
-                    </Button>} />
-                </Form.Item>
-                <Form.Item name="local_media_prefix" label={t('p115.localMediaPrefix')} tooltip={t('p115.localMediaPrefixHint')}>
-                  <Input placeholder="/cd2/115open"
-                    addonBefore={
-                      <Select value={localMediaSource} onChange={setLocalMediaSource} style={{ width: 120 }}
-                        options={[
-                          { value: 'local', label: t('p115.localMediaSourceLocal') },
-                          ...storageSources.filter(s => s.is_active).map(s => ({ value: String(s.id), label: s.name })),
-                          { value: 'storage_dir', label: t('p115.localMediaSourceStorage') },
-                        ]} />
-                    }
-                    addonAfter={
-                      localMediaSource === 'storage_dir'
-                        ? <Button type="link" size="small" icon={<FolderOpenOutlined />} onClick={() => setStorageDirPickerOpen(true)} style={{ padding: 0, height: 'auto' }}>{t('p115.selectDir')}</Button>
-                        : localMediaSource === 'local'
-                          ? <Button type="link" size="small" icon={<FolderOpenOutlined />} onClick={() => openLocalDirPicker('local_media_prefix')} style={{ padding: 0, height: 'auto' }}>{t('p115.selectDir')}</Button>
-                          : null
-                    }
-                  />
-                </Form.Item>
-              </Form>
-            </Card>
-          </Spin>
-        </Col>
+    <Row gutter={[24, 24]} align="stretch">
 
-        {/* 整理分类 */}
-        <Col xs={24} lg={12}>
-          <Card title={<Space><FolderAddOutlined />{t('p115.organizeTitle')}</Space>}
-            extra={
-              <Space>
-                <Button icon={<SyncOutlined />} onClick={fetchOrganizeAll} />
-                <Button type="primary" icon={<FolderAddOutlined />} loading={orgRunning || orgStatus.running} onClick={handleOrgRun}>{t('p115.startOrganize')}</Button>
-              </Space>
-            }
+      {/* ── 左列：STRM 生成 ── */}
+      <Col xs={24} lg={8} style={{ display: 'flex', flexDirection: 'column' }}>
+        <Card
+          title={<Space><ThunderboltOutlined />{t('p115.strmGeneration')}</Space>}
+          style={{ flex: 1 }}
+          extra={<Button icon={<SyncOutlined spin={strmStatus.running} />} size="small" onClick={fetchStrmAll}>{t('p115.refreshStatus')}</Button>}
+        >
+          {/* 当前路径提示 */}
+          <Alert type="info" showIcon style={{ marginBottom: 16 }}
+            message={t('p115.strmPathFromMapping')} />
+
+          {/* 路径只读展示 */}
+          <Form layout="vertical" size="small">
+            <Form.Item label={t('p115.cloudPrefix')}>
+              <Input disabled value={mappingForm.getFieldValue('cloud_prefix') || '—'} />
+            </Form.Item>
+            <Form.Item label={t('p115.strmPrefix')}>
+              <Input disabled value={mappingForm.getFieldValue('strm_prefix') || '—'} />
+            </Form.Item>
+          </Form>
+
+          <Divider style={{ margin: '12px 0' }} />
+
+          {/* 全量同步 */}
+          <div style={{ fontSize: 12, color: '#888', marginBottom: 2 }}>{t('p115.lastFullSync')}</div>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>
+            {strmStatus.last_full_sync ? new Date(strmStatus.last_full_sync * 1000).toLocaleString() : '—'}
+          </div>
+          <Space size={4} wrap style={{ marginBottom: 10 }}>
+            <StatTag value={fullStats.created} label={t('p115.statGenerated')} color="green" />
+            <StatTag value={fullStats.skipped} label={t('p115.statSkipped')} color="default" />
+            <StatTag value={fullStats.errors}  label={t('p115.statFailed')} color="red" />
+          </Space>
+          {strmStatus.running && (
+            <Alert style={{ marginBottom: 10 }} type="info" showIcon
+              message={t('p115.syncInProgress', { count: strmProgress.created || 0 })} />
+          )}
+          <Button type="primary" icon={<ThunderboltOutlined />} block style={{ marginBottom: 12 }}
+            loading={strmSyncing || strmStatus.running} onClick={handleFullSync}>
+            {t('p115.fullSync')}
+          </Button>
+
+          <Divider style={{ margin: '0 0 12px' }} />
+
+          {/* 增量同步 */}
+          <div style={{ fontSize: 12, color: '#888', marginBottom: 2 }}>{t('p115.lastIncSync')}</div>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>
+            {strmStatus.last_inc_sync ? new Date(strmStatus.last_inc_sync * 1000).toLocaleString() : '—'}
+          </div>
+          <Space size={4} wrap style={{ marginBottom: 10 }}>
+            <StatTag value={incStats.created} label={t('p115.statGenerated')} color="green" />
+            <StatTag value={incStats.skipped} label={t('p115.statSkipped')} color="default" />
+            <StatTag value={incStats.errors}  label={t('p115.statFailed')} color="red" />
+          </Space>
+          <Button icon={<SyncOutlined />} block
+            loading={strmSyncing || strmStatus.running} onClick={handleIncSync}>
+            {t('p115.incSync')}
+          </Button>
+        </Card>
+      </Col>
+
+      {/* ── 中列：整理与路径 ── */}
+      <Col xs={24} lg={8} style={{ display: 'flex', flexDirection: 'column' }}>
+        <Spin spinning={mappingLoading} style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+          <Card title={<Space><NodeIndexOutlined />{t('p115.pathMappingTitle')}</Space>}
+            style={{ flex: 1 }}
+            extra={<Button type="primary" icon={<SaveOutlined />} loading={mappingSaving} onClick={handleSavePathMapping}>{t('common.save')}</Button>}
           >
-            {orgStatus.last_organize && (
-              <Alert style={{ marginBottom: 8 }} type="info" showIcon
-                message={<Space size={4} wrap>
-                  <span>{t('p115.lastOrganize')}: {new Date(orgStatus.last_organize * 1000).toLocaleString()}</span>
-                  <StatTag value={orgStatus.last_organize_stats?.moved}   label={t('p115.statMoved')}    color="green" />
-                  <StatTag value={orgStatus.last_organize_stats?.skipped} label={t('p115.statSkipped')}  color="default" />
-                  <StatTag value={orgStatus.last_organize_stats?.errors}  label={t('p115.statFailed')}   color="red" />
-                </Space>} />
-            )}
-            {orgStatus.running && <Alert style={{ marginBottom: 8 }} type="info" showIcon message={t('p115.organizeInProgress')} />}
-            <Alert style={{ marginBottom: 12 }} type="warning" showIcon message={t('p115.organizeWarning')} />
-            <Form layout="vertical" size="small">
-              <Form.Item label={t('p115.organizeTargetRoot')} tooltip={t('p115.organizeTargetRootHint')}>
-                <Input value={orgCfg.target_root} placeholder={t('p115.organizeTargetRootHint')}
-                  onChange={e => setOrgCfg(c => ({ ...c, target_root: e.target.value }))} />
+            <Alert type="info" showIcon style={{ marginBottom: 16 }} message={t('p115.pathMappingHint')} />
+            <Form form={mappingForm} layout="vertical" size="small"
+              initialValues={{ media_prefix: '', cloud_prefix: '', strm_prefix: '', local_media_prefix: '' }}>
+              <Form.Item name="cloud_prefix" label={t('p115.cloudPrefix')} tooltip={t('p115.cloudPrefixHint')}>
+                <Input placeholder="/media" addonAfter={
+                  <Button type="link" size="small" icon={<FolderOpenOutlined />} onClick={() => openDirPicker('cloud_prefix')} style={{ padding: 0, height: 'auto' }}>
+                    {t('p115.selectDir')}
+                  </Button>} />
               </Form.Item>
-              <Form.Item label={t('p115.dryRun')} tooltip={t('p115.dryRunHint')}>
-                <Switch checked={orgCfg.dry_run} onChange={v => setOrgCfg(c => ({ ...c, dry_run: v }))} />
+              <Form.Item name="media_prefix" label={t('p115.mediaPrefix')} tooltip={t('p115.mediaPrefixHint')}>
+                <Input placeholder="/media/movies" />
               </Form.Item>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{t('p115.sourcePaths')}</div>
-              {orgPaths.map((p, idx) => (
-                <Row gutter={8} key={idx} style={{ marginBottom: 8 }} align="middle">
-                  <Col flex="1"><Input placeholder={t('p115.sourceDirPlaceholder')} value={p}
-                    onChange={e => setOrgPaths(prev => prev.map((v, i) => i === idx ? e.target.value : v))} /></Col>
-                  <Col><Button danger icon={<DeleteOutlined />} onClick={() => setOrgPaths(prev => prev.filter((_, i) => i !== idx))} /></Col>
-                </Row>
-              ))}
-              <Button icon={<PlusOutlined />} onClick={() => setOrgPaths(p => [...p, ''])} style={{ marginBottom: 12 }}>{t('p115.addSourcePath')}</Button>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{t('p115.categoryRules')}</div>
-              {Object.entries(orgCfg.categories || {}).map(([cat, sub]) => (
-                <Row gutter={8} key={cat} style={{ marginBottom: 8 }} align="middle">
-                  <Col span={6}><Tag color="blue">{cat}</Tag></Col>
-                  <Col flex="1"><Input value={sub}
-                    onChange={e => setOrgCfg(c => ({ ...c, categories: { ...c.categories, [cat]: e.target.value } }))} /></Col>
-                </Row>
-              ))}
-              <Button type="primary" icon={<CheckCircleOutlined />} onClick={handleOrgSave} loading={orgSaving} style={{ marginTop: 8 }}>
-                {t('p115.saveOrganizeConfig')}
-              </Button>
-            </Form>
-          </Card>
-        </Col>
-      </Row>
-
-      {/* 下方：STRM 生成三列横排卡片 */}
-      <Row gutter={[16, 16]} style={{ marginTop: 24 }}>
-        {/* 全量同步卡片 */}
-        <Col xs={24} md={8}>
-          <Card
-            title={<Space><ThunderboltOutlined />{t('p115.fullSync')}</Space>}
-            style={{ height: '100%' }}
-            extra={<Button icon={<SyncOutlined spin={strmStatus.running} />} size="small" onClick={fetchStrmAll}>{t('p115.refreshStatus')}</Button>}
-          >
-            <div style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>{t('p115.lastFullSync')}</div>
-            <div style={{ fontWeight: 600, marginBottom: 12 }}>
-              {strmStatus.last_full_sync ? new Date(strmStatus.last_full_sync * 1000).toLocaleString() : '—'}
-            </div>
-            <Space size={4} wrap style={{ marginBottom: 16 }}>
-              <StatTag value={fullStats.created} label={t('p115.statGenerated')} color="green" />
-              <StatTag value={fullStats.skipped} label={t('p115.statSkipped')} color="default" />
-              <StatTag value={fullStats.errors}  label={t('p115.statFailed')} color="red" />
-            </Space>
-            {strmStatus.running && (
-              <Alert style={{ marginBottom: 12 }} type="info" showIcon
-                message={t('p115.syncInProgress', { count: strmProgress.created || 0 })} />
-            )}
-            <Button type="primary" icon={<ThunderboltOutlined />} block
-              loading={strmSyncing || strmStatus.running} onClick={handleFullSync}>
-              {t('p115.fullSync')}
-            </Button>
-          </Card>
-        </Col>
-
-        {/* 增量同步卡片 */}
-        <Col xs={24} md={8}>
-          <Card
-            title={<Space><SyncOutlined />{t('p115.incSync')}</Space>}
-            style={{ height: '100%' }}
-          >
-            <div style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>{t('p115.lastIncSync')}</div>
-            <div style={{ fontWeight: 600, marginBottom: 12 }}>
-              {strmStatus.last_inc_sync ? new Date(strmStatus.last_inc_sync * 1000).toLocaleString() : '—'}
-            </div>
-            <Space size={4} wrap style={{ marginBottom: 16 }}>
-              <StatTag value={incStats.created} label={t('p115.statGenerated')} color="green" />
-              <StatTag value={incStats.skipped} label={t('p115.statSkipped')} color="default" />
-              <StatTag value={incStats.errors}  label={t('p115.statFailed')} color="red" />
-            </Space>
-            <Button icon={<SyncOutlined />} block
-              loading={strmSyncing || strmStatus.running} onClick={handleIncSync}>
-              {t('p115.incSync')}
-            </Button>
-          </Card>
-        </Col>
-
-        {/* 同步配置卡片（路径来自整理与路径） */}
-        <Col xs={24} md={8}>
-          <Card
-            title={<Space><NodeIndexOutlined />{t('p115.syncConfigTitle')}</Space>}
-            style={{ height: '100%' }}
-          >
-            <Alert
-              type="info" showIcon style={{ marginBottom: 16 }}
-              message={t('p115.strmPathFromMapping')}
-            />
-            <Form layout="vertical" size="small">
-              <Form.Item label={t('p115.cloudPrefix')}>
-                <Input disabled value={mappingForm.getFieldValue('cloud_prefix') || '—'} />
+              <Form.Item name="strm_prefix" label={t('p115.strmPrefix')} tooltip={t('p115.strmPrefixHint')}>
+                <Input placeholder="/config/strm/movies" addonAfter={
+                  <Button type="link" size="small" icon={<FolderOpenOutlined />} onClick={() => openLocalDirPicker('strm_prefix')} style={{ padding: 0, height: 'auto' }}>
+                    {t('p115.selectDir')}
+                  </Button>} />
               </Form.Item>
-              <Form.Item label={t('p115.strmPrefix')}>
-                <Input disabled value={mappingForm.getFieldValue('strm_prefix') || '—'} />
+              <Form.Item name="local_media_prefix" label={t('p115.localMediaPrefix')} tooltip={t('p115.localMediaPrefixHint')}>
+                <Input placeholder="/cd2/115open"
+                  addonBefore={
+                    <Select value={localMediaSource} onChange={setLocalMediaSource} style={{ width: 120 }}
+                      options={[
+                        { value: 'local', label: t('p115.localMediaSourceLocal') },
+                        ...storageSources.filter(s => s.is_active).map(s => ({ value: String(s.id), label: s.name })),
+                        { value: 'storage_dir', label: t('p115.localMediaSourceStorage') },
+                      ]} />
+                  }
+                  addonAfter={
+                    localMediaSource === 'storage_dir'
+                      ? <Button type="link" size="small" icon={<FolderOpenOutlined />} onClick={() => setStorageDirPickerOpen(true)} style={{ padding: 0, height: 'auto' }}>{t('p115.selectDir')}</Button>
+                      : localMediaSource === 'local'
+                        ? <Button type="link" size="small" icon={<FolderOpenOutlined />} onClick={() => openLocalDirPicker('local_media_prefix')} style={{ padding: 0, height: 'auto' }}>{t('p115.selectDir')}</Button>
+                        : null
+                  }
+                />
               </Form.Item>
             </Form>
-            <Button type="primary" icon={<CheckCircleOutlined />} onClick={handleStrmSaveCfg}
-              loading={strmCfgSaving} block style={{ marginTop: 8 }}>
-              {t('p115.saveSyncConfig')}
-            </Button>
           </Card>
-        </Col>
-      </Row>
-    </>
+        </Spin>
+      </Col>
+
+      {/* ── 右列：整理分类 ── */}
+      <Col xs={24} lg={8} style={{ display: 'flex', flexDirection: 'column' }}>
+        <Card title={<Space><FolderAddOutlined />{t('p115.organizeTitle')}</Space>}
+          style={{ flex: 1 }}
+          extra={
+            <Space>
+              <Button icon={<SyncOutlined />} onClick={fetchOrganizeAll} />
+              <Button type="primary" icon={<FolderAddOutlined />} loading={orgRunning || orgStatus.running} onClick={handleOrgRun}>{t('p115.startOrganize')}</Button>
+            </Space>
+          }
+        >
+          {orgStatus.last_organize && (
+            <Alert style={{ marginBottom: 8 }} type="info" showIcon
+              message={<Space size={4} wrap>
+                <span>{t('p115.lastOrganize')}: {new Date(orgStatus.last_organize * 1000).toLocaleString()}</span>
+                <StatTag value={orgStatus.last_organize_stats?.moved}   label={t('p115.statMoved')}    color="green" />
+                <StatTag value={orgStatus.last_organize_stats?.skipped} label={t('p115.statSkipped')}  color="default" />
+                <StatTag value={orgStatus.last_organize_stats?.errors}  label={t('p115.statFailed')}   color="red" />
+              </Space>} />
+          )}
+          {orgStatus.running && <Alert style={{ marginBottom: 8 }} type="info" showIcon message={t('p115.organizeInProgress')} />}
+          <Alert style={{ marginBottom: 12 }} type="warning" showIcon message={t('p115.organizeWarning')} />
+          <Form layout="vertical" size="small">
+            <Form.Item label={t('p115.organizeTargetRoot')} tooltip={t('p115.organizeTargetRootHint')}>
+              <Input value={orgCfg.target_root} placeholder={t('p115.organizeTargetRootHint')}
+                onChange={e => setOrgCfg(c => ({ ...c, target_root: e.target.value }))} />
+            </Form.Item>
+            <Form.Item label={t('p115.dryRun')} tooltip={t('p115.dryRunHint')}>
+              <Switch checked={orgCfg.dry_run} onChange={v => setOrgCfg(c => ({ ...c, dry_run: v }))} />
+            </Form.Item>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{t('p115.sourcePaths')}</div>
+            {orgPaths.map((p, idx) => (
+              <Row gutter={8} key={idx} style={{ marginBottom: 8 }} align="middle">
+                <Col flex="1"><Input placeholder={t('p115.sourceDirPlaceholder')} value={p}
+                  onChange={e => setOrgPaths(prev => prev.map((v, i) => i === idx ? e.target.value : v))} /></Col>
+                <Col><Button danger icon={<DeleteOutlined />} onClick={() => setOrgPaths(prev => prev.filter((_, i) => i !== idx))} /></Col>
+              </Row>
+            ))}
+            <Button icon={<PlusOutlined />} onClick={() => setOrgPaths(p => [...p, ''])} style={{ marginBottom: 12 }}>{t('p115.addSourcePath')}</Button>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{t('p115.categoryRules')}</div>
+            {Object.entries(orgCfg.categories || {}).map(([cat, sub]) => (
+              <Row gutter={8} key={cat} style={{ marginBottom: 8 }} align="middle">
+                <Col span={6}><Tag color="blue">{cat}</Tag></Col>
+                <Col flex="1"><Input value={sub}
+                  onChange={e => setOrgCfg(c => ({ ...c, categories: { ...c.categories, [cat]: e.target.value } }))} /></Col>
+              </Row>
+            ))}
+            <Button type="primary" icon={<CheckCircleOutlined />} onClick={handleOrgSave} loading={orgSaving} style={{ marginTop: 8 }}>
+              {t('p115.saveOrganizeConfig')}
+            </Button>
+          </Form>
+        </Card>
+      </Col>
+
+    </Row>
   )
 
   // ===================================================================
