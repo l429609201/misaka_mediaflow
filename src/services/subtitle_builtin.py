@@ -796,11 +796,21 @@ def _extract_fonts_section(ass_text: str) -> tuple:
 
     for line in fonts_body.splitlines():
         s = line.strip()
-        if s.lower().startswith("filename:"):
+        # fontInAss 生成的字体块使用 "fontname:" 前缀
+        # 标准 ASS 规范使用 "filename:" 前缀，两种都要识别
+        s_lower = s.lower()
+        if s_lower.startswith("filename:"):
+            key_len = 9
+        elif s_lower.startswith("fontname:"):
+            key_len = 9
+        else:
+            key_len = 0
+
+        if key_len:
             # 保存上一个块
             if current_name and current_lines:
                 blocks[current_name] = "\n".join(current_lines) + "\n"
-            raw_name = s[9:].strip()
+            raw_name = s[key_len:].strip()
             name_lower = raw_name.lower()
             for ext in (".ttf", ".otf", ".ttc", ".otc"):
                 if name_lower.endswith(ext):
@@ -885,26 +895,33 @@ async def _process_ass_content(ass_text: str, raw_bytes: bytes) -> tuple:
     font_resolved: dict = {}
     missing: list = []
 
-    # ── 并发查找所有字体：DB → 在线下载，不走阻塞的内存全量扫描 ──────────────
+    # ── 并发查找所有字体：DB 与在线下载并行，本地优先 ──────────────────────
     async def _resolve_one(key: str) -> tuple:
-        """返回 (key, loc_or_None)"""
+        """
+        返回 (key, loc_or_None)。
+        策略：DB 查询与在线下载同时发起（asyncio.gather），
+        DB 命中则优先使用本地结果；DB 未命中则用在线下载结果。
+        """
         fname, subfamily = (key.rsplit("^", 1) if "^" in key
                             else (key, _VARIANT_REGULAR))
         is_bold   = "Bold"   in subfamily
         is_italic = "Italic" in subfamily
 
-        # ── 1. 查持久化 DB（主路径，毫秒级）────────────────────────────────
-        loc = None
-        try:
-            from src.services.font_index_service import find_font_in_db
-            loc = await find_font_in_db(fname, is_bold=is_bold, is_italic=is_italic)
-        except Exception:
-            pass
+        async def _db_lookup() -> Optional[tuple]:
+            try:
+                from src.services.font_index_service import find_font_in_db
+                return await find_font_in_db(fname, is_bold=is_bold, is_italic=is_italic)
+            except Exception:
+                return None
 
-        # ── 2. DB 未命中 → 在线下载（CDN / 旧格式 URL）──────────────────────
-        if not loc:
-            loc = await download_font(fname, is_bold=is_bold, is_italic=is_italic)
+        async def _online_lookup() -> Optional[tuple]:
+            return await download_font(fname, is_bold=is_bold, is_italic=is_italic)
 
+        # DB 和在线同时查找
+        db_loc, online_loc = await asyncio.gather(_db_lookup(), _online_lookup())
+
+        # 本地优先：DB 命中则忽略在线结果
+        loc = db_loc or online_loc
         return key, loc
 
     resolve_results = await asyncio.gather(*[_resolve_one(k) for k in font_chars])
