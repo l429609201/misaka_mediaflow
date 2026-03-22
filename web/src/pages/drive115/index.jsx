@@ -1020,7 +1020,8 @@ export const Drive115 = () => {
             </Form.Item>
 
             <Divider orientation="left" orientationMargin={0} style={{ fontSize: 13 }}>
-              🎬 {t('p115.scrapeFormatMovieSection')}
+              <i className="iconfont icon-dianying" style={{ marginRight: 6 }} />
+              {t('p115.scrapeFormatMovieSection')}
             </Divider>
 
             <Form.Item label={t('p115.scrapeMovieFormat')} tooltip={t('p115.scrapeMovieFormatHint')}>
@@ -1030,6 +1031,7 @@ export const Drive115 = () => {
                 placeholder={t('p115.scrapeMovieDefaultFormat')}
                 onFocus={() => setScrapeActiveInput('movie')}
                 onChange={e => setScrapeCfg(c => ({ ...c, movie_format: e.target.value }))}
+                style={{ padding: '10px 11px' }}
               />
             </Form.Item>
             <div style={{ background: 'var(--ant-color-fill-quaternary,rgba(0,0,0,.04))', borderRadius: 6, padding: '8px 12px', marginBottom: 16, fontSize: 12 }}>
@@ -1040,7 +1042,8 @@ export const Drive115 = () => {
             </div>
 
             <Divider orientation="left" orientationMargin={0} style={{ fontSize: 13 }}>
-              📺 {t('p115.scrapeFormatTvSection')}
+              <i className="iconfont icon-dianshiju" style={{ marginRight: 6 }} />
+              {t('p115.scrapeFormatTvSection')}
             </Divider>
 
             <Form.Item label={t('p115.scrapeTvFormat')} tooltip={t('p115.scrapeTvFormatHint')}>
@@ -1050,6 +1053,7 @@ export const Drive115 = () => {
                 placeholder={t('p115.scrapeTvDefaultFormat')}
                 onFocus={() => setScrapeActiveInput('tv')}
                 onChange={e => setScrapeCfg(c => ({ ...c, tv_format: e.target.value }))}
+                style={{ padding: '10px 11px' }}
               />
             </Form.Item>
             <div style={{ background: 'var(--ant-color-fill-quaternary,rgba(0,0,0,.04))', borderRadius: 6, padding: '8px 12px', fontSize: 12 }}>
@@ -1067,8 +1071,8 @@ export const Drive115 = () => {
           style={{ position: 'sticky', top: 24 }}>
           <Alert type="info" showIcon style={{ marginBottom: 12 }}
             message={scrapeActiveInput === 'movie'
-              ? `🎬 ${t('p115.scrapeFormatMovieSection')} — ${t('p115.scrapeParamsTitle')}`
-              : `📺 ${t('p115.scrapeFormatTvSection')} — ${t('p115.scrapeParamsTitle')}`}
+              ? <><i className="iconfont icon-dianying" style={{ marginRight: 6 }} />{t('p115.scrapeFormatMovieSection')} — {t('p115.scrapeParamsTitle')}</>
+              : <><i className="iconfont icon-dianshiju" style={{ marginRight: 6 }} />{t('p115.scrapeFormatTvSection')} — {t('p115.scrapeParamsTitle')}</>}
           />
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             {currentParams.map(({ param, labelKey }) => (
