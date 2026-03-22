@@ -871,20 +871,25 @@ const OrgRuleModal = ({ open, rule, onOk, onCancel, storages, categories }) => {
 // =============================================================================
 // 目录整理 — 单条规则小卡片（固定 200px 宽，永不展开，点编辑图标弹 Modal）
 // =============================================================================
+const TRANSFER_MODE_LABEL = { move: '移动', copy: '复制', hardlink: '硬链接', softlink: '软链接' }
+const TRANSFER_MODE_COLOR = { move: 'blue', copy: 'cyan', hardlink: 'green', softlink: 'purple' }
+
 const OrgRuleCard = ({ rule, idx, total, onEdit, onDelete, onMove, onRun, running, storages }) => {
+  const { token } = theme.useToken()
   const enabled    = rule.enabled !== false
   const mediaType  = rule.media_type || 'all'
   const accentColor = mediaType === 'movie' ? '#1677ff' : mediaType === 'tv' ? '#7c3aed' : '#52c41a'
   const storageLabel = rule.source_storage === 'local' || !rule.source_storage
     ? '本地'
     : storages.find(s => String(s.id) === String(rule.source_storage))?.name || rule.source_storage
+  const transferMode = rule.transfer_mode || 'move'
 
   return (
     <div style={{
       width: 200, flexShrink: 0, borderRadius: 10,
-      border: `1px solid var(--ant-color-border, #e5e7eb)`,
+      border: `1px solid ${token.colorBorder}`,
       borderTop: `3px solid ${accentColor}`,
-      background: 'var(--ant-color-bg-container, #fff)',
+      background: token.colorBgContainer,
       boxShadow: '0 1px 4px rgba(0,0,0,.07)',
       opacity: enabled ? 1 : 0.5,
       display: 'flex', flexDirection: 'column',
@@ -895,31 +900,34 @@ const OrgRuleCard = ({ rule, idx, total, onEdit, onDelete, onMove, onRun, runnin
     >
       {/* 卡片主体 */}
       <div style={{ padding: '14px 14px 8px', flex: 1, minHeight: 100 }}>
-        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8, wordBreak: 'break-all', lineHeight: 1.3 }}>
+        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 8, wordBreak: 'break-all', lineHeight: 1.3, color: token.colorText }}>
           {rule.name || `规则 ${idx + 1}`}
         </div>
         <Space size={4} wrap style={{ marginBottom: 6 }}>
           <Tag color={MEDIA_TYPE_COLOR[mediaType]} style={{ fontSize: 11, margin: 0 }}>
             {MEDIA_TYPE_LABEL[mediaType]}
           </Tag>
+          <Tag color={TRANSFER_MODE_COLOR[transferMode]} style={{ fontSize: 11, margin: 0 }}>
+            {TRANSFER_MODE_LABEL[transferMode] || transferMode}
+          </Tag>
           {rule.dry_run && <Tag color="orange" style={{ fontSize: 11, margin: 0 }}>试运行</Tag>}
-          {!enabled && <Tag style={{ fontSize: 11, margin: 0 }}>已禁用</Tag>}
+          {!enabled && <Tag color="default" style={{ fontSize: 11, margin: 0 }}>已禁用</Tag>}
         </Space>
-        <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>存储：{storageLabel}</div>
+        <div style={{ fontSize: 11, color: token.colorTextTertiary, marginTop: 2 }}>存储：{storageLabel}</div>
         {rule.target_root && (
-          <div style={{ fontSize: 11, color: '#aaa', marginTop: 2, wordBreak: 'break-all' }}>
+          <div style={{ fontSize: 11, color: token.colorTextTertiary, marginTop: 2, wordBreak: 'break-all' }}>
             目标：{rule.target_root}
           </div>
         )}
         {rule.monitor_path && (
-          <div style={{ fontSize: 11, color: '#bbb', marginTop: 2, wordBreak: 'break-all' }}>
+          <div style={{ fontSize: 11, color: token.colorTextQuaternary, marginTop: 2, wordBreak: 'break-all' }}>
             监控：{rule.monitor_path}
           </div>
         )}
       </div>
       {/* 底部操作栏 */}
       <div style={{
-        borderTop: '1px solid var(--ant-color-border-secondary, #f0f0f0)',
+        borderTop: `1px solid ${token.colorBorderSecondary}`,
         padding: '5px 8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
       }}>
         <Space size={0}>
