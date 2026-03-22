@@ -93,121 +93,206 @@ const MEDIA_TYPE_OPTIONS = [
   { value: 'tv',    label: '剧集' },
 ]
 
+
 // =============================================================================
-// 自定义代码格式解析器
-// 格式示例:
-//   [动漫]
-//   target_dir = 动漫
-//   media_type = all
-//   genre_ids  = 16, 10762
-//   country    = JP
-//   language   = ja
-//   keyword    = 动漫, 动画, 番剧
-//   keyword_dir= 动漫, 番剧
-//   regex      = (?i)(anime|OVA)
-//   match_all  = false
+// YAML 格式解析器（参考 MP 项目 category.yaml 格式）
+//
+// 格式说明：
+//   顶层只有两个固定 key：movie（电影）、tv（电视剧），或 all（不区分）
+//   二级 key 同时也是分类名和目标子目录
+//   二级 key 下可选配置字段（缩进4格或2格均可）：
+//     genre_ids:            '16'           # 逗号分隔多个
+//     origin_country:       'JP,CN'        # 剧集产地
+//     production_countries: 'JP,CN'        # 电影产地
+//     original_language:    'ja,zh'        # 语言
+//     keyword:              '动漫,动画'    # 文件名关键词
+//     keyword_dir:          '番剧,动漫'    # 目录名关键词
+//     regex:                '(?i)(OVA)'   # 正则
+//   无任何字段的二级 key = 兜底分类
+//
+// 示例：
+//   movie:
+//     动漫电影:
+//       genre_ids: '16'
+//     电影:
+//
+//   tv:
+//     动漫:
+//       genre_ids: '16'
+//       origin_country: 'JP'
+//     电视剧:
 // =============================================================================
 
-const CFG_TEMPLATE = `# 整理分类引擎配置
-# 每个 [分类名] 块定义一条分类规则，匹配优先级从上到下
-# 空 rules 的分类为"兜底分类"，匹配所有未归类文件
-
-[动漫]
-target_dir = 动漫
-media_type = all
-genre_ids  = 16
-country    = JP
-language   = ja
-keyword    = 动漫, 动画, 番剧
-regex      = (?i)(anime|OVA|OAD)
-match_all  = false
-
-[电影]
-target_dir = 电影
-media_type = movie
-keyword    =
-match_all  = false
-
-[其他]
-target_dir = 其他
-# 空规则 = 兜底分类
+const YAML_HEADER = `####### 整理分类配置 #######
+# 顶层固定两个 key：movie（电影）、tv（电视剧）
+# 二级名称同时作为分类名和目标子目录，按顺序从上到下匹配
+# 无任何条件字段 = 兜底分类（匹配所有未归类）
+#
+# 可用字段：
+#   genre_ids            TMDB 类型 ID，多个用逗号分隔（如 '16,28'）
+#   origin_country       国家/地区（剧集），如 'JP,CN'
+#   production_countries 国家/地区（电影），如 'JP,US'
+#   original_language    语言，如 'ja,zh'
+#   keyword              文件名关键词，多个用逗号分隔
+#   keyword_dir          目录名关键词，多个用逗号分隔
+#   regex                正则表达式（匹配文件名）
 `
 
-function parseCfgText(text) {
+// ── 简易 YAML 解析（只支持本配置所需的子集）─────────────────────────────────
+function parseYamlCfg(text) {
+  const lines = text.split('\n')
   const categories = []
+  let mediaType = 'all'   // 当前顶层 key
   let cur = null
-  for (const rawLine of text.split('\n')) {
-    const line = rawLine.trim()
-    if (!line || line.startsWith('#')) continue
-    const secMatch = line.match(/^\[(.+)\]$/)
-    if (secMatch) {
-      if (cur) categories.push(cur)
-      cur = { name: secMatch[1], target_dir: '', media_type: 'all', genre_ids: [], country: [], language: [], keyword: [], keyword_dir: [], regex: [], match_all: false }
+
+  const strVal = s => (s || '').replace(/^['"]|['"]$/g, '').trim()
+  const listVal = s => strVal(s).split(',').map(x => x.trim()).filter(Boolean)
+
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i]
+    const stripped = raw.trimEnd()
+    if (!stripped || stripped.trimStart().startsWith('#')) continue
+
+    const indent = raw.length - raw.trimStart().length
+    const content = raw.trimStart()
+
+    // 顶层 key（无缩进，以冒号结尾，且是 movie/tv/all）
+    if (indent === 0 && /^(movie|tv|all)\s*:/.test(content)) {
+      mediaType = content.split(':')[0].trim()
+      if (cur) { categories.push(cur); cur = null }
       continue
     }
-    if (!cur) continue
-    const eqIdx = line.indexOf('=')
-    if (eqIdx < 0) continue
-    const key = line.slice(0, eqIdx).trim()
-    const val = line.slice(eqIdx + 1).trim()
-    if (key === 'target_dir') { cur.target_dir = val }
-    else if (key === 'media_type') { cur.media_type = val || 'all' }
-    else if (key === 'match_all') { cur.match_all = val.toLowerCase() === 'true' }
-    else if (key === 'genre_ids') { cur.genre_ids = val ? val.split(',').map(s => s.trim()).filter(Boolean) : [] }
-    else if (key === 'country') { cur.country = val ? val.split(',').map(s => s.trim()).filter(Boolean) : [] }
-    else if (key === 'language') { cur.language = val ? val.split(',').map(s => s.trim()).filter(Boolean) : [] }
-    else if (key === 'keyword') { cur.keyword = val ? val.split(',').map(s => s.trim()).filter(Boolean) : [] }
-    else if (key === 'keyword_dir') { cur.keyword_dir = val ? val.split(',').map(s => s.trim()).filter(Boolean) : [] }
-    else if (key === 'regex') { cur.regex = val ? val.split(',').map(s => s.trim()).filter(Boolean) : [] }
+
+    // 二级 key（缩进2~4，格式 "分类名:"）
+    if (indent >= 2 && indent <= 6) {
+      const catMatch = content.match(/^([^:]+):\s*$/)
+      if (catMatch) {
+        if (cur) categories.push(cur)
+        cur = {
+          name: catMatch[1].trim(),
+          target_dir: catMatch[1].trim(),
+          media_type: mediaType,
+          match_all: false,
+          genre_ids: [], country: [], language: [],
+          keyword: [], keyword_dir: [], regex: [],
+        }
+        continue
+      }
+    }
+
+    // 三级字段（缩进>4，格式 "key: value"）
+    if (indent > 4 && cur) {
+      const colonIdx = content.indexOf(':')
+      if (colonIdx < 0) continue
+      const key = content.slice(0, colonIdx).trim()
+      const val = content.slice(colonIdx + 1).trim()
+
+      if (key === 'genre_ids')                            cur.genre_ids  = listVal(val)
+      else if (key === 'origin_country')                  cur.country    = listVal(val)
+      else if (key === 'production_countries')            cur.country    = listVal(val)
+      else if (key === 'original_language')               cur.language   = listVal(val)
+      else if (key === 'keyword')                         cur.keyword    = listVal(val)
+      else if (key === 'keyword_dir')                     cur.keyword_dir= listVal(val)
+      else if (key === 'regex')                           cur.regex      = listVal(val)
+      else if (key === 'match_all')                       cur.match_all  = val === 'true'
+      continue
+    }
+
+    // 兼容 indent=2 时的三级字段（部分编辑器缩进两格）
+    if (indent === 4 && cur) {
+      const colonIdx = content.indexOf(':')
+      if (colonIdx < 0) continue
+      const key = content.slice(0, colonIdx).trim()
+      const val = content.slice(colonIdx + 1).trim()
+      if (key === 'genre_ids')             cur.genre_ids  = listVal(val)
+      else if (key === 'origin_country')   cur.country    = listVal(val)
+      else if (key === 'production_countries') cur.country= listVal(val)
+      else if (key === 'original_language')cur.language   = listVal(val)
+      else if (key === 'keyword')          cur.keyword    = listVal(val)
+      else if (key === 'keyword_dir')      cur.keyword_dir= listVal(val)
+      else if (key === 'regex')            cur.regex      = listVal(val)
+      else if (key === 'match_all')        cur.match_all  = val === 'true'
+    }
   }
   if (cur) categories.push(cur)
   return categories
 }
 
-function catToText(cat) {
-  const lines = [`[${cat.name}]`]
-  lines.push(`target_dir = ${cat.target_dir || ''}`)
-  lines.push(`media_type = ${cat.media_type || 'all'}`)
-  if (cat.genre_ids?.length)   lines.push(`genre_ids  = ${cat.genre_ids.join(', ')}`)
-  if (cat.country?.length)     lines.push(`country    = ${cat.country.join(', ')}`)
-  if (cat.language?.length)    lines.push(`language   = ${cat.language.join(', ')}`)
-  if (cat.keyword?.length)     lines.push(`keyword    = ${cat.keyword.join(', ')}`)
-  if (cat.keyword_dir?.length) lines.push(`keyword_dir= ${cat.keyword_dir.join(', ')}`)
-  if (cat.regex?.length)       lines.push(`regex      = ${cat.regex.join(', ')}`)
-  lines.push(`match_all  = ${cat.match_all ? 'true' : 'false'}`)
-  return lines.join('\n')
+// ── YAML 序列化（uiCats → YAML 文本）────────────────────────────────────────
+function uiCatsToYaml(cats) {
+  const movieCats = cats.filter(c => c.media_type === 'movie' || c.media_type === 'all')
+  const tvCats    = cats.filter(c => c.media_type === 'tv'    || c.media_type === 'all')
+
+  function renderCat(cat) {
+    const lines = [`  ${cat.name}:`]
+    const hasRules = cat.genre_ids?.length || cat.country?.length ||
+      cat.language?.length || cat.keyword?.length ||
+      cat.keyword_dir?.length || cat.regex?.length
+    if (!hasRules) return lines.join('\n')  // 兜底分类，无字段
+
+    if (cat.genre_ids?.length)
+      lines.push(`    genre_ids: '${cat.genre_ids.join(',')}'`)
+    if (cat.country?.length) {
+      // 电影用 production_countries，剧集用 origin_country
+      const key = cat.media_type === 'movie' ? 'production_countries' : 'origin_country'
+      lines.push(`    ${key}: '${cat.country.join(',')}'`)
+    }
+    if (cat.language?.length)
+      lines.push(`    original_language: '${cat.language.join(',')}'`)
+    if (cat.keyword?.length)
+      lines.push(`    keyword: '${cat.keyword.join(',')}'`)
+    if (cat.keyword_dir?.length)
+      lines.push(`    keyword_dir: '${cat.keyword_dir.join(',')}'`)
+    if (cat.regex?.length)
+      lines.push(`    regex: '${cat.regex.join(',')}'`)
+    return lines.join('\n')
+  }
+
+  const sections = []
+
+  if (movieCats.length) {
+    sections.push('movie:')
+    sections.push(...movieCats.map(renderCat))
+    sections.push('')
+  }
+  if (tvCats.length) {
+    sections.push('tv:')
+    sections.push(...tvCats.map(renderCat))
+    sections.push('')
+  }
+  // 没有分 movie/tv 的情况（all only）
+  if (!movieCats.length && !tvCats.length && cats.length) {
+    sections.push('all:')
+    sections.push(...cats.map(renderCat))
+    sections.push('')
+  }
+
+  return YAML_HEADER + '\n' + sections.join('\n')
 }
 
-function cfgToText(cats) {
-  return [
-    '# 整理分类引擎配置',
-    '# 每个 [分类名] 块定义一条分类规则，匹配优先级从上到下',
-    '# 空 rules 的分类为"兜底分类"，匹配所有未归类文件',
-    '',
-    ...cats.map(c => catToText(c) + '\n'),
-  ].join('\n')
-}
-
-// 把 UI 内部格式 → 后端 API categories 格式
+// ── UI 内部格式 ↔ 后端 API 格式 ──────────────────────────────────────────────
 function uiCatToApiCat(cat) {
   const rules = []
   if (cat.genre_ids?.length)   rules.push({ type:'genre_ids',         value: cat.genre_ids.join(',') })
   if (cat.country?.length)     rules.push({ type:'origin_country',    value: cat.country.join(',') })
   if (cat.language?.length)    rules.push({ type:'original_language', value: cat.language.join(',') })
-  for (const k of (cat.keyword    || [])) rules.push({ type:'keyword', field:'filename', value:k })
-  for (const k of (cat.keyword_dir|| [])) rules.push({ type:'keyword', field:'dirname',  value:k })
-  for (const r of (cat.regex      || [])) rules.push({ type:'regex',   field:'filename', value:r })
+  for (const k of (cat.keyword     || [])) rules.push({ type:'keyword', field:'filename', value:k })
+  for (const k of (cat.keyword_dir || [])) rules.push({ type:'keyword', field:'dirname',  value:k })
+  for (const r of (cat.regex       || [])) rules.push({ type:'regex',   field:'filename', value:r })
   return { name: cat.name, target_dir: cat.target_dir, match_all: cat.match_all, rules }
 }
 
-// 把后端 API categories 格式 → UI 内部格式
 function apiCatToUiCat(cat) {
-  const ui = { name: cat.name, target_dir: cat.target_dir||'', media_type:'all', match_all:!!cat.match_all, genre_ids:[], country:[], language:[], keyword:[], keyword_dir:[], regex:[] }
+  const ui = {
+    name: cat.name, target_dir: cat.target_dir||'', media_type:'all',
+    match_all:!!cat.match_all, genre_ids:[], country:[], language:[],
+    keyword:[], keyword_dir:[], regex:[],
+  }
   for (const r of (cat.rules || [])) {
-    if (r.type === 'genre_ids')         ui.genre_ids.push(...(r.value||'').split(',').map(s=>s.trim()).filter(Boolean))
+    if (r.type === 'genre_ids')              ui.genre_ids.push(...(r.value||'').split(',').map(s=>s.trim()).filter(Boolean))
     else if (r.type === 'origin_country')    ui.country.push(...(r.value||'').split(',').map(s=>s.trim()).filter(Boolean))
     else if (r.type === 'original_language') ui.language.push(...(r.value||'').split(',').map(s=>s.trim()).filter(Boolean))
-    else if (r.type === 'keyword' && r.field === 'dirname')  ui.keyword_dir.push(r.value)
+    else if (r.type === 'keyword' && r.field === 'dirname') ui.keyword_dir.push(r.value)
     else if (r.type === 'keyword')  ui.keyword.push(r.value)
     else if (r.type === 'regex')    ui.regex.push(r.value)
   }
@@ -391,7 +476,7 @@ const CodePanel = ({ value, onChange }) => (
         <Space>
           <CodeOutlined />
           <span>分类规则配置</span>
-          <Tag color="blue">自定义格式 · 非 JSON</Tag>
+          <Tag color="blue">YAML 格式 · 参考 MP</Tag>
         </Space>
       }>
         <TextArea value={value} onChange={e=>onChange(e.target.value)}
@@ -402,29 +487,37 @@ const CodePanel = ({ value, onChange }) => (
     </Col>
     <Col xs={24} lg={8}>
       <Card size="small" title="格式说明" style={{ position:'sticky', top:24, fontSize:12, lineHeight:2 }}>
-        <div style={{ fontWeight:600, marginBottom:4 }}>块格式</div>
-        <pre style={{ fontSize:11, background:'rgba(0,0,0,.04)', borderRadius:6, padding:'8px 10px', margin:'0 0 10px' }}>{
-`[分类名称]
-target_dir = 目标子目录
-media_type = all | movie | tv
-genre_ids  = 16, 28, 35
-country    = JP, CN
-language   = ja, zh
-keyword    = 动漫, 动画
-keyword_dir= 番剧, 动漫
-regex      = (?i)(OVA|OAD)
-match_all  = false`
+        <div style={{ fontWeight:600, marginBottom:4 }}>格式示例（YAML）</div>
+        <pre style={{ fontSize:11, background:'rgba(0,0,0,.04)', borderRadius:6, padding:'8px 10px', margin:'0 0 10px', whiteSpace:'pre', overflowX:'auto' }}>{
+`movie:
+  动漫电影:
+    genre_ids: '16'
+    production_countries: 'JP'
+  电影:
+
+tv:
+  动漫:
+    genre_ids: '16'
+    origin_country: 'JP'
+    original_language: 'ja'
+    keyword: '动漫,动画,番剧'
+    regex: '(?i)(OVA|OAD)'
+  电视剧:
+  # 无字段 = 兜底分类`
         }</pre>
         <Divider style={{ margin:'8px 0' }} />
-        <div><Text code>genre_ids</Text> TMDB 类型 ID</div>
-        <div><Text code>country</Text> 产地代码（JP/CN/US…）</div>
-        <div><Text code>language</Text> 语言（ja/zh/en…）</div>
+        <div><Text code>genre_ids</Text> TMDB 类型 ID（字符串）</div>
+        <div><Text code>origin_country</Text> 产地（剧集）如 <Text code>'JP,CN'</Text></div>
+        <div><Text code>production_countries</Text> 产地（电影）</div>
+        <div><Text code>original_language</Text> 语言 如 <Text code>'ja,zh'</Text></div>
         <div><Text code>keyword</Text> 文件名关键词（逗号分隔）</div>
         <div><Text code>keyword_dir</Text> 目录名关键词</div>
-        <div><Text code>regex</Text> 正则（文件名）</div>
+        <div><Text code>regex</Text> 正则（匹配文件名）</div>
         <Divider style={{ margin:'8px 0' }} />
-        <div style={{ color:'#888' }}>无任何条件字段 = 兜底分类</div>
-        <div style={{ color:'#888' }}># 开头行为注释</div>
+        <div style={{ color:'#888' }}>· 无任何字段 = 兜底分类</div>
+        <div style={{ color:'#888' }}>· # 开头行为注释</div>
+        <div style={{ color:'#888' }}>· movie/tv 下分类继承适用对象</div>
+        <div style={{ color:'#888' }}>· 多值用英文逗号分隔，外加引号</div>
       </Card>
     </Col>
   </Row>
@@ -458,7 +551,7 @@ export const Classify = () => {
       setCfg(data)
       const ui = (data.categories || []).map(apiCatToUiCat)
       setUiCats(ui)
-      setCodeText(cfgToText(ui))
+      setCodeText(uiCatsToYaml(ui))
       setProviders(Array.isArray(r2.data) ? r2.data : [])
     } catch {
       message.error('加载分类配置失败')
@@ -472,10 +565,10 @@ export const Classify = () => {
   // ── 模式切换 ──
   const switchMode = m => {
     if (m === 'code') {
-      setCodeText(cfgToText(uiCats))
+      setCodeText(uiCatsToYaml(uiCats))
     } else {
       try {
-        const parsed = parseCfgText(codeText)
+        const parsed = parseYamlCfg(codeText)
         setUiCats(parsed)
       } catch {
         message.warning('格式解析失败，已保留图形化设置')
@@ -488,7 +581,7 @@ export const Classify = () => {
   const handleSave = async () => {
     let cats = uiCats
     if (mode === 'code') {
-      try { cats = parseCfgText(codeText) }
+      try { cats = parseYamlCfg(codeText) }
       catch { message.error('格式解析错误'); return }
       setUiCats(cats)
     }
