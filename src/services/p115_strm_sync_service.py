@@ -136,7 +136,7 @@ class P115StrmSyncService:
         return _DEFAULT_VIDEO_EXTS
 
     def _get_link_host(self, config: dict) -> str:
-        """获取 STRM 链接地址"""
+        """获取 STRM 链接地址（优先配置项，回退 external_url / go_port）"""
         host = config.get("strm_link_host", "").strip().rstrip("/")
         if not host:
             from src.core.config import settings
@@ -145,6 +145,61 @@ class P115StrmSyncService:
             from src.core.config import settings
             host = f"http://127.0.0.1:{settings.server.go_port}"
         return host
+
+    @staticmethod
+    async def _get_url_template() -> str:
+        """从数据库异步读取用户配置的 STRM URL 模板（key=strm_url_template）"""
+        import json as _json
+        try:
+            from src.db import get_async_session_local
+            from src.db.models.system import SystemConfig
+            from sqlalchemy import select
+            async with get_async_session_local() as db:
+                row = await db.execute(
+                    select(SystemConfig).where(SystemConfig.key == "strm_url_template")
+                )
+                cfg = row.scalars().first()
+                if cfg and cfg.value:
+                    return _json.loads(cfg.value)
+        except Exception as e:
+            logger.debug("[STRM] 读取URL模板失败: %s", e)
+        return ""
+
+    @staticmethod
+    def _render_strm_url(
+        tmpl_str: str,
+        link_host: str,
+        pick_code: str,
+        file_name: str,
+        file_path: str = "",
+        sha1: str = "",
+    ) -> str:
+        """
+        使用 Jinja2 渲染 STRM URL 模板。
+        可用变量：base_url, pickcode, file_name, file_path, sha1
+        可用过滤器：urlencode
+        若模板为空或渲染失败，回退到默认格式：
+          {link_host}/p115/play/{pick_code}/{file_name}
+        """
+        default_url = f"{link_host}/p115/play/{pick_code}/{file_name}"
+        if not tmpl_str:
+            return default_url
+        try:
+            from jinja2 import Environment
+            from urllib.parse import quote as _quote
+            env = Environment()
+            env.filters["urlencode"] = lambda s: _quote(str(s), safe="")
+            rendered = env.from_string(tmpl_str).render(
+                base_url=link_host,
+                pickcode=pick_code,
+                file_name=file_name,
+                file_path=file_path,
+                sha1=sha1,
+            )
+            return rendered.strip()
+        except Exception as e:
+            logger.warning("[STRM] 模板渲染失败，使用默认格式: %s", e)
+            return default_url
 
     def _resolve_sync_pairs(self, config: dict, scope: str) -> list:
         """
@@ -194,6 +249,7 @@ class P115StrmSyncService:
 
             video_exts = self._get_video_exts(config)
             link_host  = self._get_link_host(config)
+            url_tmpl   = await self._get_url_template()
             sync_pairs = self._resolve_sync_pairs(config, "full")
 
             if not sync_pairs:
@@ -213,7 +269,7 @@ class P115StrmSyncService:
                 pair_stats = await asyncio.to_thread(
                     self._iter_and_write_strm,
                     manager, start_cid, cloud_path,
-                    Path(strm_root), video_exts, link_host,
+                    Path(strm_root), video_exts, link_host, url_tmpl,
                     from_time=0,
                 )
                 for k in stats:
@@ -260,6 +316,7 @@ class P115StrmSyncService:
 
             video_exts = self._get_video_exts(config)
             link_host  = self._get_link_host(config)
+            url_tmpl   = await self._get_url_template()
             sync_pairs = self._resolve_sync_pairs(config, "inc")
 
             if not sync_pairs:
@@ -282,7 +339,7 @@ class P115StrmSyncService:
                 pair_stats = await asyncio.to_thread(
                     self._iter_and_write_strm,
                     manager, start_cid, cloud_path,
-                    Path(strm_root), video_exts, link_host,
+                    Path(strm_root), video_exts, link_host, url_tmpl,
                     from_time=last_sync_time,
                 )
                 for k in stats:
@@ -315,14 +372,12 @@ class P115StrmSyncService:
         strm_root: Path,
         video_exts: set,
         link_host: str,
+        url_tmpl: str = "",
         from_time: int = 0,
     ) -> dict:
         """
         遍历 115 目录树，对每个视频文件写 .strm。
-        优先使用 p115client.tool.iterdir.iter_files_with_path_skim（支持 from_time 过滤）。
-        回退方案：p115client.tool.fs_files.iter_fs_files（逐页列目录，配合 mtime 过滤）。
-
-        参考 emby-toolkit 的 generate_strm_files 和 p115strmhelper 的 full_pull 实现。
+        url_tmpl: Jinja2 模板字符串，为空则使用默认格式。
         """
         stats = {"created": 0, "skipped": 0, "errors": 0}
         p115_client = manager.adapter._get_p115_client()
@@ -372,7 +427,8 @@ class P115StrmSyncService:
                         stats["errors"] += 1
                         continue
                     rel = self._calc_rel_path(item_path, cloud_path)
-                    result = self._write_strm(strm_root, rel, name, pick_code, link_host)
+                    strm_url = self._render_strm_url(url_tmpl, link_host, pick_code, name, item_path)
+                    result = self._write_strm(strm_root, rel, name, strm_url)
                     if result == "created":
                         stats["created"] += 1
                     elif result == "skipped":
@@ -428,7 +484,8 @@ class P115StrmSyncService:
                         # iter_fs_files 不包含完整路径，路径留空走 cloud_path 根目录
                         item_full_path = raw.get("path", "")
                         rel = self._calc_rel_path(item_full_path, cloud_path)
-                        result = self._write_strm(strm_root, rel, name, pick_code, link_host)
+                        strm_url = self._render_strm_url(url_tmpl, link_host, pick_code, name, item_full_path)
+                        result = self._write_strm(strm_root, rel, name, strm_url)
                         if result == "created":
                             stats["created"] += 1
                         elif result == "skipped":
@@ -450,7 +507,7 @@ class P115StrmSyncService:
             loop.run_until_complete(
                 self._webapi_walk_and_write(
                     manager, cid, cloud_path, strm_root,
-                    video_exts, link_host, from_time, stats,
+                    video_exts, link_host, url_tmpl, from_time, stats,
                 )
             )
         finally:
@@ -472,10 +529,10 @@ class P115StrmSyncService:
 
     def _write_strm(
         self, strm_root: Path, rel: Path,
-        filename: str, pick_code: str, link_host: str,
+        filename: str, strm_url: str,
     ) -> str:
         """
-        写 .strm 文件。
+        写 .strm 文件。strm_url 为已渲染好的完整 URL 字符串。
         返回值：
           "created"  → 新建或内容变更，已写入
           "skipped"  → 文件已存在且内容相同，跳过
@@ -485,7 +542,7 @@ class P115StrmSyncService:
             strm_dir = strm_root / rel
             strm_dir.mkdir(parents=True, exist_ok=True)
             strm_file = strm_dir / Path(filename).with_suffix(".strm").name
-            strm_content = f"{link_host}/p115/play/{pick_code}/{filename}"
+            strm_content = strm_url
             if strm_file.exists():
                 existing = strm_file.read_text(encoding="utf-8").strip()
                 if existing == strm_content.strip():
@@ -495,7 +552,7 @@ class P115StrmSyncService:
                     logger.debug("[STRM更新] 内容变更，覆盖: %s\n  旧: %s\n  新: %s",
                                  strm_file, existing, strm_content)
             else:
-                logger.debug("[STRM写入] 新建: %s", strm_file)
+                logger.debug("[STRM写入] 新建: %s → %s", strm_file, strm_content)
             strm_file.write_text(strm_content, encoding="utf-8")
             return "created"
         except Exception as e:
@@ -506,7 +563,7 @@ class P115StrmSyncService:
         self,
         manager, cid: str, cloud_path: str,
         strm_root: Path, video_exts: set,
-        link_host: str, from_time: int, stats: dict,
+        link_host: str, url_tmpl: str, from_time: int, stats: dict,
         depth: int = 0,
     ):
         """webapi 回退方案：递归列目录，带分页，遇到旧文件即停（增量模式）"""
@@ -542,7 +599,6 @@ class P115StrmSyncService:
                 if from_time > 0 and item_mtime <= from_time:
                     logger.debug("[STRM遍历C] 跳过旧文件(mtime=%d <= from_time=%d): %s",
                                  item_mtime, from_time, entry.name)
-                    # 115 按时间倒序，遇到旧文件说明后面都是旧的
                     stop_early = True
                     stats["skipped"] += 1
                     continue
@@ -551,7 +607,8 @@ class P115StrmSyncService:
                     stats["errors"] += 1
                     continue
                 rel = self._calc_rel_path(entry.path, cloud_path)
-                result = self._write_strm(strm_root, rel, entry.name, entry.pick_code, link_host)
+                strm_url = self._render_strm_url(url_tmpl, link_host, entry.pick_code, entry.name, entry.path)
+                result = self._write_strm(strm_root, rel, entry.name, strm_url)
                 if result == "created":
                     stats["created"] += 1
                 elif result == "skipped":
@@ -563,7 +620,7 @@ class P115StrmSyncService:
             for sub in sub_dirs:
                 await self._webapi_walk_and_write(
                     manager, sub.file_id, sub.path,
-                    strm_root, video_exts, link_host, from_time, stats, depth + 1,
+                    strm_root, video_exts, link_host, url_tmpl, from_time, stats, depth + 1,
                 )
 
             offset += len(entries)

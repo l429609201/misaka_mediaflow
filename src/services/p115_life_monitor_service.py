@@ -298,17 +298,12 @@ def _sync_write_single_strm(
     cloud_path: str,
     strm_root: Path,
     link_host: str,
+    url_tmpl: str,
     video_exts: set,
 ) -> str:
     """
     精确为单个文件生成 STRM（参考 p115strmhelper 对单事件的精确处理）。
-
-    步骤：
-    1. 检查文件扩展名是否是视频
-    2. 用 p115client.tool.attr.get_path 查询该文件在 115 的完整路径
-    3. 检查路径是否在 cloud_path 监控范围内
-    4. 在 strm_root 下对应目录写入 .strm 文件
-
+    url_tmpl: Jinja2 模板字符串，为空则回退到默认格式。
     返回 "created" / "skipped" / "out_of_scope" / "error"
     """
     ext = Path(file_name).suffix.lstrip(".").lower()
@@ -352,12 +347,17 @@ def _sync_write_single_strm(
         rel_dir = Path(".")
         logger.debug("[生活事件→STRM] 无法获取路径，文件放置于 STRM 根目录: %s", file_name)
 
+    # 渲染 STRM URL（使用用户配置的 Jinja2 模板）
+    from src.services.p115_strm_sync_service import P115StrmSyncService
+    strm_content = P115StrmSyncService._render_strm_url(
+        url_tmpl, link_host, pick_code, file_name, str(item_path)
+    )
+
     # 写 STRM 文件
     try:
         strm_dir = strm_root / rel_dir
         strm_dir.mkdir(parents=True, exist_ok=True)
         strm_file = strm_dir / Path(file_name).with_suffix(".strm").name
-        strm_content = f"{link_host}/p115/play/{pick_code}/{file_name}"
 
         if strm_file.exists():
             existing = strm_file.read_text(encoding="utf-8").strip()
@@ -366,7 +366,7 @@ def _sync_write_single_strm(
                 return "skipped"
             logger.debug("[生活事件→STRM] 内容变更，覆盖: %s", strm_file)
         else:
-            logger.debug("[生活事件→STRM] 新建: %s", strm_file)
+            logger.debug("[生活事件→STRM] 新建: %s → %s", strm_file, strm_content)
 
         strm_file.write_text(strm_content, encoding="utf-8")
         logger.info("[生活事件→STRM] 已生成: %s → %s", file_name, strm_file)
@@ -586,7 +586,8 @@ class P115LifeMonitorService:
         strm_config = await strm_svc.get_config()
         sync_rules  = strm_config.get("sync_rules", [])
         video_exts  = set(strm_config.get("video_exts", list(_DEFAULT_VIDEO_EXTS)))
-        link_host   = strm_config.get("link_host", "").rstrip("/")
+        link_host   = strm_svc._get_link_host(strm_config)
+        url_tmpl    = await strm_svc._get_url_template()
 
         need_inc_sync = False
         stats = {"created": 0, "skipped": 0, "out_of_scope": 0, "errors": 0}
@@ -633,6 +634,7 @@ class P115LifeMonitorService:
                     cloud_path,
                     Path(strm_root_str),
                     link_host,
+                    url_tmpl,
                     video_exts,
                 )
                 logger.debug(
