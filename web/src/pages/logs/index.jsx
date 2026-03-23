@@ -78,6 +78,8 @@ export const Tasks = () => {
   const bottomRef = useRef(null)
   const linesRef  = useRef([])
   const autoScroll = useRef(true)
+  // 是否曾经成功连接过（用于区分首次连接 vs 重连，重连时自动清空日志）
+  const wasConnectedRef = useRef(false)
 
   // ── 文件模式
   const [fileList, setFileList]       = useState([])
@@ -93,7 +95,15 @@ export const Tasks = () => {
     const url = `/api/v1/system/logs/stream?token=${encodeURIComponent(token)}`
     const es = new EventSource(url)
     esRef.current = es
-    es.onopen  = () => setConnected(true)
+    es.onopen = () => {
+      setConnected(true)
+      if (wasConnectedRef.current) {
+        // 曾经成功连接过，再次 onopen → 服务重启 / 断线重连，自动清空旧日志
+        linesRef.current = []
+        setLines([])
+      }
+      wasConnectedRef.current = true
+    }
     es.onerror = () => setConnected(false)
     es.onmessage = (e) => {
       if (pausedRef.current) return
@@ -110,6 +120,7 @@ export const Tasks = () => {
 
   useEffect(() => {
     if (mode === 'realtime') {
+      wasConnectedRef.current = false   // 切换到实时模式时重置，首次进入不触发清空
       connectSSE()
       return () => { esRef.current?.close(); setConnected(false) }
     }
