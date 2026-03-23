@@ -58,7 +58,7 @@
     "searchSource": "Search Sources",
     "realtimeSubtitle": "Realtime Subtitle Subsetting",
     "classify": "Organize & Scrape",
-    "logs": "Logs",
+    "tasks": "Task Center",
     "settings": "Settings"
   },
   "login": {
@@ -379,8 +379,8 @@
     "orgRuleValuePlaceholder": "Enter keyword or regex",
     "orgPriority": "Categories are matched top-to-bottom; earlier categories take priority"
   },
-  "logs": {
-    "title": "Logs",
+  "tasks": {
+    "title": "Task Center",
     "module": "Module",
     "action": "Action",
     "detail": "Detail",

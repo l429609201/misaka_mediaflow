@@ -58,7 +58,7 @@
     "searchSource": "搜尋源",
     "realtimeSubtitle": "即時字幕子集化",
     "classify": "整理分類刮削",
-    "logs": "日誌中心",
+    "tasks": "任務中心",
     "settings": "系統設定"
   },
   "login": {
@@ -384,8 +384,8 @@
     "orgRuleValuePlaceholder": "輸入關鍵詞或正則表達式",
     "orgPriority": "匹配優先級從上到下，排在前面的分類優先匹配"
   },
-  "logs": {
-    "title": "日誌中心",
+  "tasks": {
+    "title": "任務中心",
     "module": "模組",
     "action": "動作",
     "detail": "詳情",

@@ -12,7 +12,7 @@ export const RoutePaths = {
   SEARCH_SOURCE: '/search-source',
   REALTIME_SUBTITLE: '/realtime-subtitle',
   MEDIA_PROXY: '/media-proxy',
-  LOGS: '/logs',
+  TASKS: '/tasks',
   SETTING: '/setting',
 }
 

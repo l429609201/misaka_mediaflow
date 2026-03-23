@@ -58,7 +58,7 @@ export const Layout = () => {
     { key: RoutePaths.MEDIA_PROXY,       icon: <CloudServerOutlined />,  label: t('menu.mediaProxy') },
     { key: RoutePaths.REALTIME_SUBTITLE, icon: <FontSizeOutlined />,     label: t('menu.realtimeSubtitle') },
     { key: RoutePaths.SEARCH_SOURCE,     icon: <SearchOutlined />,       label: t('menu.searchSource') },
-    { key: RoutePaths.LOGS,              icon: <UnorderedListOutlined />, label: t('menu.logs') },
+    { key: RoutePaths.TASKS,             icon: <UnorderedListOutlined />, label: t('menu.tasks') },
     { key: RoutePaths.SETTING,           icon: <SettingOutlined />,      label: t('menu.settings') },
   ]
 
@@ -146,13 +146,13 @@ export const Layout = () => {
 
           <Space size="middle">
             {/* 实时日志 */}
-            <Tooltip title={t('logs.liveTitle')}>
+            <Tooltip title={t('tasks.liveTitle')}>
               <Button type="text" icon={<CodeOutlined />}
                 onClick={() => setLiveLogOpen(true)}
               />
             </Tooltip>
             {/* 历史日志 */}
-            <Tooltip title={t('logs.historyTitle')}>
+            <Tooltip title={t('tasks.historyTitle')}>
               <Button type="text" icon={<HistoryOutlined />}
                 onClick={() => setHistoryLogOpen(true)}
               />

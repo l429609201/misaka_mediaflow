@@ -104,7 +104,7 @@ export default function LiveLogDrawer({ open, onClose }) {
     <Drawer
       title={
         <Space>
-          {t('logs.liveTitle', '实时日志')}
+          {t('tasks.liveTitle', '实时日志')}
           {connected
             ? <Tag color="success">{t('p115.connected', '已连接')}</Tag>
             : <Tag color="error">{t('p115.disconnected', '未连接')}</Tag>}
@@ -123,7 +123,7 @@ export default function LiveLogDrawer({ open, onClose }) {
         border: `1px solid ${isDark ? '#2a2a2a' : '#e8e8e8'}`,
       }}>
         <Text style={{ color: labelClr, fontSize: 12, whiteSpace: 'nowrap', marginRight: 4 }}>
-          {t('logs.levelFilter', '级别过滤')}：
+          {t('tasks.levelFilter', '级别过滤')}：
         </Text>
         {ALL_LEVELS.map(lv => {
           const clr = getLevelColor(lv, isDark)
@@ -143,21 +143,21 @@ export default function LiveLogDrawer({ open, onClose }) {
 
       {/* 搜索 + 操作按钮行 */}
       <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-        <Input size="small" placeholder={t('logs.searchPlaceholder', '搜索日志...')}
+        <Input size="small" placeholder={t('tasks.searchPlaceholder', '搜索日志...')}
           prefix={<SearchOutlined style={{ color: colorPrimary }} />}
           value={searchText} onChange={e => setSearchText(e.target.value)} allowClear style={{ width: 220 }} />
         <Space>
-          <Text style={{ color: labelClr, fontSize: 12 }}>{t('logs.autoScroll', '自动滚动')}</Text>
+          <Text style={{ color: labelClr, fontSize: 12 }}>{t('tasks.autoScroll', '自动滚动')}</Text>
           <Switch size="small" checked={autoScroll} onChange={setAutoScroll}
             style={autoScroll ? { backgroundColor: colorPrimary } : {}} />
-          <Tooltip title={t('logs.scrollToBottom', '滚到底部')}>
+          <Tooltip title={t('tasks.scrollToBottom', '滚到底部')}>
             <Button size="small" icon={<VerticalAlignBottomOutlined />}
               onClick={() => containerRef.current && (containerRef.current.scrollTop = containerRef.current.scrollHeight)} />
           </Tooltip>
           <Tooltip title={t('common.copy', '复制全部')}>
             <Button size="small" icon={<CopyOutlined />} onClick={copyAll} />
           </Tooltip>
-          <Tooltip title={t('logs.clear', '清空')}>
+          <Tooltip title={t('tasks.clear', '清空')}>
             <Button size="small" icon={<ClearOutlined />} onClick={() => setLogs([])} />
           </Tooltip>
         </Space>
@@ -172,7 +172,7 @@ export default function LiveLogDrawer({ open, onClose }) {
       }}>
         {filteredLogs.length === 0 && (
           <div style={{ padding: '24px', textAlign: 'center', color: isDark ? '#555' : '#bbb' }}>
-            {t('logs.waitingLogs', '等待日志...')}
+            {t('tasks.waitingLogs', '等待日志...')}
           </div>
         )}
         {filteredLogs.map((line, i) => {

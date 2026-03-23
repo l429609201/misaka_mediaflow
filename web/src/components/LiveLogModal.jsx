@@ -1,4 +1,4 @@
-﻿// src/components/LiveLogModal.jsx
+// src/components/LiveLogModal.jsx
 // 实时日志弹窗 — 样式对齐 HistoryLogModal（卡片行+左侧彩色竖条）
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -163,8 +163,8 @@ export default function LiveLogModal({ open, onClose }) {
       width={860} styles={{ body: { padding: 0 } }}
       title={
         <Space>
-          <span>{t('logs.liveTitle')}</span>
-          <Tag color={connected ? 'success' : 'default'}>{connected ? t('logs.connected') : t('logs.disconnected')}</Tag>
+          <span>{t('tasks.liveTitle')}</span>
+          <Tag color={connected ? 'success' : 'default'}>{connected ? t('tasks.connected') : t('tasks.disconnected')}</Tag>
           <Tag>{filtered.length}/{logs.length}</Tag>
         </Space>
       }
@@ -198,7 +198,7 @@ export default function LiveLogModal({ open, onClose }) {
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
           <Switch size="small" checked={autoScroll} onChange={setAutoScroll}
             checkedChildren={<VerticalAlignBottomOutlined />} unCheckedChildren={<VerticalAlignBottomOutlined />} />
-          <Text type="secondary" style={{ fontSize: 12 }}>{t('logs.autoScroll')}</Text>
+          <Text type="secondary" style={{ fontSize: 12 }}>{t('tasks.autoScroll')}</Text>
           <Tooltip title={t('common.clear')}>
             <Button size="small" icon={<ClearOutlined />} onClick={() => setLogs([])} />
           </Tooltip>
@@ -211,7 +211,7 @@ export default function LiveLogModal({ open, onClose }) {
         style={{ height: 480, overflowY: 'auto', padding: '8px 12px', background: bg }}
       >
         {filtered.length === 0
-          ? <Text type="secondary" style={{ display: 'block', textAlign: 'center', marginTop: 40 }}>{t('logs.waitingLogs')}</Text>
+          ? <Text type="secondary" style={{ display: 'block', textAlign: 'center', marginTop: 40 }}>{t('tasks.waitingLogs')}</Text>
           : filtered.map((line, i) => <LogRow key={i} line={line} search={searchText} isDark={isDark} />)
         }
       </div>

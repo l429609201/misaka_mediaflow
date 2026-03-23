@@ -16,7 +16,7 @@ import Classify from '@/pages/classify/index.jsx'
 import { RealtimeSubtitle } from '@/pages/realtime-subtitle/index.jsx'
 import P115 from '@/pages/media-proxy/index.jsx'
 import SearchSource from '@/pages/search-source/index.jsx'
-import Logs from '@/pages/logs/index.jsx'
+import Tasks from '@/pages/logs/index.jsx'
 import Setting from '@/pages/setting/index.jsx'
 
 // Auth guard — 调 /auth/verify 验证凭证（JWT / IP白名单自动登录）
@@ -76,7 +76,7 @@ export const router = createBrowserRouter(
         { path: RoutePaths.MEDIA_PROXY.slice(1),       element: <P115 /> },
         { path: RoutePaths.REALTIME_SUBTITLE.slice(1), element: <RealtimeSubtitle /> },
         { path: RoutePaths.SEARCH_SOURCE.slice(1),     element: <SearchSource /> },
-        { path: RoutePaths.LOGS.slice(1),              element: <Logs /> },
+        { path: RoutePaths.TASKS.slice(1),             element: <Tasks /> },
         { path: RoutePaths.SETTING.slice(1),           element: <Setting /> },
       ],
     },

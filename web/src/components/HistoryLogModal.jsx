@@ -80,7 +80,7 @@ export default function HistoryLogModal({ open, onClose }) {
       ? systemApi.getMemoryLogs()
       : systemApi.getLogFileContent(selectedFile)
     req.then(({ data }) => setLogs(Array.isArray(data) ? data : (data?.lines ?? data?.data ?? [])))
-       .catch(() => messageApi.error(t('logs.fetchFail', '获取日志失败')))
+       .catch(() => messageApi.error(t('tasks.fetchFail', '获取日志失败')))
        .finally(() => setLoading(false))
   }
 
@@ -98,19 +98,19 @@ export default function HistoryLogModal({ open, onClose }) {
   const copyLine = useCallback((line) => navigator.clipboard.writeText(line).then(() => messageApi.success(t('common.copied', '已复制'))).catch(() => {}), [messageApi, t])
 
   const fileOptions = [
-    { value: MEMORY_LOG_KEY, label: `📋 ${t('logs.memoryLog', '内存日志')} (${t('logs.latest', '最新')})` },
+    { value: MEMORY_LOG_KEY, label: `📋 ${t('tasks.memoryLog', '内存日志')} (${t('tasks.latest', '最新')})` },
     ...logFiles.map(f => ({ value: f.name, label: `📄 ${f.name} (${formatSize(f.size)})` })),
   ]
 
   return (
-    <Modal title={<Space>{t('logs.historyTitle', '历史日志')}<Tag>{filteredLogs.length} {t('logs.lines', '行')}</Tag></Space>}
+    <Modal title={<Space>{t('tasks.historyTitle', '历史日志')}<Tag>{filteredLogs.length} {t('tasks.lines', '行')}</Tag></Space>}
       open={open} onCancel={onClose} footer={null} width={980} centered destroyOnClose
       styles={{ body: { padding: 0 } }}
     >
       {ctxHolder}
       {/* 级别 Switch 工具栏 */}
       <div style={{ padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', background: barBg, borderBottom: `1px solid ${barBorder}` }}>
-        <Text style={{ color: labelClr, fontSize: 12, whiteSpace: 'nowrap', marginRight: 4 }}>{t('logs.levelFilter', '级别过滤')}：</Text>
+        <Text style={{ color: labelClr, fontSize: 12, whiteSpace: 'nowrap', marginRight: 4 }}>{t('tasks.levelFilter', '级别过滤')}：</Text>
         {ALL_LEVELS.map(lv => {
           const clr = getLevelColor(lv, isDark)
           const on  = levelOn[lv]
@@ -126,14 +126,14 @@ export default function HistoryLogModal({ open, onClose }) {
       <div style={{ padding: '8px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, background: barBg, borderBottom: `1px solid ${barBorder}` }}>
         <Space wrap>
           <Select size="small" value={selectedFile} onChange={setSelectedFile} style={{ width: 260 }} options={fileOptions} />
-          <Input size="small" placeholder={t('logs.searchPlaceholder', '搜索日志...')}
+          <Input size="small" placeholder={t('tasks.searchPlaceholder', '搜索日志...')}
             prefix={<SearchOutlined style={{ color: colorPrimary }} />}
             value={search} onChange={e => setSearch(e.target.value)} allowClear style={{ width: 200 }} />
         </Space>
         <Space>
           <Tooltip title={t('common.refresh', '刷新')}><Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={fetchLogs} /></Tooltip>
           <Tooltip title={t('logs.scrollToTop', '滚到顶部')}><Button size="small" icon={<VerticalAlignTopOutlined />} onClick={() => topRef.current?.scrollIntoView({ behavior: 'smooth' })} /></Tooltip>
-          <Tooltip title={t('logs.scrollToBottom', '滚到底部')}><Button size="small" icon={<VerticalAlignBottomOutlined />} onClick={() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' })} /></Tooltip>
+          <Tooltip title={t('tasks.scrollToBottom', '滚到底部')}><Button size="small" icon={<VerticalAlignBottomOutlined />} onClick={() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' })} /></Tooltip>
           <Tooltip title={t('common.copy', '复制全部')}><Button size="small" icon={<CopyOutlined />} onClick={copyAll} /></Tooltip>
         </Space>
       </div>
@@ -143,7 +143,7 @@ export default function HistoryLogModal({ open, onClose }) {
           fontFamily: "'JetBrains Mono','Fira Code','Consolas',monospace", fontSize: 12, lineHeight: 1.7 }}>
           <div ref={topRef} />
           {filteredLogs.length === 0 && !loading && (
-            <div style={{ padding: '24px', textAlign: 'center', color: isDark ? '#555' : '#bbb' }}>{t('logs.noLogs', '暂无日志')}</div>
+            <div style={{ padding: '24px', textAlign: 'center', color: isDark ? '#555' : '#bbb' }}>{t('tasks.noLogs', '暂无日志')}</div>
           )}
           {filteredLogs.map((line, i) => {
             const level   = parseLevel(line)

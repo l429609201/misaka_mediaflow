@@ -332,76 +332,98 @@ class P115StrmSyncService:
             try:
                 from p115client.tool.iterdir import iter_files_with_path_skim
                 logger.debug("[STRM遍历] 使用 iter_files_with_path_skim cid=%s from_time=%d", cid, from_time)
+                scan_count = 0
                 for item in iter_files_with_path_skim(
                     client=p115_client,
                     cid=int(cid),
-                    with_ancestors=True,
                 ):
-                    # item 是 dict，含 path/name/pickcode/ctime/mtime/size/is_dir 等
-                    if item.get("is_dir"):
+                    scan_count += 1
+                    # item 是 dict-like，含 name/pickcode/ctime/mtime/size/is_dir 等
+                    is_dir = item.get("is_dir") or item.get("is_directory") or ("fid" not in item and "pickcode" not in item)
+                    if is_dir:
                         continue
                     # mtime 过滤（增量时跳过旧文件）
-                    item_mtime = int(item.get("mtime", item.get("ctime", 0)) or 0)
+                    item_mtime = int(item.get("mtime", item.get("ctime", item.get("ptime", 0))) or 0)
                     if from_time > 0 and item_mtime <= from_time:
+                        logger.debug("[STRM遍历] 跳过旧文件(mtime=%d <= from_time=%d): %s",
+                                     item_mtime, from_time, item.get("name", ""))
                         stats["skipped"] += 1
                         continue
-                    ext = Path(item.get("name", "")).suffix.lstrip(".").lower()
+                    name = item.get("name", "") or item.get("n", "")
+                    ext = Path(name).suffix.lstrip(".").lower()
                     if ext not in video_exts:
+                        logger.debug("[STRM遍历] 跳过非视频文件: %s", name)
                         stats["skipped"] += 1
                         continue
-                    pick_code = item.get("pickcode") or item.get("pick_code", "")
+                    pick_code = (item.get("pickcode") or item.get("pick_code")
+                                 or item.get("pc", ""))
                     if not pick_code:
+                        logger.warning("[STRM遍历] 文件缺少 pickcode，跳过: %s", name)
                         stats["errors"] += 1
                         continue
-                    # 计算相对路径：item["path"] 是完整路径，去掉 cloud_path 前缀
-                    item_full_path = item.get("path", "")
-                    rel = self._calc_rel_path(item_full_path, cloud_path, item["name"])
-                    ok = self._write_strm(strm_root, rel, item["name"], pick_code, link_host)
-                    if ok:
+                    item_full_path = item.get("path", "") or item.get("dir", "")
+                    rel = self._calc_rel_path(item_full_path, cloud_path, name)
+                    result = self._write_strm(strm_root, rel, name, pick_code, link_host)
+                    if result == "created":
                         stats["created"] += 1
+                    elif result == "skipped":
+                        stats["skipped"] += 1
                     else:
                         stats["errors"] += 1
+                logger.debug("[STRM遍历] iter_files_with_path_skim 共扫描 %d 项, stats=%s", scan_count, stats)
                 return stats
             except ImportError:
                 logger.debug("[STRM遍历] iter_files_with_path_skim 不可用，使用回退方案")
             except Exception as e:
-                logger.warning("[STRM遍历] iter_files_with_path_skim 出错，使用回退方案: %s", e)
+                logger.warning("[STRM遍历] iter_files_with_path_skim 出错，使用回退方案: %s", e, exc_info=True)
 
         # ── 方案B：iter_fs_files 回退────────────────────────────────────────
         if p115_client is not None:
             try:
                 from p115client.tool.fs_files import iter_fs_files
-                from p115client.tool.attr import normalize_attr
                 logger.debug("[STRM遍历] 使用 iter_fs_files cid=%s from_time=%d", cid, from_time)
-                for data in iter_fs_files(p115_client, cid, cooldown=1.5):
-                    for raw in data.get("data", []):
-                        item = normalize_attr(raw)
-                        if item.get("is_dir"):
+                scan_count = 0
+                for data in iter_fs_files(p115_client, int(cid), cooldown=1.5):
+                    raw_list = data if isinstance(data, list) else data.get("data", [])
+                    for raw in raw_list:
+                        scan_count += 1
+                        # raw 可能是 dict 或 AttrDict
+                        item = raw if isinstance(raw, dict) else dict(raw)
+                        is_dir = "fid" not in item
+                        if is_dir:
                             continue
-                        item_mtime = int(item.get("mtime", item.get("ctime", 0)) or 0)
+                        item_mtime = int(item.get("te", item.get("mtime", item.get("ctime", 0))) or 0)
                         if from_time > 0 and item_mtime <= from_time:
+                            logger.debug("[STRM遍历B] 跳过旧文件(mtime=%d <= from_time=%d): %s",
+                                         item_mtime, from_time, item.get("n", item.get("name", "")))
                             stats["skipped"] += 1
                             continue
-                        ext = Path(item.get("name", "")).suffix.lstrip(".").lower()
+                        name = item.get("n", "") or item.get("name", "")
+                        ext = Path(name).suffix.lstrip(".").lower()
                         if ext not in video_exts:
+                            logger.debug("[STRM遍历B] 跳过非视频文件: %s", name)
                             stats["skipped"] += 1
                             continue
-                        pick_code = item.get("pickcode") or item.get("pick_code", "")
+                        pick_code = item.get("pc", "") or item.get("pickcode", "")
                         if not pick_code:
+                            logger.warning("[STRM遍历B] 文件缺少 pickcode，跳过: %s", name)
                             stats["errors"] += 1
                             continue
                         item_full_path = item.get("path", "")
-                        rel = self._calc_rel_path(item_full_path, cloud_path, item["name"])
-                        ok = self._write_strm(strm_root, rel, item["name"], pick_code, link_host)
-                        if ok:
+                        rel = self._calc_rel_path(item_full_path, cloud_path, name)
+                        result = self._write_strm(strm_root, rel, name, pick_code, link_host)
+                        if result == "created":
                             stats["created"] += 1
+                        elif result == "skipped":
+                            stats["skipped"] += 1
                         else:
                             stats["errors"] += 1
+                logger.debug("[STRM遍历] iter_fs_files 共扫描 %d 项, stats=%s", scan_count, stats)
                 return stats
             except ImportError:
                 logger.debug("[STRM遍历] iter_fs_files 不可用，使用webapi回退")
             except Exception as e:
-                logger.warning("[STRM遍历] iter_fs_files 出错，使用webapi回退: %s", e)
+                logger.warning("[STRM遍历] iter_fs_files 出错，使用webapi回退: %s", e, exc_info=True)
 
         # ── 方案C：webapi 逐页列目录（p115client 完全不可用时）──────────────
         logger.debug("[STRM遍历] 使用webapi逐页列目录 cid=%s", cid)
@@ -434,19 +456,34 @@ class P115StrmSyncService:
     def _write_strm(
         self, strm_root: Path, rel: Path,
         filename: str, pick_code: str, link_host: str,
-    ) -> bool:
-        """写 .strm 文件，返回 True 表示成功"""
+    ) -> str:
+        """
+        写 .strm 文件。
+        返回值：
+          "created"  → 新建或内容变更，已写入
+          "skipped"  → 文件已存在且内容相同，跳过
+          "error"    → 写入失败
+        """
         try:
             strm_dir = strm_root / rel
             strm_dir.mkdir(parents=True, exist_ok=True)
             strm_file = strm_dir / Path(filename).with_suffix(".strm").name
             strm_content = f"{link_host}/p115/play/{pick_code}/{filename}"
+            if strm_file.exists():
+                existing = strm_file.read_text(encoding="utf-8").strip()
+                if existing == strm_content.strip():
+                    logger.debug("[STRM跳过] 已存在且内容相同: %s", strm_file)
+                    return "skipped"
+                else:
+                    logger.debug("[STRM更新] 内容变更，覆盖: %s\n  旧: %s\n  新: %s",
+                                 strm_file, existing, strm_content)
+            else:
+                logger.debug("[STRM写入] 新建: %s", strm_file)
             strm_file.write_text(strm_content, encoding="utf-8")
-            logger.debug("[STRM写入] %s", strm_file)
-            return True
+            return "created"
         except Exception as e:
             logger.error("[STRM写入] 失败 %s: %s", filename, e)
-            return False
+            return "error"
 
     async def _webapi_walk_and_write(
         self,
@@ -470,6 +507,9 @@ class P115StrmSyncService:
                 stats["errors"] += 1
                 break
 
+            logger.debug("[STRM遍历C] webapi cid=%s offset=%d 获取 %d/%d 条",
+                         cid, offset, len(entries), total)
+
             stop_early = False
             sub_dirs = []
             for entry in entries:
@@ -478,19 +518,29 @@ class P115StrmSyncService:
                     continue
                 ext = Path(entry.name).suffix.lstrip(".").lower()
                 if ext not in video_exts:
+                    logger.debug("[STRM遍历C] 跳过非视频文件: %s", entry.name)
+                    stats["skipped"] += 1
                     continue
                 item_mtime = int(entry.mtime or entry.ctime or 0)
                 if from_time > 0 and item_mtime <= from_time:
+                    logger.debug("[STRM遍历C] 跳过旧文件(mtime=%d <= from_time=%d): %s",
+                                 item_mtime, from_time, entry.name)
                     # 115 按时间倒序，遇到旧文件说明后面都是旧的
                     stop_early = True
                     stats["skipped"] += 1
                     continue
                 if not entry.pick_code:
+                    logger.warning("[STRM遍历C] 文件缺少 pickcode，跳过: %s", entry.name)
                     stats["errors"] += 1
                     continue
                 rel = self._calc_rel_path(entry.path, cloud_path, entry.name)
-                ok = self._write_strm(strm_root, rel, entry.name, entry.pick_code, link_host)
-                stats["created" if ok else "errors"] += 1
+                result = self._write_strm(strm_root, rel, entry.name, entry.pick_code, link_host)
+                if result == "created":
+                    stats["created"] += 1
+                elif result == "skipped":
+                    stats["skipped"] += 1
+                else:
+                    stats["errors"] += 1
 
             # 递归处理子目录
             for sub in sub_dirs:
