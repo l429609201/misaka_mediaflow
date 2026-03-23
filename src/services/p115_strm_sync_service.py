@@ -327,40 +327,58 @@ class P115StrmSyncService:
         stats = {"created": 0, "skipped": 0, "errors": 0}
         p115_client = manager.adapter._get_p115_client()
 
-        # ── 方案A：iter_files_with_path_skim（p115client >= 0.0.5.6）──────────
+        # ── 方案A：iter_files_with_path（p115client 标准 API）────────────────
+        # 参考 p115strmhelper helper/life/client.py 的用法：
+        #   from p115client.tool.iterdir import iter_files_with_path
+        #   iter_files_with_path(client, cid, with_ancestors=True, cooldown=2)
+        # 注意：不是 iter_files_with_path_skim（该函数语义不同，返回空）
         if p115_client is not None:
             try:
-                from p115client.tool.iterdir import iter_files_with_path_skim
-                logger.debug("[STRM遍历] 使用 iter_files_with_path_skim cid=%s from_time=%d", cid, from_time)
+                from p115client.tool.iterdir import iter_files_with_path
+                logger.debug("[STRM遍历] 使用 iter_files_with_path cid=%s from_time=%d", cid, from_time)
                 scan_count = 0
-                for item in iter_files_with_path_skim(
+                for item in iter_files_with_path(
                     client=p115_client,
                     cid=int(cid),
+                    with_ancestors=True,
+                    cooldown=2,
                 ):
                     scan_count += 1
-                    # item 是 dict-like，含 name/pickcode/ctime/mtime/size/is_dir 等
-                    is_dir = item.get("is_dir") or item.get("is_directory") or ("fid" not in item and "pickcode" not in item)
+                    # item 是 AttrDict（支持 .get()）
+                    # is_dir：115 文件夹没有 pickcode / pc，用此判断
+                    is_dir = (
+                        item.get("is_dir")
+                        or item.get("is_directory")
+                        or (not item.get("pc") and not item.get("pickcode"))
+                    )
                     if is_dir:
                         continue
                     # mtime 过滤（增量时跳过旧文件）
-                    item_mtime = int(item.get("mtime", item.get("ctime", item.get("ptime", 0))) or 0)
+                    # 115 AttrDict 的时间字段：te=mtime, tp=ctime, to=atime
+                    item_mtime = int(
+                        item.get("te") or item.get("mtime")
+                        or item.get("t") or item.get("ctime") or 0
+                    )
                     if from_time > 0 and item_mtime <= from_time:
                         logger.debug("[STRM遍历] 跳过旧文件(mtime=%d <= from_time=%d): %s",
-                                     item_mtime, from_time, item.get("name", ""))
+                                     item_mtime, from_time, item.get("n") or item.get("name", ""))
                         stats["skipped"] += 1
                         continue
-                    name = item.get("name", "") or item.get("n", "")
+                    name = item.get("n") or item.get("name", "")
                     ext = Path(name).suffix.lstrip(".").lower()
                     if ext not in video_exts:
                         logger.debug("[STRM遍历] 跳过非视频文件: %s", name)
                         stats["skipped"] += 1
                         continue
-                    pick_code = (item.get("pickcode") or item.get("pick_code")
-                                 or item.get("pc", ""))
+                    pick_code = (
+                        item.get("pc") or item.get("pickcode")
+                        or item.get("pick_code", "")
+                    )
                     if not pick_code:
                         logger.warning("[STRM遍历] 文件缺少 pickcode，跳过: %s", name)
                         stats["errors"] += 1
                         continue
+                    # path 字段由 with_ancestors=True 拼出完整路径
                     item_full_path = item.get("path", "") or item.get("dir", "")
                     rel = self._calc_rel_path(item_full_path, cloud_path, name)
                     result = self._write_strm(strm_root, rel, name, pick_code, link_host)
@@ -370,12 +388,12 @@ class P115StrmSyncService:
                         stats["skipped"] += 1
                     else:
                         stats["errors"] += 1
-                logger.debug("[STRM遍历] iter_files_with_path_skim 共扫描 %d 项, stats=%s", scan_count, stats)
+                logger.debug("[STRM遍历] iter_files_with_path 共扫描 %d 项, stats=%s", scan_count, stats)
                 return stats
             except ImportError:
-                logger.debug("[STRM遍历] iter_files_with_path_skim 不可用，使用回退方案")
+                logger.debug("[STRM遍历] iter_files_with_path 不可用，使用回退方案")
             except Exception as e:
-                logger.warning("[STRM遍历] iter_files_with_path_skim 出错，使用回退方案: %s", e, exc_info=True)
+                logger.warning("[STRM遍历] iter_files_with_path 出错，使用回退方案: %s", e, exc_info=True)
 
         # ── 方案B：iter_fs_files 回退────────────────────────────────────────
         if p115_client is not None:
