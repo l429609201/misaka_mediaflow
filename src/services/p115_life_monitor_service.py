@@ -320,6 +320,11 @@ def _sync_write_single_strm(
         logger.warning("[生活事件→STRM] 缺少 pick_code，无法生成 STRM: %s", file_name)
         return "error"
 
+    # 参考 p115strmhelper: pickcode 必须是 17 位纯字母数字
+    if not (len(pick_code) == 17 and pick_code.isalnum()):
+        logger.warning("[生活事件→STRM] pick_code 格式无效(%r)，跳过: %s", pick_code, file_name)
+        return "error"
+
     # 查询完整路径（p115client.tool.attr.get_path）
     item_path = ""
     if p115_client is not None and file_id:

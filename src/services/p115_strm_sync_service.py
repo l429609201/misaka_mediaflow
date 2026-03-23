@@ -345,14 +345,9 @@ class P115StrmSyncService:
                     app="web",  # 必须显式指定，默认是 android，与 web CK 不匹配
                 ):
                     scan_count += 1
-                    # item 是 AttrDict（支持 .get()）
-                    # is_dir：115 文件夹没有 pickcode / pc，用此判断
-                    is_dir = (
-                        item.get("is_dir")
-                        or item.get("is_directory")
-                        or (not item.get("pc") and not item.get("pickcode"))
-                    )
-                    if is_dir:
+                    # normalize_attr 已将所有字段标准化，is_dir 是可靠的布尔值
+                    # 参考 p115strmhelper full.py: if item["is_dir"]: return None
+                    if item.get("is_dir"):
                         continue
                     # mtime 过滤（增量时跳过旧文件）
                     # 115 AttrDict 的时间字段：te=mtime, tp=ctime, to=atime
@@ -372,16 +367,21 @@ class P115StrmSyncService:
                         stats["skipped"] += 1
                         continue
                     pick_code = (
-                        item.get("pc") or item.get("pickcode")
+                        item.get("pickcode") or item.get("pc")
                         or item.get("pick_code", "")
                     )
                     if not pick_code:
                         logger.warning("[STRM遍历] 文件缺少 pickcode，跳过: %s", name)
                         stats["errors"] += 1
                         continue
+                    # 参考 p115strmhelper: pickcode 必须是 17 位纯字母数字
+                    if not (len(pick_code) == 17 and pick_code.isalnum()):
+                        logger.warning("[STRM遍历] pickcode 格式无效(%r)，跳过: %s", pick_code, name)
+                        stats["errors"] += 1
+                        continue
                     # path 字段由 with_ancestors=True 拼出完整路径
                     item_full_path = item.get("path", "") or item.get("dir", "")
-                    rel = self._calc_rel_path(item_full_path, cloud_path, name)
+                    rel = self._calc_rel_path(item_full_path, cloud_path)
                     result = self._write_strm(strm_root, rel, name, pick_code, link_host)
                     if result == "created":
                         stats["created"] += 1
@@ -423,13 +423,17 @@ class P115StrmSyncService:
                             logger.debug("[STRM遍历B] 跳过非视频文件: %s", name)
                             stats["skipped"] += 1
                             continue
-                        pick_code = item.get("pc", "") or item.get("pickcode", "")
+                        pick_code = item.get("pickcode", "") or item.get("pc", "")
                         if not pick_code:
                             logger.warning("[STRM遍历B] 文件缺少 pickcode，跳过: %s", name)
                             stats["errors"] += 1
                             continue
+                        if not (len(pick_code) == 17 and pick_code.isalnum()):
+                            logger.warning("[STRM遍历B] pickcode 格式无效(%r)，跳过: %s", pick_code, name)
+                            stats["errors"] += 1
+                            continue
                         item_full_path = item.get("path", "")
-                        rel = self._calc_rel_path(item_full_path, cloud_path, name)
+                        rel = self._calc_rel_path(item_full_path, cloud_path)
                         result = self._write_strm(strm_root, rel, name, pick_code, link_host)
                         if result == "created":
                             stats["created"] += 1
@@ -459,7 +463,7 @@ class P115StrmSyncService:
             loop.close()
         return stats
 
-    def _calc_rel_path(self, item_full_path: str, cloud_path: str, filename: str) -> Path:
+    def _calc_rel_path(self, item_full_path: str, cloud_path: str) -> Path:
         """
         计算文件相对于 cloud_path 根目录的相对路径（不含文件名）。
         例：cloud_path=/影音, item_full_path=/影音/电影/xxx.mkv → rel=电影
@@ -552,7 +556,7 @@ class P115StrmSyncService:
                     logger.warning("[STRM遍历C] 文件缺少 pickcode，跳过: %s", entry.name)
                     stats["errors"] += 1
                     continue
-                rel = self._calc_rel_path(entry.path, cloud_path, entry.name)
+                rel = self._calc_rel_path(entry.path, cloud_path)
                 result = self._write_strm(strm_root, rel, entry.name, entry.pick_code, link_host)
                 if result == "created":
                     stats["created"] += 1
@@ -578,12 +582,15 @@ class P115StrmSyncService:
         if not cloud_path:
             return "0"
         # 优先用 p115client（避免自己递归查）
+        # 参考 p115strmhelper core/p115.py get_pid_by_path：
+        #   使用 client.fs_dir_getid 直接查目录 ID，一次接口调用搞定
+        # p115client.tool.attr.get_id(client, path) 封装了同样的接口
         p115_client = manager.adapter._get_p115_client()
         if p115_client is not None:
             try:
-                from p115client.tool.attr import get_id_to_path
+                from p115client.tool.attr import get_id
                 cid = await asyncio.to_thread(
-                    get_id_to_path, p115_client, "/" + cloud_path
+                    get_id, p115_client, "/" + cloud_path
                 )
                 return str(cid)
             except Exception as e:
