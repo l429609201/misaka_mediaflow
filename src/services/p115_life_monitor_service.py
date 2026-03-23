@@ -1,9 +1,6 @@
 # src/services/p115_life_monitor_service.py
 # 115 生活事件监控服务
 #
-# 参考实现：DDSRem-Dev/MoviePilot-Plugins p115strmhelper
-#   helper/life/client.py → MonitorLife.once_pull / creata_strm / remove_strm
-#
 # 事件类型（对齐 p115strmhelper 注释）：
 #   1  上传图片        → 生成 STRM
 #   2  上传文件/目录   → 生成 STRM

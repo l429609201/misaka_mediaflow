@@ -1,10 +1,6 @@
 # src/services/p115_strm_sync_service.py
 # 115 STRM 全量/增量生成服务
 #
-# 增量同步参考 emby-toolkit / p115strmhelper 的实现策略：
-#   - 全量：用 p115client.tool.iterdir.iter_files_with_path_skim 递归遍历整棵树
-#   - 增量：优先用 p115client.tool 按 from_time 筛选新文件，
-#           回退方案：webapi 列目录按时间倒序，遇到旧文件即停止（避免全量扫描）
 
 import asyncio
 import json
