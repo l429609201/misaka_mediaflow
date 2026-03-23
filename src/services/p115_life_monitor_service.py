@@ -75,10 +75,51 @@ _BEHAVIOR_TYPE_NAMES = {
     22: "删除文件/文件夹",
 }
 
+# webapi 返回的字符串类型名 → 数字类型映射
+# （115 webapi behavior_type 字段返回字符串，p115client 返回数字，需要兼容）
+_BEHAVIOR_STR_TO_INT = {
+    "upload_image_file": 1,
+    "upload_file":       2,
+    "star_image":        3,
+    "star_file":         4,
+    "move_image_file":   5,
+    "move_file":         6,
+    "browse_image":      7,
+    "browse_video":      8,
+    "browse_audio":      9,
+    "browse_document":   10,
+    "receive_files":     14,
+    "new_folder":        17,
+    "copy_folder":       18,
+    "folder_label":      19,
+    "folder_rename":     20,
+    "delete_file":       22,
+}
+
 
 def _get_manager():
     from src.adapters.storage.p115 import P115Manager
     return P115Manager()
+
+
+def _parse_behavior_type(raw) -> int:
+    """
+    将 behavior_type 统一转为 int。
+    - p115client 接口返回数字（int）
+    - 115 webapi life_list 返回字符串（如 "delete_file"）
+    - 未知类型返回 -1
+    """
+    if raw is None:
+        return -1
+    if isinstance(raw, int):
+        return raw
+    # 先尝试直接转 int（"2" → 2）
+    try:
+        return int(raw)
+    except (ValueError, TypeError):
+        pass
+    # 再查字符串映射表
+    return _BEHAVIOR_STR_TO_INT.get(str(raw), -1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -94,7 +135,8 @@ def _sync_fetch_life_events(p115_client, from_time: int, from_id: int) -> Option
     参考 p115strmhelper helper/life/client.py MonitorLife.once_pull：
       iter_life_behavior_once(client, from_time, from_id, cooldown=4, app="ios")
 
-    关键：必须传 app="ios"，否则 115 服务端行为不同（参考 p115strmhelper 实现）。
+    关键：不传 app 参数（使用默认），避免 iOS cookie 与当前 web/android cookie 不匹配
+    导致 P115LoginError（/ios/behavior/detail 接口要求 iOS cookie）。
 
     返回 None 表示 p115client 不可用需要 webapi 回退；返回 [] 表示无新事件。
     """
@@ -114,11 +156,13 @@ def _sync_fetch_life_events(p115_client, from_time: int, from_id: int) -> Option
             from_time=from_time,
             from_id=from_id,
             cooldown=4,
-            app="ios",          # 关键：必须指定，否则 115 接口行为不同
+            # 不传 app 参数：使用 p115client 默认（web），避免 iOS cookie 不匹配问题
+            # 日志中错误路径 /ios/behavior/detail 说明 app="ios" 会强制用 iOS 接口
         ):
             raw_count += 1
-            # 兼容多种字段名（不同版本 p115client 可能略有不同）
-            ev_type   = int(event.get("behavior_type") or event.get("type") or -1)
+            # behavior_type 在不同接口/版本下可能是数字或字符串，统一转为数字
+            raw_type  = event.get("behavior_type") or event.get("type")
+            ev_type   = _parse_behavior_type(raw_type)
             file_name = (event.get("file_name") or event.get("file_name_show")
                          or event.get("fn") or "")
             file_id   = str(event.get("file_id") or event.get("fid") or "")
@@ -194,8 +238,10 @@ def _sync_fetch_life_events_webapi(cookie: str, ua: str, from_time: int) -> Opti
         logger.debug("[生活事件] webapi life_list 返回: state=%s", data.get("state"))
 
         for item in data.get("data", {}).get("list", []):
-            ev_type = int(item.get("behavior_type") or item.get("type") or -1)
-            up_time = int(item.get("update_time") or item.get("time") or 0)
+            # behavior_type 在 webapi 中是字符串（如 "delete_file"），用 _parse_behavior_type 转换
+            raw_type = item.get("behavior_type") or item.get("type")
+            ev_type  = _parse_behavior_type(raw_type)
+            up_time  = int(item.get("update_time") or item.get("time") or 0)
 
             if up_time <= from_time:
                 logger.debug("[生活事件] webapi 跳过旧事件 time=%d <= from_time=%d type=%d",
