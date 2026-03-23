@@ -327,49 +327,41 @@ class P115StrmSyncService:
         stats = {"created": 0, "skipped": 0, "errors": 0}
         p115_client = manager.adapter._get_p115_client()
 
-        # ── 方案A：iter_files_with_path（p115client 标准 API）────────────────
-        # 参考 p115strmhelper helper/life/client.py 的用法：
-        #   from p115client.tool.iterdir import iter_files_with_path
-        #   iter_files_with_path(client, cid, with_ancestors=True, cooldown=2)
-        # 注意：不是 iter_files_with_path_skim（该函数语义不同，返回空）
+        # ── 方案A：iterdir_traverse（p115client 标准 API，支持 web CK）──────
+        # 注意：iter_files_with_path 内部有 fetch_dirs 子流程，
+        #       会调用 download_folders_app（/os_windows/ufile/downfolders），
+        #       该接口需要 windows cookie，与 web CK 不兼容，故改用 iterdir_traverse。
+        # iterdir_traverse 仅使用 /web/2.0/files 接口，完全兼容 web CK。
+        # 参考 p115strmhelper helper/strm/full.py 遍历策略。
         if p115_client is not None:
             try:
-                from p115client.tool.iterdir import iter_files_with_path
-                logger.debug("[STRM遍历] 使用 iter_files_with_path cid=%s from_time=%d", cid, from_time)
+                from p115client.tool.iterdir import iterdir_traverse
+                logger.debug("[STRM遍历] 使用 iterdir_traverse cid=%s from_time=%d", cid, from_time)
                 scan_count = 0
-                for item in iter_files_with_path(
+                for item in iterdir_traverse(
                     client=p115_client,
                     cid=int(cid),
-                    with_ancestors=True,
+                    predicate=True,   # True = 只返回文件，跳过目录
                     cooldown=2,
-                    app="web",  # 必须显式指定，默认是 android，与 web CK 不匹配
+                    app="web",        # 使用 web 接口，与 web CK 匹配
                 ):
                     scan_count += 1
-                    # normalize_attr 已将所有字段标准化，is_dir 是可靠的布尔值
-                    # 参考 p115strmhelper full.py: if item["is_dir"]: return None
-                    if item.get("is_dir"):
-                        continue
-                    # mtime 过滤（增量时跳过旧文件）
-                    # 115 AttrDict 的时间字段：te=mtime, tp=ctime, to=atime
-                    item_mtime = int(
-                        item.get("te") or item.get("mtime")
-                        or item.get("t") or item.get("ctime") or 0
-                    )
+                    # normalize_attr 已标准化所有字段
+                    name      = item.get("name", "")
+                    pick_code = item.get("pickcode") or item.get("pick_code", "")
+                    item_mtime = int(item.get("mtime") or item.get("ctime") or 0)
+                    item_path  = item.get("path", "")
+
                     if from_time > 0 and item_mtime <= from_time:
                         logger.debug("[STRM遍历] 跳过旧文件(mtime=%d <= from_time=%d): %s",
-                                     item_mtime, from_time, item.get("n") or item.get("name", ""))
+                                     item_mtime, from_time, name)
                         stats["skipped"] += 1
                         continue
-                    name = item.get("n") or item.get("name", "")
                     ext = Path(name).suffix.lstrip(".").lower()
                     if ext not in video_exts:
                         logger.debug("[STRM遍历] 跳过非视频文件: %s", name)
                         stats["skipped"] += 1
                         continue
-                    pick_code = (
-                        item.get("pickcode") or item.get("pc")
-                        or item.get("pick_code", "")
-                    )
                     if not pick_code:
                         logger.warning("[STRM遍历] 文件缺少 pickcode，跳过: %s", name)
                         stats["errors"] += 1
@@ -379,9 +371,7 @@ class P115StrmSyncService:
                         logger.warning("[STRM遍历] pickcode 格式无效(%r)，跳过: %s", pick_code, name)
                         stats["errors"] += 1
                         continue
-                    # path 字段由 with_ancestors=True 拼出完整路径
-                    item_full_path = item.get("path", "") or item.get("dir", "")
-                    rel = self._calc_rel_path(item_full_path, cloud_path)
+                    rel = self._calc_rel_path(item_path, cloud_path)
                     result = self._write_strm(strm_root, rel, name, pick_code, link_host)
                     if result == "created":
                         stats["created"] += 1
@@ -389,41 +379,44 @@ class P115StrmSyncService:
                         stats["skipped"] += 1
                     else:
                         stats["errors"] += 1
-                logger.debug("[STRM遍历] iter_files_with_path 共扫描 %d 项, stats=%s", scan_count, stats)
+                logger.debug("[STRM遍历] iterdir_traverse 共扫描 %d 项, stats=%s", scan_count, stats)
                 return stats
             except ImportError:
-                logger.debug("[STRM遍历] iter_files_with_path 不可用，使用回退方案")
+                logger.debug("[STRM遍历] iterdir_traverse 不可用，使用回退方案")
             except Exception as e:
-                logger.warning("[STRM遍历] iter_files_with_path 出错，使用回退方案: %s", e, exc_info=True)
+                logger.warning("[STRM遍历] iterdir_traverse 出错，使用回退方案: %s", e, exc_info=True)
 
         # ── 方案B：iter_fs_files 回退────────────────────────────────────────
+        # iter_fs_files 每次 yield 一整页的 resp 字典，结构：
+        #   resp["data"] = 原始文件/目录列表（未经 normalize_attr）
+        #   原始字段：n=文件名, pc=pickcode, te=mtime, fid=文件ID（有fid表示是文件）
         if p115_client is not None:
             try:
                 from p115client.tool.fs_files import iter_fs_files
                 logger.debug("[STRM遍历] 使用 iter_fs_files cid=%s from_time=%d", cid, from_time)
                 scan_count = 0
-                for data in iter_fs_files(p115_client, int(cid), cooldown=1.5, app="web"):  # app="web" 防止走 android 接口
-                    raw_list = data if isinstance(data, list) else data.get("data", [])
-                    for raw in raw_list:
+                for resp in iter_fs_files(p115_client, int(cid), cooldown=1.5, app="web",
+                                          max_workers=0):  # max_workers=0 = 单线程串行，避免并发接口
+                    for raw in resp.get("data", []):
                         scan_count += 1
-                        # raw 可能是 dict 或 AttrDict
-                        item = raw if isinstance(raw, dict) else dict(raw)
-                        is_dir = "fid" not in item
-                        if is_dir:
+                        # 原始字段：有 fid 的是文件，没有 fid 的是目录
+                        if "fid" not in raw:
                             continue
-                        item_mtime = int(item.get("te", item.get("mtime", item.get("ctime", 0))) or 0)
+                        # 原始字段：n=文件名, pc=pickcode, te=mtime
+                        name       = raw.get("n") or raw.get("fn") or raw.get("name", "")
+                        pick_code  = raw.get("pc") or raw.get("pickcode", "")
+                        item_mtime = int(raw.get("te") or raw.get("t") or raw.get("mtime") or 0)
+
                         if from_time > 0 and item_mtime <= from_time:
                             logger.debug("[STRM遍历B] 跳过旧文件(mtime=%d <= from_time=%d): %s",
-                                         item_mtime, from_time, item.get("n", item.get("name", "")))
+                                         item_mtime, from_time, name)
                             stats["skipped"] += 1
                             continue
-                        name = item.get("n", "") or item.get("name", "")
                         ext = Path(name).suffix.lstrip(".").lower()
                         if ext not in video_exts:
                             logger.debug("[STRM遍历B] 跳过非视频文件: %s", name)
                             stats["skipped"] += 1
                             continue
-                        pick_code = item.get("pickcode", "") or item.get("pc", "")
                         if not pick_code:
                             logger.warning("[STRM遍历B] 文件缺少 pickcode，跳过: %s", name)
                             stats["errors"] += 1
@@ -432,7 +425,8 @@ class P115StrmSyncService:
                             logger.warning("[STRM遍历B] pickcode 格式无效(%r)，跳过: %s", pick_code, name)
                             stats["errors"] += 1
                             continue
-                        item_full_path = item.get("path", "")
+                        # iter_fs_files 不包含完整路径，路径留空走 cloud_path 根目录
+                        item_full_path = raw.get("path", "")
                         rel = self._calc_rel_path(item_full_path, cloud_path)
                         result = self._write_strm(strm_root, rel, name, pick_code, link_host)
                         if result == "created":
@@ -581,18 +575,23 @@ class P115StrmSyncService:
         cloud_path = cloud_path.strip().strip("/")
         if not cloud_path:
             return "0"
-        # 优先用 p115client（避免自己递归查）
-        # 参考 p115strmhelper core/p115.py get_pid_by_path：
-        #   使用 client.fs_dir_getid 直接查目录 ID，一次接口调用搞定
-        # p115client.tool.attr.get_id(client, path) 封装了同样的接口
+        # 优先用 p115client 直接调 fs_dir_getid 接口查目录 ID
+        # 参考 p115strmhelper core/p115.py get_pid_by_path 的做法：
+        #   resp = client.fs_dir_getid(path)
+        #   return str(resp["id"])
+        # 注意：p115client.tool.attr.get_id 返回 P115ID（继承 int），
+        #       比较时有类型兼容问题，直接调 client.fs_dir_getid 更可靠。
         p115_client = manager.adapter._get_p115_client()
         if p115_client is not None:
             try:
-                from p115client.tool.attr import get_id
-                cid = await asyncio.to_thread(
-                    get_id, p115_client, "/" + cloud_path
-                )
-                return str(cid)
+                def _get_dir_id(path: str) -> str:
+                    resp = p115_client.fs_dir_getid(path)
+                    if resp.get("state") and resp.get("id") is not None:
+                        return str(resp["id"])
+                    raise ValueError(f"fs_dir_getid 返回异常: {resp}")
+                cid = await asyncio.to_thread(_get_dir_id, "/" + cloud_path)
+                logger.debug("[STRM同步] fs_dir_getid 解析 %r → cid=%s", cloud_path, cid)
+                return cid
             except Exception as e:
                 logger.debug("[STRM同步] p115client 路径解析失败，改用webapi: %s", e)
         # 回退：webapi 逐段查
