@@ -8,16 +8,16 @@
 #    service/life/__init__.py → monitor_life_thread_worker（轮询主循环）
 #    关键 API：
 #      from p115client.tool.life import iter_life_behavior_once, life_show
-#      iter_life_behavior_once(client, from_time, from_id, cooldown=4, app="ios")
-#    关键字段：event["behavior_type"] / event["file_name"] / event["file_id"]
+#      iter_life_behavior_once(client, from_time, from_id, cooldown=4)
+#    关键字段：event["type"] / event["file_name"] / event["file_id"]
 #              event["parent_id"] / event["pick_code"] / event["update_time"]
 #
-# ② hbq0405/emby-toolkit
-#    p115client 直接调用 life_show，逐页拉取事件，mtime 过滤
+# ② 115 webapi POST /behavior/detail（直接 POST，绕过 p115client GET 的 405 问题）
+#    参数：limit, offset, type, date
+#    认证：Cookie + User-Agent（web CK）
 #
 # 核心流程（参考 p115strmhelper MonitorLife.once_pull）：
-#   1. iter_life_behavior_once(client, from_time=last_ts, from_id=last_id, app="ios")
-#      → 拉取上次 from_time/from_id 之后的所有新事件（once = 不阻塞，消费完即止）
+#   1. POST /behavior/detail → 拉取上次 from_time/from_id 之后的所有新事件
 #   2. 对每条事件：
 #      - 打印 DEBUG 日志（type / file_name / parent_id / pick_code）
 #      - 过滤只处理 _SYNC_TRIGGER_TYPES
@@ -27,9 +27,11 @@
 #      - 记录本轮最大 (update_time, event_id) 用于下次 from_time/from_id
 #   3. 若无新事件，等待 poll_interval 秒后再次拉取
 #
-# 为什么不触发增量同步？
-#   增量同步按 from_time 过滤 mtime，有时差风险（刚上传的文件 mtime≈now≤from_time）；
-#   精确处理单文件：直接拿事件里的 pick_code + 路径写 .strm，零延迟、零误判。
+# 流控（参考 p115strmhelper utils/limiter.py + once_pull）：
+#   - 接口调用间隔 cooldown=4 秒
+#   - 单次拉取失败：最多重试 3 次，每次等待 2 秒
+#   - 无新事件：等待 20 秒（由 _monitor_loop 负责）
+#   - 严重错误：等待 30 秒再继续
 
 import asyncio
 import json
@@ -126,100 +128,62 @@ def _parse_behavior_type(raw) -> int:
 # 同步拉取函数（在 asyncio.to_thread 中运行，避免阻塞事件循环）
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _sync_fetch_life_events(p115_client, from_time: int, from_id: int) -> Optional[list]:
+def _parse_event_fields(raw: dict, raw_count: int) -> Optional[dict]:
     """
-    用 p115client.tool.life.iter_life_behavior_once 拉取生活事件。
-
-    "once" 语义：消费完当前队列即返回，不会永久阻塞。
-
-    参考 p115strmhelper helper/life/client.py MonitorLife.once_pull：
-      iter_life_behavior_once(client, from_time, from_id, cooldown=4, app="ios")
-
-    关键：不传 app 参数（使用默认），避免 iOS cookie 与当前 web/android cookie 不匹配
-    导致 P115LoginError（/ios/behavior/detail 接口要求 iOS cookie）。
-
-    返回 None 表示 p115client 不可用需要 webapi 回退；返回 [] 表示无新事件。
+    从原始事件 dict 解析标准化字段。
+    p115client 的 iter_life_behavior_once 返回 type（int）+ event_name（str）。
+    webapi POST /behavior/detail 返回 type（int）+ behavior_type（str 或 int）。
+    返回 None 表示事件不需要处理（不在触发类型内）。
     """
-    try:
-        from p115client.tool.life import iter_life_behavior_once
-    except ImportError:
-        logger.debug("[生活事件] p115client.tool.life 不可用，将使用 webapi 回退")
+    raw_type  = raw.get("type") or raw.get("behavior_type")
+    ev_type   = _parse_behavior_type(raw_type)
+    ev_name   = (raw.get("event_name")
+                 or _BEHAVIOR_TYPE_NAMES.get(ev_type, f"未知({ev_type})"))
+    file_name = (raw.get("file_name") or raw.get("file_name_show")
+                 or raw.get("fn") or "")
+    file_id   = str(raw.get("file_id") or raw.get("fid") or "")
+    parent_id = str(raw.get("parent_id") or raw.get("pid") or "")
+    pick_code = (raw.get("pick_code") or raw.get("pickcode")
+                 or raw.get("pc") or "")
+    up_time   = int(raw.get("update_time") or raw.get("time") or 0)
+    ev_id     = int(raw.get("id") or raw.get("event_id") or 0)
+
+    logger.debug(
+        "[生活事件] 原始事件 #%d: type=%d(%s) file=%r "
+        "file_id=%s parent_id=%s pick=%s time=%d ev_id=%d",
+        raw_count, ev_type, ev_name,
+        file_name, file_id, parent_id, pick_code, up_time, ev_id,
+    )
+
+    if ev_type not in _SYNC_TRIGGER_TYPES:
+        logger.debug("[生活事件] 忽略事件类型 %d(%s)", ev_type, ev_name)
         return None
 
-    events = []
-    try:
-        logger.debug("[生活事件] iter_life_behavior_once 开始拉取 from_time=%d from_id=%d",
-                     from_time, from_id)
-        raw_count = 0
-        for event in iter_life_behavior_once(
-            client=p115_client,
-            from_time=from_time,
-            from_id=from_id,
-            cooldown=4,
-            # 不传 app 参数：使用 p115client 默认（web），避免 iOS cookie 不匹配问题
-            # 日志中错误路径 /ios/behavior/detail 说明 app="ios" 会强制用 iOS 接口
-        ):
-            raw_count += 1
-            # p115client 返回的事件字段（来自 p115client/tool/life.py 源码）：
-            #   "type"        → 数字 int（如 2），是主字段
-            #   "event_name"  → p115client 自动加的行为名字符串（如 "upload_file"）
-            #   "file_id"     → 文件 ID 字符串
-            #   "file_name"   → 文件名（部分事件可能没有）
-            #   "parent_id"   → 父目录 ID
-            #   "pick_code"/"pc" → pickcode
-            #   "update_time" → 时间戳（部分事件可能没有）
-            #   "id"          → 事件 ID 字符串
-            # webapi life_list 返回的是 "behavior_type"（字符串），通过 _parse_behavior_type 兼容
-            raw_type  = event.get("type") or event.get("behavior_type")
-            ev_type   = _parse_behavior_type(raw_type)
-            # p115client 自动注入的行为名，可直接用于日志
-            ev_name   = (event.get("event_name")
-                         or _BEHAVIOR_TYPE_NAMES.get(ev_type, f"未知({ev_type})"))
-            file_name = (event.get("file_name") or event.get("file_name_show")
-                         or event.get("fn") or "")
-            file_id   = str(event.get("file_id") or event.get("fid") or "")
-            parent_id = str(event.get("parent_id") or event.get("pid") or "")
-            pick_code = (event.get("pick_code") or event.get("pickcode")
-                         or event.get("pc") or "")
-            up_time   = int(event.get("update_time") or event.get("time") or 0)
-            ev_id     = int(event.get("id") or event.get("event_id") or 0)
-
-            logger.debug(
-                "[生活事件] 原始事件 #%d: type=%d(%s) file=%r "
-                "file_id=%s parent_id=%s pick=%s time=%d ev_id=%d",
-                raw_count, ev_type, ev_name,
-                file_name, file_id, parent_id, pick_code, up_time, ev_id,
-            )
-
-            if ev_type not in _SYNC_TRIGGER_TYPES:
-                logger.debug("[生活事件] 忽略事件类型 %d(%s)", ev_type, ev_name)
-                continue
-
-            events.append({
-                "type":      ev_type,
-                "type_name": ev_name,
-                "file_name": file_name,
-                "file_id":   file_id,
-                "parent_id": parent_id,
-                "pick_code": pick_code,
-                "time":      up_time,
-                "event_id":  ev_id,
-            })
-
-        logger.debug(
-            "[生活事件] iter_life_behavior_once 拉取完毕: 原始 %d 条，触发类型 %d 条",
-            raw_count, len(events),
-        )
-    except Exception as e:
-        logger.warning("[生活事件] iter_life_behavior_once 异常: %s", e, exc_info=True)
-        return None
-
-    return events
+    return {
+        "type":      ev_type,
+        "type_name": ev_name,
+        "file_name": file_name,
+        "file_id":   file_id,
+        "parent_id": parent_id,
+        "pick_code": pick_code,
+        "time":      up_time,
+        "event_id":  ev_id,
+    }
 
 
-def _sync_fetch_life_events_webapi(cookie: str, ua: str, from_time: int) -> Optional[list]:
+def _sync_fetch_life_events_post(cookie: str, ua: str,
+                                 from_time: int, from_id: int) -> Optional[list]:
     """
-    回退方案：直接调用 115 life_list webapi，参考 emby-toolkit 的实现。
+    直接 POST https://webapi.115.com/behavior/detail 拉取生活事件。
+
+    115 的 /behavior/detail 接口现在要求 POST 方法（原来是 GET，返回 405）。
+    用 web CK 即可访问，无需 iOS/android cookie。
+
+    流控（参考 p115strmhelper utils/limiter.py ApiEndpointCooldown）：
+    - 每页请求之间 cooldown=4 秒
+    - 分页直到取完（offset >= count）
+
+    返回 None 表示请求失败；返回 [] 表示无新事件。
     """
     try:
         import httpx
@@ -227,67 +191,102 @@ def _sync_fetch_life_events_webapi(cookie: str, ua: str, from_time: int) -> Opti
         try:
             import requests as httpx  # type: ignore
         except ImportError:
-            logger.debug("[生活事件] httpx/requests 均不可用，webapi 回退失败")
+            logger.debug("[生活事件] httpx/requests 均不可用")
             return None
 
+    import time as _time
+
     events = []
+    headers = {
+        "Cookie":       cookie,
+        "User-Agent":   ua or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept":       "application/json, text/plain, */*",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Referer":      "https://115.com/",
+    }
+
+    limit  = 64
+    offset = 0
+    seen_ids: set = set()
+    raw_count = 0
+    page_num  = 0
+    cooldown  = 4  # 参考 p115strmhelper once_pull(cooldown=4)
+
     try:
-        headers = {
-            "Cookie": cookie,
-            "User-Agent": ua or "Mozilla/5.0",
-            "Accept": "application/json, text/plain, */*",
-            "Referer": "https://115.com/",
-        }
-        resp = httpx.get(
-            "https://life.115.com/api/1.0/web/1.0/life/life_list",
-            headers=headers,
-            params={"show_type": "0", "start": "0", "limit": "100"},
-            timeout=15,
-        )
-        data = resp.json()
-        logger.debug("[生活事件] webapi life_list 返回: state=%s", data.get("state"))
+        while True:
+            page_num += 1
+            payload = {
+                "limit":  str(limit),
+                "offset": str(offset),
+                "type":   "",
+                "date":   "",
+            }
+            logger.debug("[生活事件] POST /behavior/detail page=%d offset=%d", page_num, offset)
 
-        for item in data.get("data", {}).get("list", []):
-            # behavior_type 在 webapi 中是字符串（如 "delete_file"），用 _parse_behavior_type 转换
-            raw_type = item.get("behavior_type") or item.get("type")
-            ev_type  = _parse_behavior_type(raw_type)
-            up_time  = int(item.get("update_time") or item.get("time") or 0)
-
-            if up_time <= from_time:
-                logger.debug("[生活事件] webapi 跳过旧事件 time=%d <= from_time=%d type=%d",
-                             up_time, from_time, ev_type)
-                continue
-
-            file_name = item.get("file_name") or item.get("fn", "")
-            file_id   = str(item.get("file_id") or item.get("fid") or "")
-            parent_id = str(item.get("parent_id") or item.get("pid") or "")
-            pick_code = item.get("pick_code") or item.get("pc", "")
-            ev_id     = int(item.get("id") or 0)
-
-            logger.debug(
-                "[生活事件] webapi 事件: type=%d(%s) file=%r file_id=%s parent_id=%s",
-                ev_type, _BEHAVIOR_TYPE_NAMES.get(ev_type, "?"),
-                file_name, file_id, parent_id,
+            resp = httpx.post(
+                "https://webapi.115.com/behavior/detail",
+                headers=headers,
+                data=payload,
+                timeout=15,
             )
+            resp.raise_for_status()
+            data = resp.json()
 
-            if ev_type not in _SYNC_TRIGGER_TYPES:
-                continue
+            if not data.get("state"):
+                logger.warning("[生活事件] /behavior/detail 返回 state=False: %s",
+                               data.get("error", ""))
+                return None
 
-            events.append({
-                "type":      ev_type,
-                "type_name": _BEHAVIOR_TYPE_NAMES.get(ev_type, f"未知({ev_type})"),
-                "file_name": file_name,
-                "file_id":   file_id,
-                "parent_id": parent_id,
-                "pick_code": pick_code,
-                "time":      up_time,
-                "event_id":  ev_id,
-            })
+            page_list = data.get("data", {}).get("list", [])
+            total     = int(data.get("data", {}).get("count", 0))
+            logger.debug("[生活事件] 第 %d 页: 共 %d 条，本页 %d 条",
+                         page_num, total, len(page_list))
+
+            stop_flag = False
+            for raw in page_list:
+                raw_count += 1
+                ev_id_raw  = int(raw.get("id") or 0)
+                up_time    = int(raw.get("update_time") or raw.get("time") or 0)
+
+                # 跳过已处理过的事件（by from_id / from_time）
+                if from_id and ev_id_raw and ev_id_raw <= from_id:
+                    logger.debug("[生活事件] 达到 from_id=%d，停止翻页", from_id)
+                    stop_flag = True
+                    break
+                if from_time and up_time and up_time < from_time:
+                    logger.debug("[生活事件] 达到 from_time=%d，停止翻页", from_time)
+                    stop_flag = True
+                    break
+
+                # 去重（同一事件可能出现在多页）
+                if ev_id_raw and ev_id_raw in seen_ids:
+                    continue
+                if ev_id_raw:
+                    seen_ids.add(ev_id_raw)
+
+                parsed = _parse_event_fields(raw, raw_count)
+                if parsed is not None:
+                    events.append(parsed)
+
+            if stop_flag:
+                break
+
+            offset += len(page_list)
+            if offset >= total or not page_list:
+                break
+
+            # 翻页冷却（参考 p115strmhelper cooldown=4）
+            _time.sleep(cooldown)
+
+        logger.debug(
+            "[生活事件] /behavior/detail 拉取完毕: 原始 %d 条，触发类型 %d 条",
+            raw_count, len(events),
+        )
+        return events
+
     except Exception as e:
-        logger.warning("[生活事件] webapi 回退异常: %s", e, exc_info=True)
+        logger.warning("[生活事件] POST /behavior/detail 异常: %s", e, exc_info=True)
         return None
-
-    return events
 
 
 def _sync_write_single_strm(
@@ -462,12 +461,11 @@ class P115LifeMonitorService:
 
     async def _monitor_loop(self):
         """
-        主轮询循环，参考 p115strmhelper monitor_life_thread_worker 的结构：
-          while True:
-              events = once_pull(from_time, from_id)
-              for event in events:
-                  handle_event(event)
-              sleep(poll_interval)
+        主轮询循环，参考 p115strmhelper monitor_life_thread_worker + once_pull 的结构：
+          - 有新事件：处理完立即开始下一轮（不额外等待）
+          - 无新事件：等待 20 秒（参考 p115strmhelper once_pull stop_event.wait(20)）
+          - 出现异常：等待 30 秒（参考 p115strmhelper "30s 后尝试重新启动"）
+          - poll_interval：用户配置的最小轮询间隔（默认 30 秒，有事件时不生效）
         """
         self._running = True
         logger.info(
@@ -477,8 +475,10 @@ class P115LifeMonitorService:
 
         try:
             while True:
+                wait_secs = 20  # 默认：无新事件等 20 秒（对齐 p115strmhelper）
                 try:
                     config = await self.get_config()
+                    # 用户配置的 poll_interval 作为无新事件时的等待下限
                     poll_interval = max(10, config.get("poll_interval", 30))
 
                     logger.debug(
@@ -490,16 +490,23 @@ class P115LifeMonitorService:
                     if new_events:
                         logger.info("[生活事件] 本轮收到 %d 条新事件，开始处理", len(new_events))
                         await self._handle_events(new_events, config)
+                        # 有新事件：处理完立即开始下一轮，不等待
+                        wait_secs = 0
                     else:
-                        logger.debug("[生活事件] 本轮无新事件，%ds 后再次轮询", poll_interval)
+                        # 无新事件：等待 max(20, poll_interval) 秒
+                        wait_secs = max(20, poll_interval)
+                        logger.debug("[生活事件] 本轮无新事件，%ds 后再次轮询", wait_secs)
 
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
                     logger.error("[生活事件] 轮询异常: %s", e, exc_info=True)
-                    poll_interval = 30
+                    # 出错：等待 30 秒（参考 p115strmhelper "30s 后重启"）
+                    wait_secs = 30
+                    logger.info("[生活事件] %ds 后重试", wait_secs)
 
-                await asyncio.sleep(poll_interval)
+                if wait_secs > 0:
+                    await asyncio.sleep(wait_secs)
 
         except asyncio.CancelledError:
             logger.info("[生活事件] 监控已停止")
@@ -508,7 +515,9 @@ class P115LifeMonitorService:
 
     async def _poll_once(self) -> list:
         """
-        拉取本轮新事件，优先 p115client.tool.life，回退 webapi。
+        拉取本轮新事件。
+        直接 POST webapi.115.com/behavior/detail（绕过 p115client GET 的 405 问题）。
+        带 3 次重试（参考 p115strmhelper once_pull），失败等待 2 秒。
         拉取成功后更新 _last_event_time / _last_event_id。
         """
         manager = _get_manager()
@@ -516,38 +525,39 @@ class P115LifeMonitorService:
             logger.debug("[生活事件] 115 未启用或未就绪，跳过本轮")
             return []
 
-        p115_client = manager.adapter._get_p115_client()
-
-        # ── 方案A：p115client iter_life_behavior_once ─────────────────────
-        if p115_client is not None:
-            events = await asyncio.to_thread(
-                _sync_fetch_life_events,
-                p115_client,
-                self._last_event_time,
-                self._last_event_id,
-            )
-        else:
-            events = None
-            logger.debug("[生活事件] p115_client 不可用，使用 webapi 回退")
-
-        # ── 方案B：webapi 回退 ────────────────────────────────────────────
-        if events is None:
-            try:
-                auth = manager.adapter._auth
-                if not getattr(auth, "has_cookie", False):
-                    logger.debug("[生活事件] 无 cookie，跳过 webapi 回退")
-                    return []
-                cookie = auth.cookie
-                ua = auth.get_cookie_headers().get("User-Agent", "")
-            except Exception as e:
-                logger.debug("[生活事件] 获取 auth 失败: %s", e)
+        # 获取 cookie（web CK）
+        try:
+            auth = manager.adapter._auth
+            if not getattr(auth, "has_cookie", False):
+                logger.debug("[生活事件] 无 cookie，跳过本轮")
                 return []
+            cookie = auth.cookie
+            ua = auth.get_cookie_headers().get("User-Agent", "")
+        except Exception as e:
+            logger.debug("[生活事件] 获取 auth 失败: %s", e)
+            return []
 
-            events = await asyncio.to_thread(
-                _sync_fetch_life_events_webapi,
-                cookie, ua,
-                self._last_event_time,
-            )
+        # 重试机制（参考 p115strmhelper once_pull: 3 次重试，失败等 2 秒）
+        events = None
+        max_retries = 3
+        for attempt in range(max_retries, -1, -1):
+            try:
+                events = await asyncio.to_thread(
+                    _sync_fetch_life_events_post,
+                    cookie, ua,
+                    self._last_event_time,
+                    self._last_event_id,
+                )
+                if events is not None:
+                    break  # 成功（包括空列表 []）
+            except Exception as e:
+                if attempt <= 0:
+                    logger.error("[生活事件] 拉取数据失败（重试已耗尽）: %s", e)
+                    return []
+                logger.warning(
+                    "[生活事件] 拉取数据失败，剩余重试 %d 次: %s", attempt, e
+                )
+                await asyncio.sleep(2)
 
         if not events:
             return []
