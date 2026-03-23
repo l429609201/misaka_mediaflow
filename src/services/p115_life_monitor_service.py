@@ -141,28 +141,25 @@ def _parse_event_fields(raw: dict, raw_count: int) -> Optional[dict]:
     """
     从原始事件 dict 解析标准化字段。
     p115client 的 iter_life_behavior_once 返回 type（int）+ event_name（str）。
-    webapi POST /behavior/detail 返回 type（int）+ behavior_type（str 或 int）。
+    life_list 接口返回 behavior_type（str，如 "delete_file"）。
     返回 None 表示事件不需要处理（不在触发类型内）。
     """
+    # 始终以 INFO 级别打印原始字段，便于排查字段名问题
+    logger.info("[生活事件] 原始事件 #%d keys=%s", raw_count, list(raw.keys()))
+    logger.info("[生活事件] 原始事件 #%d data=%s", raw_count, raw)
+
     raw_type  = raw.get("type") or raw.get("behavior_type")
     ev_type   = _parse_behavior_type(raw_type)
     ev_name   = (raw.get("event_name")
                  or _BEHAVIOR_TYPE_NAMES.get(ev_type, f"未知({ev_type})"))
     file_name = (raw.get("file_name") or raw.get("file_name_show")
-                 or raw.get("fn") or "")
-    file_id   = str(raw.get("file_id") or raw.get("fid") or "")
-    parent_id = str(raw.get("parent_id") or raw.get("pid") or "")
+                 or raw.get("fn") or raw.get("n") or "")
+    file_id   = str(raw.get("file_id") or raw.get("fid") or raw.get("file_id_str") or "")
+    parent_id = str(raw.get("parent_id") or raw.get("pid") or raw.get("category_id") or "")
     pick_code = (raw.get("pick_code") or raw.get("pickcode")
                  or raw.get("pc") or "")
     up_time   = int(raw.get("update_time") or raw.get("time") or 0)
     ev_id     = int(raw.get("id") or raw.get("event_id") or 0)
-
-    logger.debug(
-        "[生活事件] 原始事件 #%d: type=%d(%s) file=%r "
-        "file_id=%s parent_id=%s pick=%s time=%d ev_id=%d",
-        raw_count, ev_type, ev_name,
-        file_name, file_id, parent_id, pick_code, up_time, ev_id,
-    )
 
     if ev_type not in _SYNC_TRIGGER_TYPES:
         logger.debug("[生活事件] 忽略事件类型 %d(%s)", ev_type, ev_name)
@@ -365,15 +362,20 @@ def _sync_write_single_strm(
         item_path = (parent_dir.rstrip("/") + "/" + file_name)
     else:
         item_path = ""
-        logger.debug("[生活事件→STRM] 无法获取父目录路径 parent_id=%s，将放置于STRM根目录: %s",
+        logger.info("[生活事件→STRM] 无法获取父目录路径 parent_id=%s，将放置于STRM根目录: %s",
                      parent_id, file_name)
+
+    logger.info(
+        "[生活事件→STRM] 解析路径: file=%r parent_id=%s parent_dir=%r → item_path=%r",
+        file_name, parent_id, parent_dir, item_path,
+    )
 
     # ④ 检查路径是否在监控范围内
     cloud_root = "/" + cloud_path.strip("/")
     if item_path:
         norm_path = "/" + item_path.strip("/")
         if not norm_path.startswith(cloud_root + "/") and norm_path != cloud_root:
-            logger.debug("[生活事件→STRM] 路径不在监控范围 cloud_root=%s: %s",
+            logger.info("[生活事件→STRM] 路径不在监控范围 cloud_root=%s: %s",
                          cloud_root, norm_path)
             return "out_of_scope"
         # 计算相对于 cloud_root 的目录
@@ -386,7 +388,7 @@ def _sync_write_single_strm(
         # 无法确定路径 → 放置于 STRM 根目录（宁可写入，不漏掉）
         rel_dir = Path(".")
 
-    # ⑤ 渲染 STRM URL（Jinja2 模板）
+    # ⑤ 渲染 STRM URL
     from src.services.p115_strm_sync_service import P115StrmSyncService
     strm_content = P115StrmSyncService._render_strm_url(
         url_tmpl, link_host, pick_code, file_name, item_path
@@ -401,14 +403,15 @@ def _sync_write_single_strm(
         if strm_file.exists():
             existing = strm_file.read_text(encoding="utf-8").strip()
             if existing == strm_content.strip():
-                logger.debug("[生活事件→STRM] 已存在且内容相同，跳过: %s", strm_file)
+                logger.info("[生活事件→STRM] 已存在且内容相同，跳过: %s", strm_file)
                 return "skipped"
-            logger.debug("[生活事件→STRM] 内容变更，覆盖: %s", strm_file)
+            logger.info("[生活事件→STRM] 内容变更，覆盖: %s → %s", strm_file, strm_content)
         else:
-            logger.debug("[生活事件→STRM] 新建: %s → %s", strm_file, strm_content)
+            logger.info("[生活事件→STRM] 新建: %s → %s", strm_file, strm_content)
 
         strm_file.write_text(strm_content, encoding="utf-8")
-        logger.info("[生活事件→STRM] 已生成: %s (parent_id=%s)", strm_file, parent_id)
+        logger.info("[生活事件→STRM] ✅ 已生成: %s (cloud_path=%s, url=%s)",
+                    strm_file, item_path, strm_content)
         return "created"
     except Exception as e:
         logger.error("[生活事件→STRM] 写入失败 %s: %s", file_name, e)
@@ -650,8 +653,8 @@ class P115LifeMonitorService:
             type_name = ev["type_name"]
 
             logger.info(
-                "[生活事件] ▶ [%s] file=%r file_id=%s parent_id=%s pick=%s",
-                type_name, file_name, file_id, parent_id, pick_code,
+                "[生活事件] ▶ [%s] file=%r file_id=%s parent_id=%s pick=%s time=%d",
+                type_name, file_name, file_id, parent_id, pick_code, ev.get("time", 0),
             )
             self._add_event_log(ev)
 

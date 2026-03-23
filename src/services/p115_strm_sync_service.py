@@ -175,27 +175,49 @@ class P115StrmSyncService:
         sha1: str = "",
     ) -> str:
         """
-        使用 Jinja2 渲染 STRM URL 模板。
-        可用变量：base_url, pickcode, file_name, file_path, sha1
-        可用过滤器：urlencode
+        渲染 STRM URL 模板（纯标准库实现，不依赖 jinja2）。
+
+        支持的模板语法（与 Jinja2 兼容子集）：
+          {{ base_url }}    → link_host（如 http://127.0.0.1:9906）
+          {{ pickcode }}    → pick_code
+          {{ file_name }}   → 文件名（含扩展名）
+          {{ file_path }}   → 云盘完整路径（如 /影音/电影/xxx.mkv）
+          {{ sha1 }}        → 文件 sha1（可能为空）
+          {{ file_name | urlencode }}   → URL 编码后的文件名
+          {{ file_path | urlencode }}   → URL 编码后的路径
+          {{ pickcode | urlencode }}    → URL 编码后的 pickcode
+
         若模板为空或渲染失败，回退到默认格式：
           {link_host}/p115/play/{pick_code}/{file_name}
         """
+        import re
+        from urllib.parse import quote as _url_quote
+
         default_url = f"{link_host}/p115/play/{pick_code}/{file_name}"
         if not tmpl_str:
             return default_url
         try:
-            from jinja2 import Environment
-            from urllib.parse import quote as _quote
-            env = Environment()
-            env.filters["urlencode"] = lambda s: _quote(str(s), safe="")
-            rendered = env.from_string(tmpl_str).render(
-                base_url=link_host,
-                pickcode=pick_code,
-                file_name=file_name,
-                file_path=file_path,
-                sha1=sha1,
-            )
+            variables = {
+                "base_url":  link_host,
+                "pickcode":  pick_code,
+                "file_name": file_name,
+                "file_path": file_path,
+                "sha1":      sha1,
+            }
+
+            def _replace(m: re.Match) -> str:
+                expr = m.group(1).strip()
+                # 支持 {{ var | urlencode }} 过滤器
+                if "|" in expr:
+                    parts = [p.strip() for p in expr.split("|", 1)]
+                    var_name, filt = parts[0], parts[1]
+                    val = str(variables.get(var_name, ""))
+                    if filt == "urlencode":
+                        return _url_quote(val, safe="")
+                    return val
+                return str(variables.get(expr, ""))
+
+            rendered = re.sub(r"\{\{\s*(.*?)\s*\}\}", _replace, tmpl_str)
             return rendered.strip()
         except Exception as e:
             logger.warning("[STRM] 模板渲染失败，使用默认格式: %s", e)
