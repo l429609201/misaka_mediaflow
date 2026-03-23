@@ -1,46 +1,25 @@
 # src/services/p115_life_monitor_service.py
 # 115 生活事件监控服务
 #
-# 核心设计参考（精确对齐参考实现）：
+# 参考实现：DDSRem-Dev/MoviePilot-Plugins p115strmhelper
+#   helper/life/client.py → MonitorLife.once_pull / creata_strm / remove_strm
 #
-# ① DDSRem-Dev/MoviePilot-Plugins p115strmhelper
-#    helper/life/client.py  → MonitorLife（事件拉取 + 精确处理单文件）
-#    service/life/__init__.py → monitor_life_thread_worker（轮询主循环）
-#    关键 API：
-#      from p115client.tool.life import iter_life_behavior_once, life_show
-#      iter_life_behavior_once(client, from_time, from_id, cooldown=4)
-#    关键字段：event["type"] / event["file_name"] / event["file_id"]
-#              event["parent_id"] / event["pick_code"] / event["update_time"]
+# 事件类型（对齐 p115strmhelper 注释）：
+#   1  上传图片        → 生成 STRM
+#   2  上传文件/目录   → 生成 STRM
+#   5  移动图片        → 生成 STRM
+#   6  移动文件/目录   → 生成 STRM
+#   14 接收文件        → 生成 STRM
+#   17 创建新目录      → 触发增量同步
+#   18 复制文件夹      → 生成 STRM
+#   22 删除文件/文件夹 → 仅记录（防误删）
 #
-# ② 关键：传 app="android" 给 iter_life_behavior_once
-#    p115client 源码路由逻辑（life.py）：
-#      app in ("", "web", "desktop", "harmony")
-#        → client.life_behavior_detail  → GET webapi.115.com/behavior/detail → 405 ❌
-#      else（如 app="android"）
-#        → client.life_behavior_detail_app → POST pro.api.115.com → 需要android CK → 99 ❌
-#    web CK 的 SSOENT=A，android 需要 SSOENT=D，ios 需要 SSOENT=B，均不匹配
+# 接口选择（根据扫码时 login_app）：
+#   web/desktop/harmony CK → life_list(app="web")  → life.115.com ✅
+#   android/ios/alipaymini → iter_life_behavior_once(app=login_app) ✅
 #
-# ③ 唯一正确方案：client.life_list(app="web")
-#    → life.115.com/api/1.0/web/1.0/life/life_list（纯 web 接口）
-#    → 接受 web CK（SSOENT=A），无认证问题 ✅
-#    自实现 once 语义：分页拉取 + from_id/from_time 截止 + cooldown=4s
-#
-# 核心流程（参考 p115strmhelper MonitorLife.once_pull）：
-#   1. POST /behavior/detail → 拉取上次 from_time/from_id 之后的所有新事件
-#   2. 对每条事件：
-#      - 打印 DEBUG 日志（type / file_name / parent_id / pick_code）
-#      - 过滤只处理 _SYNC_TRIGGER_TYPES
-#      - 检查 file_id 对应的云盘路径是否在配置的监控 cloud_path 内
-#      - 命中 → 精确为该单文件生成 STRM（不触发全量/增量扫描）
-#      - 目录操作/无法精确定位 → 兜底触发增量同步
-#      - 记录本轮最大 (update_time, event_id) 用于下次 from_time/from_id
-#   3. 若无新事件，等待 poll_interval 秒后再次拉取
-#
-# 流控（参考 p115strmhelper utils/limiter.py + once_pull）：
-#   - 接口调用间隔 cooldown=4 秒
-#   - 单次拉取失败：最多重试 3 次，每次等待 2 秒
-#   - 无新事件：等待 20 秒（由 _monitor_loop 负责）
-#   - 严重错误：等待 30 秒再继续
+# 流控（对齐 p115strmhelper once_pull）：
+#   cooldown=4s；失败重试 3 次，间隔 2s；无新事件等 20s；出错等 30s
 
 import asyncio
 import json
@@ -140,64 +119,76 @@ def _parse_behavior_type(raw) -> int:
 def _parse_event_fields(raw: dict, raw_count: int) -> Optional[dict]:
     """
     从原始事件 dict 解析标准化字段。
-    p115client 的 iter_life_behavior_once 返回 type（int）+ event_name（str）。
-    life_list 接口返回 behavior_type（str，如 "delete_file"）。
+
+    iter_life_behavior_once 返回字段（对齐 p115strmhelper）：
+      type(int), id, update_time, file_name, file_id, parent_id,
+      pick_code, file_category(0=目录), file_size, sha1
+
+    life_list 接口返回字段：
+      behavior_type(str 如"delete_file"), id, update_time, file_name,
+      file_id, parent_id, pick_code 等（部分事件字段可能缺失）
+
     返回 None 表示事件不需要处理（不在触发类型内）。
     """
-    # 始终以 INFO 级别打印原始字段，便于排查字段名问题
-    logger.info("[生活事件] 原始事件 #%d keys=%s", raw_count, list(raw.keys()))
-    logger.info("[生活事件] 原始事件 #%d data=%s", raw_count, raw)
+    # DEBUG 级别打印原始字段（对齐 p115strmhelper logger.debug 风格）
+    logger.debug("【监控生活事件】原始事件 #%d keys=%s", raw_count, list(raw.keys()))
+    logger.debug("【监控生活事件】原始事件 #%d data=%s", raw_count, raw)
 
+    # 事件类型：iter_life_behavior_once 返回 type(int)；life_list 返回 behavior_type(str)
     raw_type  = raw.get("type") or raw.get("behavior_type")
     ev_type   = _parse_behavior_type(raw_type)
-    ev_name   = (raw.get("event_name")
-                 or _BEHAVIOR_TYPE_NAMES.get(ev_type, f"未知({ev_type})"))
-    file_name = (raw.get("file_name") or raw.get("file_name_show")
-                 or raw.get("fn") or raw.get("n") or "")
-    file_id   = str(raw.get("file_id") or raw.get("fid") or raw.get("file_id_str") or "")
-    parent_id = str(raw.get("parent_id") or raw.get("pid") or raw.get("category_id") or "")
-    pick_code = (raw.get("pick_code") or raw.get("pickcode")
-                 or raw.get("pc") or "")
+    ev_name   = _BEHAVIOR_TYPE_NAMES.get(ev_type, f"未知({ev_type})")
+
+    # 文件名：标准字段 file_name，life_list 可能嵌套在 file_info 里
+    file_info = raw.get("file_info") or {}
+    file_name = (raw.get("file_name") or file_info.get("file_name")
+                 or raw.get("file_name_show") or raw.get("fn") or raw.get("n") or "")
+
+    # 文件 ID
+    file_id   = str(raw.get("file_id") or file_info.get("file_id")
+                    or raw.get("fid") or raw.get("file_id_str") or "")
+
+    # 父目录 ID
+    parent_id = str(raw.get("parent_id") or file_info.get("parent_id")
+                    or raw.get("pid") or raw.get("category_id") or "")
+
+    # pickcode：iter_life_behavior_once 用 pick_code；life_list 可能用 pickcode 或 pc
+    pick_code = (raw.get("pick_code") or file_info.get("pick_code")
+                 or raw.get("pickcode") or raw.get("pc") or "")
+
+    # 时间戳和事件 ID
     up_time   = int(raw.get("update_time") or raw.get("time") or 0)
     ev_id     = int(raw.get("id") or raw.get("event_id") or 0)
 
+    # file_category：0=目录，非0=文件（iter_life_behavior_once 标准字段）
+    file_category = raw.get("file_category", -1)
+
     if ev_type not in _SYNC_TRIGGER_TYPES:
-        logger.debug("[生活事件] 忽略事件类型 %d(%s)", ev_type, ev_name)
+        logger.debug("【监控生活事件】忽略事件类型 %d(%s): %s", ev_type, ev_name, file_name)
         return None
 
     return {
-        "type":      ev_type,
-        "type_name": ev_name,
-        "file_name": file_name,
-        "file_id":   file_id,
-        "parent_id": parent_id,
-        "pick_code": pick_code,
-        "time":      up_time,
-        "event_id":  ev_id,
+        "type":          ev_type,
+        "type_name":     ev_name,
+        "file_name":     file_name,
+        "file_id":       file_id,
+        "parent_id":     parent_id,
+        "pick_code":     pick_code,
+        "time":          up_time,
+        "event_id":      ev_id,
+        "file_category": file_category,  # 0=目录, 非0=文件, -1=未知
     }
 
 
 def _sync_fetch_life_events(p115_client, from_time: int, from_id: int,
                              login_app: str = "web") -> Optional[list]:
     """
-    根据扫码时选择的 login_app 类型，选择对应的生活事件接口：
-
-    - web/desktop/harmony CK (SSOENT=A) → life_list(app="web")
-      life.115.com/api/1.0/web/1.0/life/life_list，纯 web 接口 ✅
-
-    - android/ios/alipaymini 等 CK → iter_life_behavior_once(app=login_app)
-      /{login_app}/behavior/detail (POST proapi)，与 CK 的 SSOENT 完全匹配 ✅
-
-    与 p115strmhelper 完全相同的逻辑：
-      p115strmhelper 用 iOS CK → app="ios" → /ios/behavior/detail ✅
-      我们用 android CK → app="android" → /android/behavior/detail ✅
-      我们用 web CK → life_list(web) → life.115.com/.../life_list ✅
-
+    根据扫码时选择的 login_app 类型，选择对应的生活事件接口。
     返回 None 表示请求异常需重试；返回 [] 表示无新事件。
     """
     import time as _time
     _WEB_APPS = {"", "web", "desktop", "harmony"}
-    logger.debug("[生活事件] _sync_fetch_life_events login_app=%s from_time=%d from_id=%d",
+    logger.debug("【监控生活事件】接口分发 login_app=%s from_time=%d from_id=%d",
                  login_app, from_time, from_id)
     if login_app in _WEB_APPS:
         return _fetch_via_life_list(p115_client, from_time, from_id, _time)
@@ -217,19 +208,19 @@ def _fetch_via_life_list(p115_client, from_time: int, from_id: int, _time) -> Op
         while True:
             page_num += 1
             payload = {"show_type": 0, "limit": limit, "start": offset}
-            logger.debug("[生活事件] life_list page=%d offset=%d", page_num, offset)
+            logger.debug("【监控生活事件】life_list 第%d页 offset=%d", page_num, offset)
             resp = p115_client.life_list(payload, app="web")
             if not isinstance(resp, dict):
-                logger.warning("[生活事件] life_list 返回非 dict: %s", type(resp))
+                logger.warning("【监控生活事件】life_list 返回非 dict: %s", type(resp))
                 return None
             if not resp.get("state"):
-                logger.warning("[生活事件] life_list state=False errno=%s error=%s",
+                logger.warning("【监控生活事件】life_list state=False errno=%s error=%s",
                                resp.get("errno"), resp.get("error"))
                 return None
             data = resp.get("data", {})
             page_list = data.get("list", [])
             total = int(data.get("count", 0))
-            logger.debug("[生活事件] life_list 第%d页: total=%d 本页=%d条",
+            logger.debug("【监控生活事件】life_list 第%d页: total=%d 本页=%d条",
                          page_num, total, len(page_list))
             stop_flag = False
             for raw in page_list:
@@ -251,26 +242,26 @@ def _fetch_via_life_list(p115_client, from_time: int, from_id: int, _time) -> Op
             if not page_list or offset >= total:
                 break
             _time.sleep(cooldown)
-        logger.debug("[生活事件] life_list 完毕: %d页 原始%d条 触发%d条",
+        logger.debug("【监控生活事件】life_list 完毕: %d页 原始%d条 触发%d条",
                      page_num, raw_count, len(events))
         return events
     except Exception as e:
-        logger.warning("[生活事件] life_list 异常: %s", e, exc_info=True)
+        logger.warning("【监控生活事件】life_list 异常: %s", e, exc_info=True)
         return None
 
 
 def _fetch_via_behavior_once(p115_client, from_time: int, from_id: int,
                               login_app: str, _time) -> Optional[list]:
-    """非 web CK 专用：iter_life_behavior_once(app=login_app)，与扫码 app 类型完全匹配"""
+    """非 web CK 专用：iter_life_behavior_once(app=login_app)，对齐 p115strmhelper once_pull"""
     try:
         from p115client.tool.life import iter_life_behavior_once
     except ImportError:
-        logger.warning("[生活事件] p115client.tool.life 不可用，降级到 life_list")
+        logger.warning("【监控生活事件】p115client.tool.life 不可用，降级到 life_list")
         return _fetch_via_life_list(p115_client, from_time, from_id, _time)
     events: list = []
     raw_count = 0
     try:
-        logger.debug("[生活事件] behavior_once app=%s from_time=%d from_id=%d",
+        logger.debug("【监控生活事件】behavior_once app=%s from_time=%d from_id=%d",
                      login_app, from_time, from_id)
         for event in iter_life_behavior_once(
             client=p115_client,
@@ -283,22 +274,18 @@ def _fetch_via_behavior_once(p115_client, from_time: int, from_id: int,
             parsed = _parse_event_fields(event, raw_count)
             if parsed is not None:
                 events.append(parsed)
-        logger.debug("[生活事件] behavior_once 完毕: 原始%d条 触发%d条", raw_count, len(events))
+        logger.debug("【监控生活事件】behavior_once 完毕: 原始%d条 触发%d条", raw_count, len(events))
         return events
     except Exception as e:
-        logger.warning("[生活事件] behavior_once(app=%s) 异常: %s", login_app, e, exc_info=True)
+        logger.warning("【监控生活事件】behavior_once(app=%s) 异常: %s", login_app, e, exc_info=True)
         return None
+
+
 def _sync_get_parent_path(p115_client, parent_id: str) -> str:
     """
     通过 parent_id 查询父目录路径。
     参考 p115strmhelper MonitorLife._get_path_by_cid：
-      先尝试 client.fs_dir_getid（已知是用 ID 反查路径的方式），
-      若失败则返回空字符串。
-
-    p115strmhelper 实际用的是 get_path(client, attr=cid)，但该函数
-    底层走 /files/file 接口，需要 iOS UA。
-    我们改用 client.fs_dir_getid 的逆向思路：
-      client.fs_info({"file_id": parent_id}) → 返回 file 属性含 path
+      先尝试 client.fs_info（ID 反查路径）。
     若都失败，返回空字符串（降级到只写 STRM 根目录）。
     """
     if not p115_client or not parent_id or parent_id == "0":
@@ -312,7 +299,7 @@ def _sync_get_parent_path(p115_client, parent_id: str) -> str:
                 paths = [item.get("file_name", "") for item in data]
                 return "/" + "/".join(p for p in paths if p)
     except Exception as e:
-        logger.debug("[生活事件→STRM] fs_info 查询父目录失败 parent_id=%s: %s", parent_id, e)
+        logger.debug("【监控生活事件】fs_info 查询父目录失败 parent_id=%s: %s", parent_id, e)
     return ""
 
 
@@ -343,15 +330,15 @@ def _sync_write_single_strm(
     # ① 校验视频扩展名
     ext = Path(file_name).suffix.lstrip(".").lower()
     if ext not in video_exts:
-        logger.debug("[生活事件→STRM] 跳过非视频文件: %s", file_name)
+        logger.debug("【监控生活事件】跳过非视频文件: %s", file_name)
         return "out_of_scope"
 
     # ② 校验 pick_code（参考 p115strmhelper: 17位纯字母数字）
     if not pick_code:
-        logger.warning("[生活事件→STRM] 缺少 pick_code: %s", file_name)
+        logger.error("【监控生活事件】%s 不存在 pick_code 值，无法生成 STRM 文件", file_name)
         return "error"
     if not (len(pick_code) == 17 and pick_code.isalnum()):
-        logger.warning("[生活事件→STRM] pick_code 格式无效(%r): %s", pick_code, file_name)
+        logger.error("【监控生活事件】错误的 pick_code 值 %s，无法生成 STRM 文件", pick_code)
         return "error"
 
     # ③ 查父目录路径 + 拼接文件名，得到完整云盘路径
@@ -362,11 +349,11 @@ def _sync_write_single_strm(
         item_path = (parent_dir.rstrip("/") + "/" + file_name)
     else:
         item_path = ""
-        logger.info("[生活事件→STRM] 无法获取父目录路径 parent_id=%s，将放置于STRM根目录: %s",
+        logger.debug("【监控生活事件】无法获取父目录路径 parent_id=%s，将放置于STRM根目录: %s",
                      parent_id, file_name)
 
-    logger.info(
-        "[生活事件→STRM] 解析路径: file=%r parent_id=%s parent_dir=%r → item_path=%r",
+    logger.debug(
+        "【监控生活事件】解析路径: file=%r parent_id=%s parent_dir=%r → item_path=%r",
         file_name, parent_id, parent_dir, item_path,
     )
 
@@ -375,7 +362,7 @@ def _sync_write_single_strm(
     if item_path:
         norm_path = "/" + item_path.strip("/")
         if not norm_path.startswith(cloud_root + "/") and norm_path != cloud_root:
-            logger.info("[生活事件→STRM] 路径不在监控范围 cloud_root=%s: %s",
+            logger.debug("【监控生活事件】路径不在监控范围 cloud_root=%s: %s",
                          cloud_root, norm_path)
             return "out_of_scope"
         # 计算相对于 cloud_root 的目录
@@ -394,7 +381,7 @@ def _sync_write_single_strm(
         url_tmpl, link_host, pick_code, file_name, item_path
     )
 
-    # ⑥ 写 STRM 文件
+    # ⑥ 写 STRM 文件（对齐 p115strmhelper creata_strm 写入逻辑）
     try:
         strm_dir = strm_root / rel_dir
         strm_dir.mkdir(parents=True, exist_ok=True)
@@ -403,18 +390,16 @@ def _sync_write_single_strm(
         if strm_file.exists():
             existing = strm_file.read_text(encoding="utf-8").strip()
             if existing == strm_content.strip():
-                logger.info("[生活事件→STRM] 已存在且内容相同，跳过: %s", strm_file)
+                logger.debug("【监控生活事件】STRM 文件已存在且内容相同，跳过: %s", strm_file)
                 return "skipped"
-            logger.info("[生活事件→STRM] 内容变更，覆盖: %s → %s", strm_file, strm_content)
-        else:
-            logger.info("[生活事件→STRM] 新建: %s → %s", strm_file, strm_content)
+            logger.debug("【监控生活事件】STRM 文件内容变更，覆盖: %s", strm_file)
 
         strm_file.write_text(strm_content, encoding="utf-8")
-        logger.info("[生活事件→STRM] ✅ 已生成: %s (cloud_path=%s, url=%s)",
-                    strm_file, item_path, strm_content)
+        # 对齐 p115strmhelper 日志格式：【监控生活事件】生成 STRM 文件成功: {path}
+        logger.info("【监控生活事件】生成 STRM 文件成功: %s", str(strm_file))
         return "created"
     except Exception as e:
-        logger.error("[生活事件→STRM] 写入失败 %s: %s", file_name, e)
+        logger.error("【监控生活事件】%s 生成 STRM 文件失败: %s", file_name, e)
         return "error"
 
 
@@ -512,7 +497,7 @@ class P115LifeMonitorService:
         """
         self._running = True
         logger.info(
-            "[生活事件] 监控已启动 from_time=%d from_id=%d",
+            "【监控生活事件】监控已启动 from_time=%d from_id=%d",
             self._last_event_time, self._last_event_id,
         )
 
@@ -525,34 +510,33 @@ class P115LifeMonitorService:
                     poll_interval = max(10, config.get("poll_interval", 30))
 
                     logger.debug(
-                        "[生活事件] 开始本轮轮询 from_time=%d from_id=%d",
+                        "【监控生活事件】开始本轮轮询 from_time=%d from_id=%d",
                         self._last_event_time, self._last_event_id,
                     )
                     new_events = await self._poll_once()
 
                     if new_events:
-                        logger.info("[生活事件] 本轮收到 %d 条新事件，开始处理", len(new_events))
+                        logger.info("【监控生活事件】本轮收到 %d 条新事件，开始处理", len(new_events))
                         await self._handle_events(new_events, config)
                         # 有新事件：处理完立即开始下一轮，不等待
                         wait_secs = 0
                     else:
                         # 无新事件：等待 max(20, poll_interval) 秒
                         wait_secs = max(20, poll_interval)
-                        logger.debug("[生活事件] 本轮无新事件，%ds 后再次轮询", wait_secs)
+                        logger.debug("【监控生活事件】本轮无新事件，%ds 后再次轮询", wait_secs)
 
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
-                    logger.error("[生活事件] 轮询异常: %s", e, exc_info=True)
-                    # 出错：等待 30 秒（参考 p115strmhelper "30s 后重启"）
+                    logger.error("【监控生活事件】轮询异常: %s", e, exc_info=True)
                     wait_secs = 30
-                    logger.info("[生活事件] %ds 后重试", wait_secs)
+                    logger.info("【监控生活事件】%ds 后重试", wait_secs)
 
                 if wait_secs > 0:
                     await asyncio.sleep(wait_secs)
 
         except asyncio.CancelledError:
-            logger.info("[生活事件] 监控已停止")
+            logger.info("【监控生活事件】监控已停止")
         finally:
             self._running = False
 
@@ -566,17 +550,17 @@ class P115LifeMonitorService:
         """
         manager = _get_manager()
         if not manager.enabled or not manager.ready:
-            logger.debug("[生活事件] 115 未启用或未就绪，跳过本轮")
+            logger.debug("【监控生活事件】115 未启用或未就绪，跳过本轮")
             return []
 
         p115_client = manager.adapter._get_p115_client()
         if p115_client is None:
-            logger.debug("[生活事件] p115_client 不可用，跳过本轮")
+            logger.debug("【监控生活事件】p115_client 不可用，跳过本轮")
             return []
 
         # 读取登录时的 app 类型（决定走哪个接口）
         login_app = getattr(manager.adapter._auth, "login_app", "web") or "web"
-        logger.debug("[生活事件] 本轮使用 login_app=%s", login_app)
+        logger.debug("【监控生活事件】本轮使用 login_app=%s", login_app)
 
         # 重试机制（参考 p115strmhelper once_pull: 3 次重试，失败等 2 秒）
         events = None
@@ -594,10 +578,10 @@ class P115LifeMonitorService:
                     break  # 成功（包括空列表 []）
             except Exception as e:
                 if attempt <= 0:
-                    logger.error("[生活事件] 拉取数据失败（重试已耗尽）: %s", e)
+                    logger.error("【监控生活事件】拉取数据失败（重试已耗尽）: %s", e)
                     return []
                 logger.warning(
-                    "[生活事件] 拉取数据失败，剩余重试 %d 次: %s", attempt, e
+                    "【监控生活事件】拉取数据失败，剩余重试 %d 次: %s", attempt, e
                 )
                 await asyncio.sleep(2)
 
@@ -614,7 +598,7 @@ class P115LifeMonitorService:
             max_time == self._last_event_time and max_id > self._last_event_id
         ):
             logger.debug(
-                "[生活事件] 更新基准 from_time: %d→%d  from_id: %d→%d",
+                "【监控生活事件】更新基准 from_time: %d→%d  from_id: %d→%d",
                 self._last_event_time, max_time,
                 self._last_event_id,   max_id,
             )
@@ -653,19 +637,19 @@ class P115LifeMonitorService:
             type_name = ev["type_name"]
 
             logger.info(
-                "[生活事件] ▶ [%s] file=%r file_id=%s parent_id=%s pick=%s time=%d",
-                type_name, file_name, file_id, parent_id, pick_code, ev.get("time", 0),
+                "【监控生活事件】%s %s %s",
+                type_name, file_name, f"(file_id={file_id} parent_id={parent_id} pick={pick_code})",
             )
             self._add_event_log(ev)
 
-            # 删除事件：只记录，不删 STRM（防误删）
+            # 删除事件：只记录，不删 STRM（防误删，对齐 p115strmhelper remove_strm 需要数据库支撑）
             if ev_type == 22:
-                logger.info("[生活事件] 删除事件（仅记录，不删除 STRM）: %s", file_name)
+                logger.info("【监控生活事件】删除事件（仅记录，暂不删除 STRM）: %s", file_name)
                 continue
 
             # 目录操作：回退到增量同步
             if ev_type in _DIR_OP_TYPES:
-                logger.info("[生活事件] 目录操作事件，标记兜底增量同步: %s", file_name)
+                logger.info("【监控生活事件】目录操作事件，标记兜底增量同步: %s", file_name)
                 need_inc_sync = True
                 continue
 
@@ -690,7 +674,7 @@ class P115LifeMonitorService:
                     video_exts,
                 )
                 logger.debug(
-                    "[生活事件→STRM] rule_cloud=%s result=%s file=%s",
+                    "【监控生活事件】rule_cloud=%s result=%s file=%s",
                     cloud_path, result, file_name,
                 )
 
@@ -711,15 +695,16 @@ class P115LifeMonitorService:
 
             if not handled:
                 logger.info(
-                    "[生活事件] 文件不在任何监控范围或处理失败，标记兜底增量同步: %s", file_name
+                    "【监控生活事件】%s 不在任何监控范围或处理失败，标记兜底增量同步", file_name
                 )
                 need_inc_sync = True
 
-        logger.info("[生活事件] 本轮处理完毕 stats=%s need_inc_sync=%s", stats, need_inc_sync)
+        logger.info("【监控生活事件】本轮处理完毕 created=%d skipped=%d out_of_scope=%d errors=%d need_inc_sync=%s",
+                    stats["created"], stats["skipped"], stats["out_of_scope"], stats["errors"], need_inc_sync)
 
         if need_inc_sync and config.get("auto_inc_sync", True):
             result = await strm_svc.trigger_inc_sync()
-            logger.info("[生活事件] 触发兜底增量同步: %s", result)
+            logger.info("【监控生活事件】触发兜底增量同步: %s", result)
 
     def _add_event_log(self, event: dict):
         """添加事件到日志（最多保留 100 条）"""

@@ -162,7 +162,7 @@ class P115StrmSyncService:
                 if cfg and cfg.value:
                     return _json.loads(cfg.value)
         except Exception as e:
-            logger.debug("[STRM] 读取URL模板失败: %s", e)
+            logger.debug("【全量STRM生成】读取URL模板失败: %s", e)
         return ""
 
     @staticmethod
@@ -220,7 +220,7 @@ class P115StrmSyncService:
             rendered = re.sub(r"\{\{\s*(.*?)\s*\}\}", _replace, tmpl_str)
             return rendered.strip()
         except Exception as e:
-            logger.warning("[STRM] 模板渲染失败，使用默认格式: %s", e)
+            logger.warning("【全量STRM生成】模板渲染失败，使用默认格式: %s", e)
             return default_url
 
     def _resolve_sync_pairs(self, config: dict, scope: str) -> list:
@@ -266,7 +266,7 @@ class P115StrmSyncService:
             config = await self.get_config()
             manager = _get_manager()
             if not manager.enabled or not manager.ready:
-                logger.warning("[全量STRM] 115 未启用或未就绪")
+                logger.warning("【全量STRM生成】115 未启用或未就绪")
                 return
 
             video_exts = self._get_video_exts(config)
@@ -275,7 +275,7 @@ class P115StrmSyncService:
             sync_pairs = self._resolve_sync_pairs(config, "full")
 
             if not sync_pairs:
-                logger.warning("[全量STRM] 未配置同步路径对（请在STRM生成卡片中保存路径配置）")
+                logger.warning("【全量STRM生成】未配置同步路径对（请在STRM生成卡片中保存路径配置）")
                 return
 
             for pair in sync_pairs:
@@ -285,9 +285,10 @@ class P115StrmSyncService:
                     continue
                 start_cid = await self._resolve_cloud_cid(manager, cloud_path)
                 if not start_cid:
-                    logger.warning("[全量STRM] 路径无法解析，跳过: %s", cloud_path)
+                    logger.warning("【全量STRM生成】网盘媒体目录 ID 获取失败，跳过: %s", cloud_path)
                     continue
-                logger.info("[全量STRM] 开始扫描: %s (cid=%s) → %s", cloud_path, start_cid, strm_root)
+                logger.info("【全量STRM生成】网盘媒体目录 ID 获取成功: %s (cid=%s) → %s",
+                            cloud_path, start_cid, strm_root)
                 pair_stats = await asyncio.to_thread(
                     self._iter_and_write_strm,
                     manager, start_cid, cloud_path,
@@ -299,7 +300,7 @@ class P115StrmSyncService:
                 self._progress = {"stage": "scanning", **stats}
 
         except Exception as e:
-            logger.error("[全量STRM] 异常: %s", e, exc_info=True)
+            logger.error("【全量STRM生成】全量生成 STRM 文件失败: %s", e, exc_info=True)
             stats["errors"] += 1
         finally:
             elapsed = round(time.time() - start_time, 1)
@@ -310,7 +311,8 @@ class P115StrmSyncService:
             })
             self._running = False
             self._progress = {"stage": "done", **stats}
-            logger.info("[全量STRM] 完成: %s 耗时 %.1fs", stats, elapsed)
+            logger.info("【全量STRM生成】全量生成 STRM 文件完成，总共生成 %d 个 STRM 文件，耗时 %.1fs，stats=%s",
+                        stats.get("created", 0), elapsed, stats)
 
     # =========================================================================
     # 增量同步
@@ -333,7 +335,7 @@ class P115StrmSyncService:
 
             manager = _get_manager()
             if not manager.enabled or not manager.ready:
-                logger.warning("[增量STRM] 115 未启用或未就绪")
+                logger.warning("【增量STRM生成】115 未启用或未就绪")
                 return
 
             video_exts = self._get_video_exts(config)
@@ -342,7 +344,7 @@ class P115StrmSyncService:
             sync_pairs = self._resolve_sync_pairs(config, "inc")
 
             if not sync_pairs:
-                logger.warning("[增量STRM] 未配置同步路径对（请在STRM生成卡片中保存路径配置）")
+                logger.warning("【增量STRM生成】未配置同步路径对（请在STRM生成卡片中保存路径配置）")
                 return
 
             for pair in sync_pairs:
@@ -352,10 +354,10 @@ class P115StrmSyncService:
                     continue
                 start_cid = await self._resolve_cloud_cid(manager, cloud_path)
                 if not start_cid:
-                    logger.warning("[增量STRM] 路径无法解析，跳过: %s", cloud_path)
+                    logger.warning("【增量STRM生成】网盘媒体目录 ID 获取失败，跳过: %s", cloud_path)
                     continue
                 logger.info(
-                    "[增量STRM] 开始扫描(last_sync=%d): %s (cid=%s) → %s",
+                    "【增量STRM生成】网盘媒体目录 ID 获取成功(last_sync=%d): %s (cid=%s) → %s",
                     last_sync_time, cloud_path, start_cid, strm_root,
                 )
                 pair_stats = await asyncio.to_thread(
@@ -369,7 +371,7 @@ class P115StrmSyncService:
                 self._progress = {"stage": "scanning", **stats}
 
         except Exception as e:
-            logger.error("[增量STRM] 异常: %s", e, exc_info=True)
+            logger.error("【增量STRM生成】增量生成 STRM 文件失败: %s", e, exc_info=True)
             stats["errors"] += 1
         finally:
             elapsed = round(time.time() - start_time, 1)
@@ -380,7 +382,8 @@ class P115StrmSyncService:
             })
             self._running = False
             self._progress = {"stage": "done", **stats}
-            logger.info("[增量STRM] 完成: %s 耗时 %.1fs", stats, elapsed)
+            logger.info("【增量STRM生成】增量生成 STRM 文件完成，总共生成 %d 个 STRM 文件，耗时 %.1fs，stats=%s",
+                        stats.get("created", 0), elapsed, stats)
 
     # =========================================================================
     # 核心遍历 + 写 STRM（同步函数，在线程池中执行）
@@ -413,7 +416,7 @@ class P115StrmSyncService:
         if p115_client is not None:
             try:
                 from p115client.tool.iterdir import iterdir_traverse
-                logger.debug("[STRM遍历] 使用 iterdir_traverse cid=%s from_time=%d", cid, from_time)
+                logger.debug("【全量STRM生成】使用 iterdir_traverse cid=%s from_time=%d", cid, from_time)
                 scan_count = 0
                 for item in iterdir_traverse(
                     client=p115_client,
@@ -430,22 +433,22 @@ class P115StrmSyncService:
                     item_path  = item.get("path", "")
 
                     if from_time > 0 and item_mtime <= from_time:
-                        logger.debug("[STRM遍历] 跳过旧文件(mtime=%d <= from_time=%d): %s",
+                        logger.debug("【全量STRM生成】跳过旧文件(mtime=%d <= from_time=%d): %s",
                                      item_mtime, from_time, name)
                         stats["skipped"] += 1
                         continue
                     ext = Path(name).suffix.lstrip(".").lower()
                     if ext not in video_exts:
-                        logger.debug("[STRM遍历] 跳过非视频文件: %s", name)
+                        logger.debug("【全量STRM生成】跳过非视频文件: %s", name)
                         stats["skipped"] += 1
                         continue
                     if not pick_code:
-                        logger.warning("[STRM遍历] 文件缺少 pickcode，跳过: %s", name)
+                        logger.error("【全量STRM生成】%s 不存在 pickcode 值，无法生成 STRM 文件", name)
                         stats["errors"] += 1
                         continue
                     # 参考 p115strmhelper: pickcode 必须是 17 位纯字母数字
                     if not (len(pick_code) == 17 and pick_code.isalnum()):
-                        logger.warning("[STRM遍历] pickcode 格式无效(%r)，跳过: %s", pick_code, name)
+                        logger.error("【全量STRM生成】错误的 pickcode 值 %r，跳过: %s", pick_code, name)
                         stats["errors"] += 1
                         continue
                     rel = self._calc_rel_path(item_path, cloud_path)
@@ -457,12 +460,12 @@ class P115StrmSyncService:
                         stats["skipped"] += 1
                     else:
                         stats["errors"] += 1
-                logger.debug("[STRM遍历] iterdir_traverse 共扫描 %d 项, stats=%s", scan_count, stats)
+                logger.debug("【全量STRM生成】iterdir_traverse 共扫描 %d 项, stats=%s", scan_count, stats)
                 return stats
             except ImportError:
-                logger.debug("[STRM遍历] iterdir_traverse 不可用，使用回退方案")
+                logger.debug("【全量STRM生成】iterdir_traverse 不可用，使用回退方案")
             except Exception as e:
-                logger.warning("[STRM遍历] iterdir_traverse 出错，使用回退方案: %s", e, exc_info=True)
+                logger.warning("【全量STRM生成】iterdir_traverse 出错，使用回退方案: %s", e, exc_info=True)
 
         # ── 方案B：iter_fs_files 回退────────────────────────────────────────
         # iter_fs_files 每次 yield 一整页的 resp 字典，结构：
@@ -471,7 +474,7 @@ class P115StrmSyncService:
         if p115_client is not None:
             try:
                 from p115client.tool.fs_files import iter_fs_files
-                logger.debug("[STRM遍历] 使用 iter_fs_files cid=%s from_time=%d", cid, from_time)
+                logger.debug("【全量STRM生成】使用 iter_fs_files cid=%s from_time=%d", cid, from_time)
                 scan_count = 0
                 for resp in iter_fs_files(p115_client, int(cid), cooldown=1.5, app="web",
                                           max_workers=0):  # max_workers=0 = 单线程串行，避免并发接口
@@ -486,21 +489,21 @@ class P115StrmSyncService:
                         item_mtime = int(raw.get("te") or raw.get("t") or raw.get("mtime") or 0)
 
                         if from_time > 0 and item_mtime <= from_time:
-                            logger.debug("[STRM遍历B] 跳过旧文件(mtime=%d <= from_time=%d): %s",
+                            logger.debug("【全量STRM生成】跳过旧文件(mtime=%d <= from_time=%d): %s",
                                          item_mtime, from_time, name)
                             stats["skipped"] += 1
                             continue
                         ext = Path(name).suffix.lstrip(".").lower()
                         if ext not in video_exts:
-                            logger.debug("[STRM遍历B] 跳过非视频文件: %s", name)
+                            logger.debug("【全量STRM生成】跳过非视频文件: %s", name)
                             stats["skipped"] += 1
                             continue
                         if not pick_code:
-                            logger.warning("[STRM遍历B] 文件缺少 pickcode，跳过: %s", name)
+                            logger.error("【全量STRM生成】%s 不存在 pickcode 值，无法生成 STRM 文件", name)
                             stats["errors"] += 1
                             continue
                         if not (len(pick_code) == 17 and pick_code.isalnum()):
-                            logger.warning("[STRM遍历B] pickcode 格式无效(%r)，跳过: %s", pick_code, name)
+                            logger.error("【全量STRM生成】错误的 pickcode 值 %r，跳过: %s", pick_code, name)
                             stats["errors"] += 1
                             continue
                         # iter_fs_files 不包含完整路径，路径留空走 cloud_path 根目录
@@ -514,15 +517,15 @@ class P115StrmSyncService:
                             stats["skipped"] += 1
                         else:
                             stats["errors"] += 1
-                logger.debug("[STRM遍历] iter_fs_files 共扫描 %d 项, stats=%s", scan_count, stats)
+                logger.debug("【全量STRM生成】iter_fs_files 共扫描 %d 项, stats=%s", scan_count, stats)
                 return stats
             except ImportError:
-                logger.debug("[STRM遍历] iter_fs_files 不可用，使用webapi回退")
+                logger.debug("【全量STRM生成】iter_fs_files 不可用，使用webapi回退")
             except Exception as e:
-                logger.warning("[STRM遍历] iter_fs_files 出错，使用webapi回退: %s", e, exc_info=True)
+                logger.warning("【全量STRM生成】iter_fs_files 出错，使用webapi回退: %s", e, exc_info=True)
 
         # ── 方案C：webapi 逐页列目录（p115client 完全不可用时）──────────────
-        logger.debug("[STRM遍历] 使用webapi逐页列目录 cid=%s", cid)
+        logger.debug("【全量STRM生成】使用webapi逐页列目录 cid=%s", cid)
         import asyncio as _asyncio
         loop = _asyncio.new_event_loop()
         try:
@@ -568,17 +571,18 @@ class P115StrmSyncService:
             if strm_file.exists():
                 existing = strm_file.read_text(encoding="utf-8").strip()
                 if existing == strm_content.strip():
-                    logger.debug("[STRM跳过] 已存在且内容相同: %s", strm_file)
+                    logger.debug("【全量STRM生成】STRM 文件已存在且内容相同，跳过: %s", strm_file)
                     return "skipped"
                 else:
-                    logger.debug("[STRM更新] 内容变更，覆盖: %s\n  旧: %s\n  新: %s",
-                                 strm_file, existing, strm_content)
+                    logger.debug("【全量STRM生成】STRM 文件内容变更，覆盖: %s", strm_file)
             else:
-                logger.debug("[STRM写入] 新建: %s → %s", strm_file, strm_content)
+                logger.debug("【全量STRM生成】新建 STRM 文件: %s → %s", strm_file, strm_content)
             strm_file.write_text(strm_content, encoding="utf-8")
+            # 对齐 p115strmhelper 日志格式
+            logger.info("【全量STRM生成】生成 STRM 文件成功: %s", str(strm_file))
             return "created"
         except Exception as e:
-            logger.error("[STRM写入] 失败 %s: %s", filename, e)
+            logger.error("【全量STRM生成】写入 STRM 文件失败: %s  %s", filename, e)
             return "error"
 
     async def _webapi_walk_and_write(
@@ -599,11 +603,11 @@ class P115StrmSyncService:
                     cloud_path, cid=cid, offset=offset, limit=page_size,
                 )
             except Exception as e:
-                logger.error("[STRM遍历] webapi列目录失败 cid=%s: %s", cid, e)
+                logger.error("【全量STRM生成】webapi列目录失败 cid=%s: %s", cid, e)
                 stats["errors"] += 1
                 break
 
-            logger.debug("[STRM遍历C] webapi cid=%s offset=%d 获取 %d/%d 条",
+            logger.debug("【全量STRM生成】webapi cid=%s offset=%d 获取 %d/%d 条",
                          cid, offset, len(entries), total)
 
             stop_early = False
@@ -614,18 +618,18 @@ class P115StrmSyncService:
                     continue
                 ext = Path(entry.name).suffix.lstrip(".").lower()
                 if ext not in video_exts:
-                    logger.debug("[STRM遍历C] 跳过非视频文件: %s", entry.name)
+                    logger.debug("【全量STRM生成】跳过非视频文件: %s", entry.name)
                     stats["skipped"] += 1
                     continue
                 item_mtime = int(entry.mtime or entry.ctime or 0)
                 if from_time > 0 and item_mtime <= from_time:
-                    logger.debug("[STRM遍历C] 跳过旧文件(mtime=%d <= from_time=%d): %s",
+                    logger.debug("【全量STRM生成】跳过旧文件(mtime=%d <= from_time=%d): %s",
                                  item_mtime, from_time, entry.name)
                     stop_early = True
                     stats["skipped"] += 1
                     continue
                 if not entry.pick_code:
-                    logger.warning("[STRM遍历C] 文件缺少 pickcode，跳过: %s", entry.name)
+                    logger.error("【全量STRM生成】%s 不存在 pickcode 值，无法生成 STRM 文件", entry.name)
                     stats["errors"] += 1
                     continue
                 rel = self._calc_rel_path(entry.path, cloud_path)
@@ -669,10 +673,10 @@ class P115StrmSyncService:
                         return str(resp["id"])
                     raise ValueError(f"fs_dir_getid 返回异常: {resp}")
                 cid = await asyncio.to_thread(_get_dir_id, "/" + cloud_path)
-                logger.debug("[STRM同步] fs_dir_getid 解析 %r → cid=%s", cloud_path, cid)
+                logger.debug("【全量STRM生成】fs_dir_getid 解析 %r → cid=%s", cloud_path, cid)
                 return cid
             except Exception as e:
-                logger.debug("[STRM同步] p115client 路径解析失败，改用webapi: %s", e)
+                logger.debug("【全量STRM生成】p115client 路径解析失败，改用webapi: %s", e)
         # 回退：webapi 逐段查
         segments = [s for s in cloud_path.split("/") if s]
         cid = "0"
@@ -685,10 +689,10 @@ class P115StrmSyncService:
                 if found:
                     cid = found.file_id
                 else:
-                    logger.warning("[STRM同步] 路径段未找到: %s (parent_cid=%s)", seg, cid)
+                    logger.warning("【全量STRM生成】路径段未找到: %s (parent_cid=%s)", seg, cid)
                     return ""
             except Exception as e:
-                logger.error("[STRM同步] 解析路径失败 %s: %s", current_path, e)
+                logger.error("【全量STRM生成】解析路径失败 %s: %s", current_path, e)
                 return ""
         return cid
 
