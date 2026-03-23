@@ -385,7 +385,12 @@ def _sync_write_single_strm(
     try:
         strm_dir = strm_root / rel_dir
         strm_dir.mkdir(parents=True, exist_ok=True)
-        strm_file = strm_dir / Path(file_name).with_suffix(".strm").name
+        # 参考 p115strmhelper StrmGenerater.get_strm_filename：
+        # .iso 文件保留扩展名 → stem.iso.strm；其他文件 → stem.strm
+        _suffix = Path(file_name).suffix.lower()
+        _stem   = Path(file_name).stem
+        strm_name = f"{_stem}.iso.strm" if _suffix == ".iso" else f"{_stem}.strm"
+        strm_file = strm_dir / strm_name
 
         # INFO 级别提前打出网盘路径→本地STRM路径，对齐 p115strmhelper 风格
         logger.info("【监控生活事件】处理文件: %s → %s",

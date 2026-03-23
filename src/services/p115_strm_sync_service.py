@@ -177,15 +177,17 @@ class P115StrmSyncService:
         """
         渲染 STRM URL 模板（纯标准库实现，不依赖 jinja2）。
 
-        支持的模板语法（与 Jinja2 兼容子集）：
-          {{ base_url }}    → link_host（如 http://127.0.0.1:9906）
-          {{ pickcode }}    → pick_code
-          {{ file_name }}   → 文件名（含扩展名）
-          {{ file_path }}   → 云盘完整路径（如 /影音/电影/xxx.mkv）
-          {{ sha1 }}        → 文件 sha1（可能为空）
-          {{ file_name | urlencode }}   → URL 编码后的文件名
-          {{ file_path | urlencode }}   → URL 编码后的路径
-          {{ pickcode | urlencode }}    → URL 编码后的 pickcode
+        支持的模板语法（对齐 p115strmhelper StrmUrlTemplateResolver 过滤器）：
+          {{ base_url }}               → link_host（如 http://127.0.0.1:9906）
+          {{ pickcode }}               → pick_code
+          {{ file_name }}              → 文件名（含扩展名）
+          {{ file_path }}              → 云盘完整路径（如 /影音/电影/xxx.mkv）
+          {{ sha1 }}                   → 文件 sha1（可能为空）
+          {{ file_name | urlencode }}  → URL 编码（不保留斜杠）
+          {{ file_path | urlencode }}  → URL 编码（不保留斜杠）
+          {{ file_path | path_encode }}→ URL 编码（保留斜杠，对齐 p115strmhelper path_encode）
+          {{ file_name | upper }}      → 转大写
+          {{ file_name | lower }}      → 转小写
 
         若模板为空或渲染失败，回退到默认格式：
           {link_host}/p115/play/{pick_code}/{file_name}
@@ -207,13 +209,20 @@ class P115StrmSyncService:
 
             def _replace(m: re.Match) -> str:
                 expr = m.group(1).strip()
-                # 支持 {{ var | urlencode }} 过滤器
+                # 支持 {{ var | filter }} 过滤器（对齐 p115strmhelper 注册的过滤器）
                 if "|" in expr:
                     parts = [p.strip() for p in expr.split("|", 1)]
                     var_name, filt = parts[0], parts[1]
                     val = str(variables.get(var_name, ""))
                     if filt == "urlencode":
                         return _url_quote(val, safe="")
+                    if filt == "path_encode":
+                        # 路径编码过滤器：保留斜杠（对齐 p115strmhelper path_encode_filter）
+                        return _url_quote(val, safe="/")
+                    if filt == "upper":
+                        return val.upper()
+                    if filt == "lower":
+                        return val.lower()
                     return val
                 return str(variables.get(expr, ""))
 
@@ -413,23 +422,32 @@ class P115StrmSyncService:
         stats = {"created": 0, "skipped": 0, "errors": 0}
         p115_client = manager.adapter._get_p115_client()
 
-        # ── 方案A：iterdir_traverse（p115client 标准 API，支持 web CK）──────
+        # 根据 login_app 动态选择接口 app 参数（避免 CK 类型不匹配导致 405 风控）
+        # 参考 p115strmhelper configer.get_ios_ua_app() 的思路：
+        #   web/desktop/harmony CK → app="web"（使用 /web/2.0/files 接口）
+        #   android/ios/alipaymini  → app=login_app（使用对应 app 接口）
+        login_app = getattr(getattr(manager.adapter, "_auth", None), "login_app", "web") or "web"
+        _WEB_APPS = {"", "web", "desktop", "harmony"}
+        iter_app = "web" if login_app in _WEB_APPS else login_app
+        logger.debug("【全量STRM生成】login_app=%s → iter_app=%s", login_app, iter_app)
+
+        # ── 方案A：iterdir_traverse（p115client 标准 API）────────────────────
         # 注意：iter_files_with_path 内部有 fetch_dirs 子流程，
         #       会调用 download_folders_app（/os_windows/ufile/downfolders），
         #       该接口需要 windows cookie，与 web CK 不兼容，故改用 iterdir_traverse。
-        # iterdir_traverse 仅使用 /web/2.0/files 接口，完全兼容 web CK。
-        # 参考 p115strmhelper helper/strm/full.py 遍历策略。
+        # cooldown=2：每次请求间隔 2 秒，对齐 p115strmhelper 的 cooldown 设置，避免 405 风控。
         if p115_client is not None:
             try:
                 from p115client.tool.iterdir import iterdir_traverse
-                logger.debug("【全量STRM生成】使用 iterdir_traverse cid=%s from_time=%d", cid, from_time)
+                logger.debug("【全量STRM生成】使用 iterdir_traverse cid=%s from_time=%d app=%s",
+                             cid, from_time, iter_app)
                 scan_count = 0
                 for item in iterdir_traverse(
                     client=p115_client,
                     cid=int(cid),
                     predicate=True,   # True = 只返回文件，跳过目录
-                    cooldown=2,
-                    app="web",        # 使用 web 接口，与 web CK 匹配
+                    cooldown=2,       # 对齐 p115strmhelper cooldown=2，避免 405 风控
+                    app=iter_app,     # 根据 login_app 动态选择，避免接口不匹配
                 ):
                     scan_count += 1
                     # normalize_attr 已标准化所有字段
@@ -480,10 +498,15 @@ class P115StrmSyncService:
         if p115_client is not None:
             try:
                 from p115client.tool.fs_files import iter_fs_files
-                logger.debug("【全量STRM生成】使用 iter_fs_files cid=%s from_time=%d", cid, from_time)
+                logger.debug("【全量STRM生成】使用 iter_fs_files cid=%s from_time=%d app=%s",
+                             cid, from_time, iter_app)
                 scan_count = 0
-                for resp in iter_fs_files(p115_client, int(cid), cooldown=1.5, app="web",
-                                          max_workers=0):  # max_workers=0 = 单线程串行，避免并发接口
+                for resp in iter_fs_files(
+                    p115_client, int(cid),
+                    cooldown=2,         # 对齐 p115strmhelper cooldown=2，避免 405 风控
+                    app=iter_app,       # 根据 login_app 动态选择，避免接口不匹配
+                    max_workers=0,      # 单线程串行，避免并发接口
+                ):
                     for raw in resp.get("data", []):
                         scan_count += 1
                         # 原始字段：有 fid 的是文件，没有 fid 的是目录
@@ -576,7 +599,12 @@ class P115StrmSyncService:
         try:
             strm_dir = strm_root / rel
             strm_dir.mkdir(parents=True, exist_ok=True)
-            strm_file = strm_dir / Path(filename).with_suffix(".strm").name
+            # 参考 p115strmhelper StrmGenerater.get_strm_filename：
+            # .iso 文件保留扩展名 → stem.iso.strm；其他文件 → stem.strm
+            _suffix = Path(filename).suffix.lower()
+            _stem   = Path(filename).stem
+            strm_name = f"{_stem}.iso.strm" if _suffix == ".iso" else f"{_stem}.strm"
+            strm_file = strm_dir / strm_name
             strm_content = strm_url
             if strm_file.exists():
                 existing = strm_file.read_text(encoding="utf-8").strip()
