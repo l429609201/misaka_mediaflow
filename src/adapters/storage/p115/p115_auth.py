@@ -32,10 +32,78 @@ class P115AuthService:
 
     # ==================== Cookie 管理 ====================
 
+    # SSOENT → app 映射，来源于 p115client/const.py APP_TO_SSOENT 的反转
+    # 格式：SSOENT值（如"A1"）→ app名（如"web"）
+    _SSOENT_TO_APP: dict[str, str] = {
+        "A1": "web",        # 115生活_网页端
+        "D1": "ios",        # 115生活_苹果端
+        "D2": "ios",        # bios（降级到 ios）
+        "D3": "115ios",     # 115_苹果端
+        "F1": "android",    # 115生活_安卓端
+        "F2": "android",    # bandroid（降级到 android）
+        "F3": "115android", # 115_安卓端
+        "H1": "ipad",       # 115生活_苹果平板端
+        "H2": "ipad",       # bipad（降级到 ipad）
+        "H3": "115ipad",    # 115_苹果平板端
+        "I1": "tv",         # 115生活_安卓电视端
+        "I2": "apple_tv",   # 115生活_苹果电视端
+        "M1": "qandroid",   # 115管理_安卓端
+        "N1": "qios",       # 115管理_苹果端
+        "O1": "qipad",      # 115管理_苹果平板端
+        "P1": "os_windows", # 115生活_Windows端
+        "P2": "os_mac",     # 115生活_macOS端
+        "P3": "os_linux",   # 115生活_Linux端
+        "R1": "wechatmini", # 115生活_微信小程序端
+        "R2": "alipaymini", # 115生活_支付宝小程序
+        "S1": "harmony",    # 115_鸿蒙端
+    }
+
+    @staticmethod
+    def _detect_login_app(cookie: str) -> str:
+        """
+        从 cookie 字符串中解析 SSOENT 字段，推断对应的 login_app 类型。
+
+        115 Cookie 中的 SSOENT 字段格式例如：SSOENT=A1 / SSOENT=F1 / SSOENT=D1
+        通过此字段可以精确判断该 CK 属于哪种客户端类型，
+        从而决定生活事件监控应使用哪个接口（life_list 还是 behavior_once）。
+
+        :param cookie: cookie 字符串（键值对形式，分号分隔）
+        :return: 推断出的 app 类型字符串，默认返回 "web"
+        """
+        import re
+        m = re.search(r'(?:^|[\s;])SSOENT=([^\s;]+)', cookie)
+        if not m:
+            return "web"
+        ssoent = m.group(1).strip()
+        app = P115AuthService._SSOENT_TO_APP.get(ssoent, "")
+        if app:
+            return app
+        # 未知 SSOENT 值，尝试按首字母推断大类
+        # A→web, D→ios, F→android, H→ipad, I→tv, M/N/O→qandroid, P→os_windows, R→alipaymini, S→harmony
+        _prefix_map = {
+            "A": "web", "D": "ios", "F": "android", "H": "ipad",
+            "I": "tv",  "M": "qandroid", "N": "qios", "O": "qipad",
+            "P": "os_windows", "R": "alipaymini", "S": "harmony",
+        }
+        prefix = ssoent[0].upper() if ssoent else ""
+        return _prefix_map.get(prefix, "web")
+
     def set_cookie(self, cookie: str):
-        """设置 115 Cookie"""
+        """
+        设置 115 Cookie，并自动从 SSOENT 字段推断 login_app 类型。
+
+        所有 Cookie 设置路径（手动粘贴、启动加载、扫码登录）都走这里，
+        统一在此自动识别 CK 类型，无需用户手动指定。
+        扫码登录成功后 _exchange_cookie 会在调用本方法后再覆写 _login_app，
+        两者结果应当一致，覆写无害。
+        """
         self._cookie = cookie.strip()
-        logger.info("115 Cookie 已更新 (len=%d)", len(self._cookie))
+        detected = self._detect_login_app(self._cookie)
+        self._login_app = detected
+        logger.info(
+            "115 Cookie 已更新 (len=%d, 识别login_app=%s)",
+            len(self._cookie), detected,
+        )
 
     @property
     def cookie(self) -> str:
