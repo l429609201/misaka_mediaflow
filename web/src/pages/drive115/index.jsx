@@ -844,7 +844,7 @@ export const Drive115 = () => {
               <Alert style={{ marginBottom: 8 }} type="info" showIcon
                 message={t('p115.syncInProgress', { count: strmProgress.created || 0 })} />
             )}
-            <Button type="primary" icon={<i className="iconfont icon-wenjianshengcheng" style={{ marginRight: 4, fontSize: 15 }} />} block style={{ marginBottom: 16 }}
+            <Button type="primary" icon={<i className="iconfont icon-image_488307257272375" style={{ marginRight: 4, fontSize: 15 }} />} block style={{ marginBottom: 16 }}
               loading={strmSyncing || strmStatus.running} onClick={handleFullSync}>
               {t('p115.fullSync')}
             </Button>
@@ -911,7 +911,7 @@ export const Drive115 = () => {
                 />
               </Form.Item>
             </Form>
-            <Button icon={<CloudSyncOutlined />} block
+            <Button icon={<i className="iconfont icon-image_134571035400041" style={{ marginRight: 4, fontSize: 15 }} />} block
               loading={strmSyncing || strmStatus.running} onClick={handleIncSync}>
               {t('p115.incSync')}
             </Button>
