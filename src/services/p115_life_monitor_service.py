@@ -17,8 +17,13 @@
 #      app in ("", "web", "desktop", "harmony")
 #        → client.life_behavior_detail  → GET webapi.115.com/behavior/detail → 405 ❌
 #      else（如 app="android"）
-#        → client.life_behavior_detail_app → POST pro.api.115.com → ✅
-#    web CK 完全可以访问 proapi 接口（p115strmhelper 用 iOS CK 也是走这个路径）
+#        → client.life_behavior_detail_app → POST pro.api.115.com → 需要android CK → 99 ❌
+#    web CK 的 SSOENT=A，android 需要 SSOENT=D，ios 需要 SSOENT=B，均不匹配
+#
+# ③ 唯一正确方案：client.life_list(app="web")
+#    → life.115.com/api/1.0/web/1.0/life/life_list（纯 web 接口）
+#    → 接受 web CK（SSOENT=A），无认证问题 ✅
+#    自实现 once 语义：分页拉取 + from_id/from_time 截止 + cooldown=4s
 #
 # 核心流程（参考 p115strmhelper MonitorLife.once_pull）：
 #   1. POST /behavior/detail → 拉取上次 from_time/from_id 之后的所有新事件
@@ -177,57 +182,117 @@ def _parse_event_fields(raw: dict, raw_count: int) -> Optional[dict]:
 
 def _sync_fetch_life_events(p115_client, from_time: int, from_id: int) -> Optional[list]:
     """
-    用 p115client.tool.life.iter_life_behavior_once 拉取生活事件。
+    用 client.life_list(app="web") 拉取生活事件（once 语义：拉完即止）。
 
-    关键：必须传 app="android"（或任何非 web/desktop/harmony 的值），
-    让 p115client 路由到 life_behavior_detail_app，走 pro.api.115.com 的 POST 接口。
+    根本原因分析：
+      - /behavior/detail GET        → 405（webapi 接口已废弃）
+      - /android/behavior/detail    → errno=99（需要 android SSOENT=D，我们是 web SSOENT=A）
+      - /ios/behavior/detail        → errno=99（需要 iOS SSOENT=B，p115strmhelper 有 iOS CK）
 
-    p115client 源码（life.py）路由逻辑：
-        if app in ("", "web", "desktop", "harmony"):
-            → client.life_behavior_detail  → GET webapi.115.com  → 405 ❌
-        else:
-            → client.life_behavior_detail_app, base_url=cycle(proapi urls)  → POST ✅
+    唯一正确方案：client.life_list(app="web")
+      → life.115.com/api/1.0/web/1.0/life/life_list
+      → 纯 web 接口，接受 web CK（SSOENT=A），无认证问题 ✅
 
-    web CK 完全可以访问 proapi.115.com 接口（p115strmhelper 也这么用）。
+    参考 p115strmhelper core/p115.py iter_life_behavior_once 的翻页+过滤逻辑，
+    用 life_list 接口自实现相同 once 语义：
+      - 分页拉取（start/offset 累加）
+      - from_id / from_time 双重截止条件
+      - cooldown=4 秒翻页间隔（对齐 p115strmhelper once_pull cooldown=4）
 
-    返回 None 表示异常需重试；返回 [] 表示无新事件。
+    life_list 返回字段（show_type=0）：
+      behavior_type  str  如 "upload_file"（需 _parse_behavior_type 转 int）
+      file_name      str  文件名
+      file_id        str  文件 ID
+      parent_id      str  父目录 ID
+      pick_code      str  pickcode
+      update_time    int  时间戳
+      id             int  事件 ID
+
+    返回 None 表示请求异常需重试；返回 [] 表示无新事件。
     """
-    try:
-        from p115client.tool.life import iter_life_behavior_once
-    except ImportError:
-        logger.debug("[生活事件] p115client.tool.life 不可用")
-        return None
+    import time as _time
 
-    events = []
+    events: list = []
+    raw_count = 0
+    offset = 0
+    limit = 100   # life_list 每页最多 100 条
+    cooldown = 4  # 翻页间隔，对齐 p115strmhelper once_pull(cooldown=4)
+    page_num = 0
+
     try:
-        logger.debug(
-            "[生活事件] iter_life_behavior_once 开始拉取 from_time=%d from_id=%d app=android",
-            from_time, from_id,
-        )
-        raw_count = 0
-        for event in iter_life_behavior_once(
-            client=p115_client,
-            from_time=from_time,
-            from_id=from_id,
-            cooldown=4,          # 参考 p115strmhelper once_pull(cooldown=4)
-            app="android",       # 非 web/desktop/harmony → 走 proapi POST 接口
-        ):
-            raw_count += 1
-            parsed = _parse_event_fields(event, raw_count)
-            if parsed is not None:
-                events.append(parsed)
+        while True:
+            page_num += 1
+            payload = {
+                "show_type": 0,
+                "limit": limit,
+                "start": offset,
+            }
+            logger.debug(
+                "[生活事件] life_list page=%d offset=%d from_time=%d from_id=%d",
+                page_num, offset, from_time, from_id,
+            )
+
+            # client.life_list 走 life.115.com/api/1.0/web/1.0/life/life_list
+            # app="web" 确保走 web 端点，接受 web CK
+            resp = p115_client.life_list(payload, app="web")
+            if not isinstance(resp, dict):
+                logger.warning("[生活事件] life_list 返回非 dict: %s", type(resp))
+                return None
+
+            if not resp.get("state"):
+                logger.warning(
+                    "[生活事件] life_list state=False errno=%s error=%s",
+                    resp.get("errno"), resp.get("error"),
+                )
+                return None
+
+            data = resp.get("data", {})
+            page_list = data.get("list", [])
+            total = int(data.get("count", 0))
+            logger.debug(
+                "[生活事件] life_list 第%d页: total=%d 本页=%d条",
+                page_num, total, len(page_list),
+            )
+
+            stop_flag = False
+            for raw in page_list:
+                raw_count += 1
+                ev_id_raw = int(raw.get("id") or 0)
+                up_time   = int(raw.get("update_time") or raw.get("time") or 0)
+
+                # 截止条件（对齐 p115strmhelper iter_life_behavior_once）
+                if from_id and ev_id_raw and ev_id_raw <= from_id:
+                    logger.debug("[生活事件] 达到 from_id=%d，停止翻页", from_id)
+                    stop_flag = True
+                    break
+                if from_time and up_time and up_time < from_time:
+                    logger.debug("[生活事件] 达到 from_time=%d，停止翻页", from_time)
+                    stop_flag = True
+                    break
+
+                parsed = _parse_event_fields(raw, raw_count)
+                if parsed is not None:
+                    events.append(parsed)
+
+            if stop_flag:
+                break
+
+            offset += len(page_list)
+            if not page_list or offset >= total:
+                break
+
+            # 翻页冷却（对齐 p115strmhelper cooldown=4）
+            _time.sleep(cooldown)
 
         logger.debug(
-            "[生活事件] iter_life_behavior_once 拉取完毕: 原始 %d 条，触发类型 %d 条",
-            raw_count, len(events),
+            "[生活事件] life_list 拉取完毕: 共%d页 原始%d条 触发类型%d条",
+            page_num, raw_count, len(events),
         )
         return events
 
     except Exception as e:
-        logger.warning("[生活事件] iter_life_behavior_once 异常: %s", e, exc_info=True)
+        logger.warning("[生活事件] life_list 拉取异常: %s", e, exc_info=True)
         return None
-
-
 def _sync_get_parent_path(p115_client, parent_id: str) -> str:
     """
     通过 parent_id 查询父目录路径。
