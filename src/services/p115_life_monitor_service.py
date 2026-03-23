@@ -228,11 +228,39 @@ def _sync_fetch_life_events(p115_client, from_time: int, from_id: int) -> Option
         return None
 
 
+def _sync_get_parent_path(p115_client, parent_id: str) -> str:
+    """
+    通过 parent_id 查询父目录路径。
+    参考 p115strmhelper MonitorLife._get_path_by_cid：
+      先尝试 client.fs_dir_getid（已知是用 ID 反查路径的方式），
+      若失败则返回空字符串。
+
+    p115strmhelper 实际用的是 get_path(client, attr=cid)，但该函数
+    底层走 /files/file 接口，需要 iOS UA。
+    我们改用 client.fs_dir_getid 的逆向思路：
+      client.fs_info({"file_id": parent_id}) → 返回 file 属性含 path
+    若都失败，返回空字符串（降级到只写 STRM 根目录）。
+    """
+    if not p115_client or not parent_id or parent_id == "0":
+        return ""
+    try:
+        resp = p115_client.fs_info({"file_id": int(parent_id)})
+        if resp and resp.get("state"):
+            # fs_info 返回 path 字段（完整路径）
+            data = resp.get("data", [])
+            if data:
+                paths = [item.get("file_name", "") for item in data]
+                return "/" + "/".join(p for p in paths if p)
+    except Exception as e:
+        logger.debug("[生活事件→STRM] fs_info 查询父目录失败 parent_id=%s: %s", parent_id, e)
+    return ""
+
+
 def _sync_write_single_strm(
     p115_client,
-    file_id: str,
     pick_code: str,
     file_name: str,
+    parent_id: str,
     cloud_path: str,
     strm_root: Path,
     link_host: str,
@@ -240,58 +268,68 @@ def _sync_write_single_strm(
     video_exts: set,
 ) -> str:
     """
-    精确为单个文件生成 STRM（参考 p115strmhelper 对单事件的精确处理）。
-    url_tmpl: Jinja2 模板字符串，为空则回退到默认格式。
+    精确为单个文件生成 STRM。
+
+    对齐 p115strmhelper MonitorLife.creata_strm 的单文件处理逻辑：
+      1. 校验 pick_code 格式（17位纯字母数字）
+      2. 校验文件扩展名是否为视频
+      3. 用 parent_id 查父目录路径 + 拼接 file_name 得到完整云盘路径
+         （p115strmhelper: _get_path_by_cid(parent_id) + file_name）
+      4. 检查路径是否在配置的 cloud_path 监控范围内
+      5. 计算相对路径 → 生成 STRM 文件
+
     返回 "created" / "skipped" / "out_of_scope" / "error"
     """
+    # ① 校验视频扩展名
     ext = Path(file_name).suffix.lstrip(".").lower()
     if ext not in video_exts:
         logger.debug("[生活事件→STRM] 跳过非视频文件: %s", file_name)
         return "out_of_scope"
 
+    # ② 校验 pick_code（参考 p115strmhelper: 17位纯字母数字）
     if not pick_code:
-        logger.warning("[生活事件→STRM] 缺少 pick_code，无法生成 STRM: %s", file_name)
+        logger.warning("[生活事件→STRM] 缺少 pick_code: %s", file_name)
         return "error"
-
-    # 参考 p115strmhelper: pickcode 必须是 17 位纯字母数字
     if not (len(pick_code) == 17 and pick_code.isalnum()):
-        logger.warning("[生活事件→STRM] pick_code 格式无效(%r)，跳过: %s", pick_code, file_name)
+        logger.warning("[生活事件→STRM] pick_code 格式无效(%r): %s", pick_code, file_name)
         return "error"
 
-    # 查询完整路径（p115client.tool.attr.get_path）
-    item_path = ""
-    if p115_client is not None and file_id:
-        try:
-            from p115client.tool.attr import get_path
-            item_path = get_path(p115_client, int(file_id))
-            logger.debug("[生活事件→STRM] 查询路径: file_id=%s → %r", file_id, item_path)
-        except Exception as e:
-            logger.debug("[生活事件→STRM] get_path 失败 file_id=%s: %s", file_id, e)
+    # ③ 查父目录路径 + 拼接文件名，得到完整云盘路径
+    #    对齐 p115strmhelper: dir_path = _get_path_by_cid(parent_id)
+    #                         file_path = Path(dir_path) / file_name
+    parent_dir = _sync_get_parent_path(p115_client, parent_id)
+    if parent_dir:
+        item_path = (parent_dir.rstrip("/") + "/" + file_name)
+    else:
+        item_path = ""
+        logger.debug("[生活事件→STRM] 无法获取父目录路径 parent_id=%s，将放置于STRM根目录: %s",
+                     parent_id, file_name)
 
-    # 检查路径是否在监控范围内
+    # ④ 检查路径是否在监控范围内
     cloud_root = "/" + cloud_path.strip("/")
     if item_path:
-        norm_path = "/" + str(item_path).strip("/")
-        if not norm_path.startswith(cloud_root):
+        norm_path = "/" + item_path.strip("/")
+        if not norm_path.startswith(cloud_root + "/") and norm_path != cloud_root:
             logger.debug("[生活事件→STRM] 路径不在监控范围 cloud_root=%s: %s",
                          cloud_root, norm_path)
             return "out_of_scope"
-        parent = str(Path(norm_path).parent)
+        # 计算相对于 cloud_root 的目录
+        parent_norm = str(Path(norm_path).parent)
         try:
-            rel_dir = Path(parent).relative_to(cloud_root)
+            rel_dir = Path(parent_norm).relative_to(cloud_root)
         except ValueError:
             rel_dir = Path(".")
     else:
+        # 无法确定路径 → 放置于 STRM 根目录（宁可写入，不漏掉）
         rel_dir = Path(".")
-        logger.debug("[生活事件→STRM] 无法获取路径，文件放置于 STRM 根目录: %s", file_name)
 
-    # 渲染 STRM URL（使用用户配置的 Jinja2 模板）
+    # ⑤ 渲染 STRM URL（Jinja2 模板）
     from src.services.p115_strm_sync_service import P115StrmSyncService
     strm_content = P115StrmSyncService._render_strm_url(
-        url_tmpl, link_host, pick_code, file_name, str(item_path)
+        url_tmpl, link_host, pick_code, file_name, item_path
     )
 
-    # 写 STRM 文件
+    # ⑥ 写 STRM 文件
     try:
         strm_dir = strm_root / rel_dir
         strm_dir.mkdir(parents=True, exist_ok=True)
@@ -307,7 +345,7 @@ def _sync_write_single_strm(
             logger.debug("[生活事件→STRM] 新建: %s → %s", strm_file, strm_content)
 
         strm_file.write_text(strm_content, encoding="utf-8")
-        logger.info("[生活事件→STRM] 已生成: %s → %s", file_name, strm_file)
+        logger.info("[生活事件→STRM] 已生成: %s (parent_id=%s)", strm_file, parent_id)
         return "created"
     except Exception as e:
         logger.error("[生活事件→STRM] 写入失败 %s: %s", file_name, e)
@@ -570,9 +608,9 @@ class P115LifeMonitorService:
                 result = await asyncio.to_thread(
                     _sync_write_single_strm,
                     p115_client,
-                    file_id,
                     pick_code,
                     file_name,
+                    parent_id,
                     cloud_path,
                     Path(strm_root_str),
                     link_host,
