@@ -38,6 +38,9 @@ class StrmSyncConfigPayload(BaseModel):
     # 全量 / 增量 各自的自定义路径配置
     full_sync_cfg: SyncDirCfg = SyncDirCfg()
     inc_sync_cfg:  SyncDirCfg = SyncDirCfg()
+    # 全量同步覆盖模式（对齐 p115strmhelper full_sync_overwrite_mode）
+    # "skip"=跳过已存在文件, "overwrite"=强制覆盖已存在文件
+    full_overwrite_mode: str = "skip"
 
 
 class MonitorConfigPayload(BaseModel):

@@ -102,11 +102,11 @@ def setup_logging():
     console_handler.setFormatter(verbose_formatter)
     src_logger.addHandler(console_handler)
 
-    # 2. 文件（可轮转）
+    # 2. 文件（可轮转）— 始终写入 DEBUG 全量日志，前端按级别过滤展示
     file_handler = logging.handlers.RotatingFileHandler(
         str(log_file), maxBytes=10 * 1024 * 1024, backupCount=5, encoding='utf-8',
     )
-    file_handler.setLevel(log_level)
+    file_handler.setLevel(logging.DEBUG)   # ← 固定 DEBUG，写全量
     file_handler.setFormatter(verbose_formatter)
     src_logger.addHandler(file_handler)
 

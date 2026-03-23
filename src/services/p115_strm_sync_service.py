@@ -273,6 +273,8 @@ class P115StrmSyncService:
             link_host  = self._get_link_host(config)
             url_tmpl   = await self._get_url_template()
             sync_pairs = self._resolve_sync_pairs(config, "full")
+            # 覆盖模式：skip=跳过已存在, overwrite=覆盖已存在（对齐 p115strmhelper full_sync_overwrite_mode）
+            overwrite_mode = config.get("full_overwrite_mode", "skip")
 
             if not sync_pairs:
                 logger.warning("【全量STRM生成】未配置同步路径对（请在STRM生成卡片中保存路径配置）")
@@ -287,13 +289,14 @@ class P115StrmSyncService:
                 if not start_cid:
                     logger.warning("【全量STRM生成】网盘媒体目录 ID 获取失败，跳过: %s", cloud_path)
                     continue
-                logger.info("【全量STRM生成】网盘媒体目录 ID 获取成功: %s (cid=%s) → %s",
-                            cloud_path, start_cid, strm_root)
+                logger.info("【全量STRM生成】网盘媒体目录 ID 获取成功: %s (cid=%s) → %s，覆盖模式: %s",
+                            cloud_path, start_cid, strm_root, overwrite_mode)
                 pair_stats = await asyncio.to_thread(
                     self._iter_and_write_strm,
                     manager, start_cid, cloud_path,
                     Path(strm_root), video_exts, link_host, url_tmpl,
                     from_time=0,
+                    overwrite_mode=overwrite_mode,
                 )
                 for k in stats:
                     stats[k] += pair_stats.get(k, 0)
@@ -399,10 +402,13 @@ class P115StrmSyncService:
         link_host: str,
         url_tmpl: str = "",
         from_time: int = 0,
+        overwrite_mode: str = "skip",   # "skip"=跳过已存在, "overwrite"=覆盖已存在
     ) -> dict:
         """
         遍历 115 目录树，对每个视频文件写 .strm。
-        url_tmpl: Jinja2 模板字符串，为空则使用默认格式。
+        overwrite_mode: 对齐 p115strmhelper full_sync_overwrite_mode
+          - "skip"      → 文件已存在时跳过（默认）
+          - "overwrite" → 文件已存在时覆盖写入
         """
         stats = {"created": 0, "skipped": 0, "errors": 0}
         p115_client = manager.adapter._get_p115_client()
@@ -453,7 +459,7 @@ class P115StrmSyncService:
                         continue
                     rel = self._calc_rel_path(item_path, cloud_path)
                     strm_url = self._render_strm_url(url_tmpl, link_host, pick_code, name, item_path)
-                    result = self._write_strm(strm_root, rel, name, strm_url)
+                    result = self._write_strm(strm_root, rel, name, strm_url, overwrite_mode)
                     if result == "created":
                         stats["created"] += 1
                     elif result == "skipped":
@@ -510,7 +516,7 @@ class P115StrmSyncService:
                         item_full_path = raw.get("path", "")
                         rel = self._calc_rel_path(item_full_path, cloud_path)
                         strm_url = self._render_strm_url(url_tmpl, link_host, pick_code, name, item_full_path)
-                        result = self._write_strm(strm_root, rel, name, strm_url)
+                        result = self._write_strm(strm_root, rel, name, strm_url, overwrite_mode)
                         if result == "created":
                             stats["created"] += 1
                         elif result == "skipped":
@@ -532,7 +538,7 @@ class P115StrmSyncService:
             loop.run_until_complete(
                 self._webapi_walk_and_write(
                     manager, cid, cloud_path, strm_root,
-                    video_exts, link_host, url_tmpl, from_time, stats,
+                    video_exts, link_host, url_tmpl, from_time, stats, overwrite_mode,
                 )
             )
         finally:
@@ -555,12 +561,16 @@ class P115StrmSyncService:
     def _write_strm(
         self, strm_root: Path, rel: Path,
         filename: str, strm_url: str,
+        overwrite_mode: str = "skip",
     ) -> str:
         """
-        写 .strm 文件。strm_url 为已渲染好的完整 URL 字符串。
+        写 .strm 文件。
+        overwrite_mode:
+          "skip"      → 文件已存在时跳过（默认，对齐 p115strmhelper overwrite_mode=never）
+          "overwrite" → 文件已存在时强制覆盖（对齐 p115strmhelper overwrite_mode=always）
         返回值：
-          "created"  → 新建或内容变更，已写入
-          "skipped"  → 文件已存在且内容相同，跳过
+          "created"  → 新建或覆盖写入
+          "skipped"  → 文件已存在且跳过
           "error"    → 写入失败
         """
         try:
@@ -573,8 +583,12 @@ class P115StrmSyncService:
                 if existing == strm_content.strip():
                     logger.debug("【全量STRM生成】STRM 文件已存在且内容相同，跳过: %s", strm_file)
                     return "skipped"
-                else:
-                    logger.debug("【全量STRM生成】STRM 文件内容变更，覆盖: %s", strm_file)
+                if overwrite_mode == "skip":
+                    # 对齐 p115strmhelper overwrite_mode=never
+                    logger.debug("【全量STRM生成】STRM 文件 %s 已存在，覆盖模式 skip，跳过此路径", strm_file)
+                    return "skipped"
+                # overwrite_mode == "overwrite"
+                logger.debug("【全量STRM生成】STRM 文件内容变更，覆盖: %s", strm_file)
             else:
                 logger.debug("【全量STRM生成】新建 STRM 文件: %s → %s", strm_file, strm_content)
             strm_file.write_text(strm_content, encoding="utf-8")
@@ -590,6 +604,7 @@ class P115StrmSyncService:
         manager, cid: str, cloud_path: str,
         strm_root: Path, video_exts: set,
         link_host: str, url_tmpl: str, from_time: int, stats: dict,
+        overwrite_mode: str = "skip",
         depth: int = 0,
     ):
         """webapi 回退方案：递归列目录，带分页，遇到旧文件即停（增量模式）"""
@@ -634,7 +649,7 @@ class P115StrmSyncService:
                     continue
                 rel = self._calc_rel_path(entry.path, cloud_path)
                 strm_url = self._render_strm_url(url_tmpl, link_host, entry.pick_code, entry.name, entry.path)
-                result = self._write_strm(strm_root, rel, entry.name, strm_url)
+                result = self._write_strm(strm_root, rel, entry.name, strm_url, overwrite_mode)
                 if result == "created":
                     stats["created"] += 1
                 elif result == "skipped":
@@ -646,7 +661,7 @@ class P115StrmSyncService:
             for sub in sub_dirs:
                 await self._webapi_walk_and_write(
                     manager, sub.file_id, sub.path,
-                    strm_root, video_exts, link_host, url_tmpl, from_time, stats, depth + 1,
+                    strm_root, video_exts, link_host, url_tmpl, from_time, stats, overwrite_mode, depth + 1,
                 )
 
             offset += len(entries)

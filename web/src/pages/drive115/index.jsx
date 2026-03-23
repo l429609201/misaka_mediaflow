@@ -89,6 +89,9 @@ export const Drive115 = () => {
   const [fullSyncCfg, setFullSyncCfg] = useState({ ...SYNC_CFG_DEFAULTS })
   const [incSyncCfg,  setIncSyncCfg]  = useState({ ...SYNC_CFG_DEFAULTS })
 
+  // 全量同步覆盖模式：skip=跳过已存在, overwrite=覆盖已存在
+  const [fullOverwriteMode, setFullOverwriteMode] = useState('skip')
+
   // 全量/增量 目录选择器：field = 'cloud_path' | 'strm_path', scope = 'full' | 'inc'
   const [syncPickerState, setSyncPickerState] = useState({ open: false, scope: null, field: null, type: 'cloud' })
 
@@ -148,6 +151,7 @@ export const Drive115 = () => {
       // 恢复全量/增量自定义路径配置
       if (cfg.full_sync_cfg) setFullSyncCfg(c => ({ ...c, ...cfg.full_sync_cfg }))
       if (cfg.inc_sync_cfg)  setIncSyncCfg(c  => ({ ...c, ...cfg.inc_sync_cfg  }))
+      if (cfg.full_overwrite_mode) setFullOverwriteMode(cfg.full_overwrite_mode)
       if (cfg.sync_pairs?.length) {
         const pair = cfg.sync_pairs[0]
         if (!mappingForm.getFieldValue('cloud_prefix') && pair.cloud_path)
@@ -325,6 +329,7 @@ export const Drive115 = () => {
       await p115StrmApi.saveSyncConfig({
         full_sync_cfg: fullSyncCfg,
         inc_sync_cfg:  incSyncCfg,
+        full_overwrite_mode: fullOverwriteMode,
       })
       // 2. 保存 URL 模板
       await strmApi.saveUrlTemplate(urlTemplate)
@@ -812,6 +817,29 @@ export const Drive115 = () => {
                 />
               </Form.Item>
             </Form>
+            {/* 全量同步 — 覆盖模式选择（对齐 p115strmhelper full_sync_overwrite_mode） */}
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              background: '#f9f0ff', border: '1px solid #d3adf7',
+              borderRadius: 8, padding: '7px 12px', marginBottom: 8,
+            }}>
+              <div>
+                <Text strong style={{ fontSize: 12 }}>已存在文件处置方式</Text>
+                <div style={{ fontSize: 11, color: '#888' }}>
+                  {fullOverwriteMode === 'skip' ? '跳过：全量同步时跳过本地已存在的 STRM 文件' : '覆盖：全量同步时强制覆盖已存在的 STRM 文件'}
+                </div>
+              </div>
+              <Select
+                size="small"
+                value={fullOverwriteMode}
+                onChange={setFullOverwriteMode}
+                style={{ width: 90 }}
+                options={[
+                  { value: 'skip',      label: '跳过' },
+                  { value: 'overwrite', label: '覆盖' },
+                ]}
+              />
+            </div>
             {strmStatus.running && (
               <Alert style={{ marginBottom: 8 }} type="info" showIcon
                 message={t('p115.syncInProgress', { count: strmProgress.created || 0 })} />

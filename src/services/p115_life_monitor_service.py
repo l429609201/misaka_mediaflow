@@ -387,6 +387,10 @@ def _sync_write_single_strm(
         strm_dir.mkdir(parents=True, exist_ok=True)
         strm_file = strm_dir / Path(file_name).with_suffix(".strm").name
 
+        # INFO 级别提前打出网盘路径→本地STRM路径，对齐 p115strmhelper 风格
+        logger.info("【监控生活事件】处理文件: %s → %s",
+                    item_path if item_path else file_name, str(strm_file))
+
         if strm_file.exists():
             existing = strm_file.read_text(encoding="utf-8").strip()
             if existing == strm_content.strip():
@@ -635,11 +639,17 @@ class P115LifeMonitorService:
             parent_id = ev["parent_id"]
             pick_code = ev["pick_code"]
             type_name = ev["type_name"]
+            # file_category：0=目录，非0=文件，-1=未知
+            file_category = ev.get("file_category", -1)
 
-            logger.info(
-                "【监控生活事件】%s %s %s",
-                type_name, file_name, f"(file_id={file_id} parent_id={parent_id} pick={pick_code})",
-            )
+            # 对齐 p115strmhelper：DEBUG 打完整事件 dict（用户可开 DEBUG 查看原始数据）
+            logger.debug("【监控生活事件】%s: file=%r file_id=%s parent_id=%s pick=%s",
+                         type_name, file_name, file_id, parent_id, pick_code)
+
+            # INFO 级别只打关键信息（file_name + 类型），对齐 p115strmhelper 风格
+            category_str = "目录" if file_category == 0 else ("文件" if file_category != -1 else "")
+            logger.info("【监控生活事件】%s%s: %s", type_name,
+                        f"({category_str})" if category_str else "", file_name)
             self._add_event_log(ev)
 
             # 删除事件：只记录，不删 STRM（防误删，对齐 p115strmhelper remove_strm 需要数据库支撑）
