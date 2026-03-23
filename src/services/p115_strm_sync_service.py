@@ -697,18 +697,67 @@ class P115StrmSyncService:
                 break
 
     async def _resolve_cloud_cid(self, manager, cloud_path: str) -> str:
-        """将云盘路径解析为 cid（目录 ID）"""
+        """将云盘路径解析为 cid（目录 ID）。
+
+        方案A（首选）：iterdir 逐级遍历
+          - 走 iter_app 对应接口，兼容所有 CK 类型
+          - iOS/Android CK 下不触发 405（fs_dir_getid 的根本问题所在）
+          - 参考 p115strmhelper core/p115.py get_pid_by_path 的实现思路
+
+        方案B（兜底，仅 web CK）：fs_dir_getid
+          - webapi.115.com/files/getid，仅 web CK 可用，iOS/Android 会 405
+
+        方案C（最终兜底）：webapi list_files_paged 逐段查
+        """
         cloud_path = cloud_path.strip().strip("/")
         if not cloud_path:
             return "0"
-        # 优先用 p115client 直接调 fs_dir_getid 接口查目录 ID
-        # 参考 p115strmhelper core/p115.py get_pid_by_path 的做法：
-        #   resp = client.fs_dir_getid(path)
-        #   return str(resp["id"])
-        # 注意：p115client.tool.attr.get_id 返回 P115ID（继承 int），
-        #       比较时有类型兼容问题，直接调 client.fs_dir_getid 更可靠。
+
         p115_client = manager.adapter._get_p115_client()
+
+        # 读取 login_app，决定接口（对齐 _iter_and_write_strm 的 iter_app 逻辑）
+        login_app = getattr(getattr(manager.adapter, "_auth", None), "login_app", "web") or "web"
+        _WEB_APPS = {"", "web", "desktop", "harmony"}
+        iter_app = "web" if login_app in _WEB_APPS else login_app
+
+        # ── 方案A：iterdir 逐级遍历（参考 p115strmhelper get_pid_by_path）───
+        # 核心修复：fs_dir_getid 调用 webapi.115.com/files/getid，
+        # iOS/Android CK 对该接口返回 405 Method Not Allowed，
+        # 改为 iterdir 按目录层级依次查找，走 iter_app 对应接口，无 405 问题。
         if p115_client is not None:
+            try:
+                from p115client.tool.iterdir import iterdir
+
+                def _resolve_by_iterdir(segments: list) -> str:
+                    cid = 0
+                    for seg in segments:
+                        found = None
+                        for item in iterdir(
+                            client=p115_client,
+                            cid=cid,
+                            cooldown=1,
+                            app=iter_app,
+                        ):
+                            if item.get("is_dir") and item.get("name") == seg:
+                                found = item
+                                break
+                        if found is None:
+                            raise ValueError(f"路径段未找到: {seg!r} (parent_cid={cid})")
+                        cid = int(found.get("id") or found.get("file_id") or 0)
+                    return str(cid)
+
+                segments = [s for s in cloud_path.split("/") if s]
+                cid = await asyncio.to_thread(_resolve_by_iterdir, segments)
+                logger.debug("【全量STRM生成】iterdir 逐级解析 %r → cid=%s (app=%s)",
+                             cloud_path, cid, iter_app)
+                return cid
+            except ImportError:
+                logger.debug("【全量STRM生成】iterdir 不可用，尝试 fs_dir_getid")
+            except Exception as e:
+                logger.warning("【全量STRM生成】iterdir 路径解析失败: %s，尝试备用方案", e)
+
+        # ── 方案B：fs_dir_getid（仅 web CK，iOS/Android 会 405）───────────
+        if p115_client is not None and iter_app == "web":
             try:
                 def _get_dir_id(path: str) -> str:
                     resp = p115_client.fs_dir_getid(path)
@@ -719,15 +768,17 @@ class P115StrmSyncService:
                 logger.debug("【全量STRM生成】fs_dir_getid 解析 %r → cid=%s", cloud_path, cid)
                 return cid
             except Exception as e:
-                logger.debug("【全量STRM生成】p115client 路径解析失败，改用webapi: %s", e)
-        # 回退：webapi 逐段查
+                logger.debug("【全量STRM生成】fs_dir_getid 路径解析失败，改用webapi: %s", e)
+
+        # ── 方案C：webapi list_files_paged 逐段（最终兜底）────────────────
         segments = [s for s in cloud_path.split("/") if s]
         cid = "0"
         current_path = ""
         for seg in segments:
             current_path = f"{current_path}/{seg}"
             try:
-                entries, _ = await manager.adapter.list_files_paged(current_path, cid=cid, limit=200)
+                entries, _ = await manager.adapter.list_files_paged(
+                    current_path, cid=cid, limit=200)
                 found = next((e for e in entries if e.is_dir and e.name == seg), None)
                 if found:
                     cid = found.file_id
