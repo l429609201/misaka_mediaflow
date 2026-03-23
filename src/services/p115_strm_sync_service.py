@@ -342,6 +342,7 @@ class P115StrmSyncService:
                     cid=int(cid),
                     with_ancestors=True,
                     cooldown=2,
+                    app="web",  # 必须显式指定，默认是 android，与 web CK 不匹配
                 ):
                     scan_count += 1
                     # item 是 AttrDict（支持 .get()）
@@ -401,7 +402,7 @@ class P115StrmSyncService:
                 from p115client.tool.fs_files import iter_fs_files
                 logger.debug("[STRM遍历] 使用 iter_fs_files cid=%s from_time=%d", cid, from_time)
                 scan_count = 0
-                for data in iter_fs_files(p115_client, int(cid), cooldown=1.5):
+                for data in iter_fs_files(p115_client, int(cid), cooldown=1.5, app="web"):  # app="web" 防止走 android 接口
                     raw_list = data if isinstance(data, list) else data.get("data", [])
                     for raw in raw_list:
                         scan_count += 1
