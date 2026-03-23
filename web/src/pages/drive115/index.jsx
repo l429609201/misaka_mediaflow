@@ -510,6 +510,13 @@ export const Drive115 = () => {
                     <Form.Item name="file_extensions" label={t('p115.fileExtensions')} tooltip={t('p115.fileExtensionsHint')}>
                       <Input placeholder="mp4,mkv,avi,ts,iso,mov,m2ts" />
                     </Form.Item>
+                    <Form.Item
+                      name="strm_link_host"
+                      label="反代服务地址（base_url）"
+                      tooltip="STRM URL 模板中 {{ base_url }} 变量对应的值，通常为本服务的外部访问地址，如 http://192.168.1.10:9906"
+                    >
+                      <Input placeholder="http://192.168.1.10:9906" allowClear />
+                    </Form.Item>
                   </Form>
                 </Card>
               </Spin>
@@ -888,7 +895,7 @@ export const Drive115 = () => {
               <Space size={6}><CodeOutlined />STRM URL 模板</Space>
             </Divider>
             <Alert type="info" showIcon style={{ marginBottom: 12 }}
-              message="使用 Jinja2 语法拼接 STRM 文件内容。点击下方参数按钮可将其插入至光标所在位置。" />
+              message="使用模板语法拼接 STRM 文件内容。支持 {{ 变量名 }} 和 {{ 变量名 | urlencode }}，点击下方参数按钮可插入至光标位置。" />
             <div style={{ marginBottom: 10 }}>
               <Text type="secondary" style={{ display: 'block', marginBottom: 6, fontSize: 12 }}>
                 可选参数（点击插入）
