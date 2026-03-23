@@ -180,118 +180,116 @@ def _parse_event_fields(raw: dict, raw_count: int) -> Optional[dict]:
     }
 
 
-def _sync_fetch_life_events(p115_client, from_time: int, from_id: int) -> Optional[list]:
+def _sync_fetch_life_events(p115_client, from_time: int, from_id: int,
+                             login_app: str = "web") -> Optional[list]:
     """
-    用 client.life_list(app="web") 拉取生活事件（once 语义：拉完即止）。
+    根据扫码时选择的 login_app 类型，选择对应的生活事件接口：
 
-    根本原因分析：
-      - /behavior/detail GET        → 405（webapi 接口已废弃）
-      - /android/behavior/detail    → errno=99（需要 android SSOENT=D，我们是 web SSOENT=A）
-      - /ios/behavior/detail        → errno=99（需要 iOS SSOENT=B，p115strmhelper 有 iOS CK）
+    - web/desktop/harmony CK (SSOENT=A) → life_list(app="web")
+      life.115.com/api/1.0/web/1.0/life/life_list，纯 web 接口 ✅
 
-    唯一正确方案：client.life_list(app="web")
-      → life.115.com/api/1.0/web/1.0/life/life_list
-      → 纯 web 接口，接受 web CK（SSOENT=A），无认证问题 ✅
+    - android/ios/alipaymini 等 CK → iter_life_behavior_once(app=login_app)
+      /{login_app}/behavior/detail (POST proapi)，与 CK 的 SSOENT 完全匹配 ✅
 
-    参考 p115strmhelper core/p115.py iter_life_behavior_once 的翻页+过滤逻辑，
-    用 life_list 接口自实现相同 once 语义：
-      - 分页拉取（start/offset 累加）
-      - from_id / from_time 双重截止条件
-      - cooldown=4 秒翻页间隔（对齐 p115strmhelper once_pull cooldown=4）
-
-    life_list 返回字段（show_type=0）：
-      behavior_type  str  如 "upload_file"（需 _parse_behavior_type 转 int）
-      file_name      str  文件名
-      file_id        str  文件 ID
-      parent_id      str  父目录 ID
-      pick_code      str  pickcode
-      update_time    int  时间戳
-      id             int  事件 ID
+    与 p115strmhelper 完全相同的逻辑：
+      p115strmhelper 用 iOS CK → app="ios" → /ios/behavior/detail ✅
+      我们用 android CK → app="android" → /android/behavior/detail ✅
+      我们用 web CK → life_list(web) → life.115.com/.../life_list ✅
 
     返回 None 表示请求异常需重试；返回 [] 表示无新事件。
     """
     import time as _time
+    _WEB_APPS = {"", "web", "desktop", "harmony"}
+    logger.debug("[生活事件] _sync_fetch_life_events login_app=%s from_time=%d from_id=%d",
+                 login_app, from_time, from_id)
+    if login_app in _WEB_APPS:
+        return _fetch_via_life_list(p115_client, from_time, from_id, _time)
+    else:
+        return _fetch_via_behavior_once(p115_client, from_time, from_id, login_app, _time)
 
+
+def _fetch_via_life_list(p115_client, from_time: int, from_id: int, _time) -> Optional[list]:
+    """web CK 专用：life.115.com/life_list（接受 SSOENT=A）"""
     events: list = []
     raw_count = 0
     offset = 0
-    limit = 100   # life_list 每页最多 100 条
-    cooldown = 4  # 翻页间隔，对齐 p115strmhelper once_pull(cooldown=4)
+    limit = 100
+    cooldown = 4
     page_num = 0
-
     try:
         while True:
             page_num += 1
-            payload = {
-                "show_type": 0,
-                "limit": limit,
-                "start": offset,
-            }
-            logger.debug(
-                "[生活事件] life_list page=%d offset=%d from_time=%d from_id=%d",
-                page_num, offset, from_time, from_id,
-            )
-
-            # client.life_list 走 life.115.com/api/1.0/web/1.0/life/life_list
-            # app="web" 确保走 web 端点，接受 web CK
+            payload = {"show_type": 0, "limit": limit, "start": offset}
+            logger.debug("[生活事件] life_list page=%d offset=%d", page_num, offset)
             resp = p115_client.life_list(payload, app="web")
             if not isinstance(resp, dict):
                 logger.warning("[生活事件] life_list 返回非 dict: %s", type(resp))
                 return None
-
             if not resp.get("state"):
-                logger.warning(
-                    "[生活事件] life_list state=False errno=%s error=%s",
-                    resp.get("errno"), resp.get("error"),
-                )
+                logger.warning("[生活事件] life_list state=False errno=%s error=%s",
+                               resp.get("errno"), resp.get("error"))
                 return None
-
             data = resp.get("data", {})
             page_list = data.get("list", [])
             total = int(data.get("count", 0))
-            logger.debug(
-                "[生活事件] life_list 第%d页: total=%d 本页=%d条",
-                page_num, total, len(page_list),
-            )
-
+            logger.debug("[生活事件] life_list 第%d页: total=%d 本页=%d条",
+                         page_num, total, len(page_list))
             stop_flag = False
             for raw in page_list:
                 raw_count += 1
                 ev_id_raw = int(raw.get("id") or 0)
                 up_time   = int(raw.get("update_time") or raw.get("time") or 0)
-
-                # 截止条件（对齐 p115strmhelper iter_life_behavior_once）
                 if from_id and ev_id_raw and ev_id_raw <= from_id:
-                    logger.debug("[生活事件] 达到 from_id=%d，停止翻页", from_id)
                     stop_flag = True
                     break
                 if from_time and up_time and up_time < from_time:
-                    logger.debug("[生活事件] 达到 from_time=%d，停止翻页", from_time)
                     stop_flag = True
                     break
-
                 parsed = _parse_event_fields(raw, raw_count)
                 if parsed is not None:
                     events.append(parsed)
-
             if stop_flag:
                 break
-
             offset += len(page_list)
             if not page_list or offset >= total:
                 break
-
-            # 翻页冷却（对齐 p115strmhelper cooldown=4）
             _time.sleep(cooldown)
-
-        logger.debug(
-            "[生活事件] life_list 拉取完毕: 共%d页 原始%d条 触发类型%d条",
-            page_num, raw_count, len(events),
-        )
+        logger.debug("[生活事件] life_list 完毕: %d页 原始%d条 触发%d条",
+                     page_num, raw_count, len(events))
         return events
-
     except Exception as e:
-        logger.warning("[生活事件] life_list 拉取异常: %s", e, exc_info=True)
+        logger.warning("[生活事件] life_list 异常: %s", e, exc_info=True)
+        return None
+
+
+def _fetch_via_behavior_once(p115_client, from_time: int, from_id: int,
+                              login_app: str, _time) -> Optional[list]:
+    """非 web CK 专用：iter_life_behavior_once(app=login_app)，与扫码 app 类型完全匹配"""
+    try:
+        from p115client.tool.life import iter_life_behavior_once
+    except ImportError:
+        logger.warning("[生活事件] p115client.tool.life 不可用，降级到 life_list")
+        return _fetch_via_life_list(p115_client, from_time, from_id, _time)
+    events: list = []
+    raw_count = 0
+    try:
+        logger.debug("[生活事件] behavior_once app=%s from_time=%d from_id=%d",
+                     login_app, from_time, from_id)
+        for event in iter_life_behavior_once(
+            client=p115_client,
+            from_time=from_time,
+            from_id=from_id,
+            cooldown=4,
+            app=login_app,
+        ):
+            raw_count += 1
+            parsed = _parse_event_fields(event, raw_count)
+            if parsed is not None:
+                events.append(parsed)
+        logger.debug("[生活事件] behavior_once 完毕: 原始%d条 触发%d条", raw_count, len(events))
+        return events
+    except Exception as e:
+        logger.warning("[生活事件] behavior_once(app=%s) 异常: %s", login_app, e, exc_info=True)
         return None
 def _sync_get_parent_path(p115_client, parent_id: str) -> str:
     """
@@ -558,9 +556,10 @@ class P115LifeMonitorService:
     async def _poll_once(self) -> list:
         """
         拉取本轮新事件。
-        用 p115client.iter_life_behavior_once(app="android") 走 proapi POST 接口。
+        根据扫码时选择的 login_app 自动选择接口：
+          - web CK → life_list(web)
+          - android/ios/alipaymini CK → iter_life_behavior_once(app=login_app)
         带 3 次重试（参考 p115strmhelper once_pull），失败等待 2 秒。
-        拉取成功后更新 _last_event_time / _last_event_id。
         """
         manager = _get_manager()
         if not manager.enabled or not manager.ready:
@@ -572,6 +571,10 @@ class P115LifeMonitorService:
             logger.debug("[生活事件] p115_client 不可用，跳过本轮")
             return []
 
+        # 读取登录时的 app 类型（决定走哪个接口）
+        login_app = getattr(manager.adapter._auth, "login_app", "web") or "web"
+        logger.debug("[生活事件] 本轮使用 login_app=%s", login_app)
+
         # 重试机制（参考 p115strmhelper once_pull: 3 次重试，失败等 2 秒）
         events = None
         max_retries = 3
@@ -582,6 +585,7 @@ class P115LifeMonitorService:
                     p115_client,
                     self._last_event_time,
                     self._last_event_id,
+                    login_app,
                 )
                 if events is not None:
                     break  # 成功（包括空列表 []）

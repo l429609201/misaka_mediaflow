@@ -20,6 +20,7 @@ class P115AuthService:
 
     def __init__(self):
         self._cookie: str = ""
+        self._login_app: str = "web"   # 记录扫码时选择的 app 类型，决定 CK 的 SSOENT
         self._openapi_access_token: str = ""
         self._openapi_refresh_token: str = ""
         self._client: httpx.AsyncClient | None = None
@@ -39,6 +40,11 @@ class P115AuthService:
     @property
     def cookie(self) -> str:
         return self._cookie
+
+    @property
+    def login_app(self) -> str:
+        """返回扫码登录时选择的 app 类型（决定 CK 的 SSOENT 类型）"""
+        return self._login_app
 
     @property
     def has_cookie(self) -> bool:
@@ -205,6 +211,7 @@ class P115AuthService:
                 cookie_parts = [f"{k}={v}" for k, v in cookie_data.items() if k and v]
                 cookie_str = "; ".join(cookie_parts)
                 self.set_cookie(cookie_str)
+                self._login_app = app   # 记录本次登录的 app 类型，供生活事件监控等使用
                 logger.info("115 扫码登录成功, app=%s, cookie_len=%d", app, len(cookie_str))
                 return cookie_str
             logger.error("换取 Cookie 失败: %s", data)
