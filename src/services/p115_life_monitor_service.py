@@ -12,9 +12,13 @@
 #    关键字段：event["type"] / event["file_name"] / event["file_id"]
 #              event["parent_id"] / event["pick_code"] / event["update_time"]
 #
-# ② 115 webapi POST /behavior/detail（直接 POST，绕过 p115client GET 的 405 问题）
-#    参数：limit, offset, type, date
-#    认证：Cookie + User-Agent（web CK）
+# ② 关键：传 app="android" 给 iter_life_behavior_once
+#    p115client 源码路由逻辑（life.py）：
+#      app in ("", "web", "desktop", "harmony")
+#        → client.life_behavior_detail  → GET webapi.115.com/behavior/detail → 405 ❌
+#      else（如 app="android"）
+#        → client.life_behavior_detail_app → POST pro.api.115.com → ✅
+#    web CK 完全可以访问 proapi 接口（p115strmhelper 用 iOS CK 也是走这个路径）
 #
 # 核心流程（参考 p115strmhelper MonitorLife.once_pull）：
 #   1. POST /behavior/detail → 拉取上次 from_time/from_id 之后的所有新事件
@@ -171,121 +175,56 @@ def _parse_event_fields(raw: dict, raw_count: int) -> Optional[dict]:
     }
 
 
-def _sync_fetch_life_events_post(cookie: str, ua: str,
-                                 from_time: int, from_id: int) -> Optional[list]:
+def _sync_fetch_life_events(p115_client, from_time: int, from_id: int) -> Optional[list]:
     """
-    直接 POST https://webapi.115.com/behavior/detail 拉取生活事件。
+    用 p115client.tool.life.iter_life_behavior_once 拉取生活事件。
 
-    115 的 /behavior/detail 接口现在要求 POST 方法（原来是 GET，返回 405）。
-    用 web CK 即可访问，无需 iOS/android cookie。
+    关键：必须传 app="android"（或任何非 web/desktop/harmony 的值），
+    让 p115client 路由到 life_behavior_detail_app，走 pro.api.115.com 的 POST 接口。
 
-    流控（参考 p115strmhelper utils/limiter.py ApiEndpointCooldown）：
-    - 每页请求之间 cooldown=4 秒
-    - 分页直到取完（offset >= count）
+    p115client 源码（life.py）路由逻辑：
+        if app in ("", "web", "desktop", "harmony"):
+            → client.life_behavior_detail  → GET webapi.115.com  → 405 ❌
+        else:
+            → client.life_behavior_detail_app, base_url=cycle(proapi urls)  → POST ✅
 
-    返回 None 表示请求失败；返回 [] 表示无新事件。
+    web CK 完全可以访问 proapi.115.com 接口（p115strmhelper 也这么用）。
+
+    返回 None 表示异常需重试；返回 [] 表示无新事件。
     """
     try:
-        import httpx
+        from p115client.tool.life import iter_life_behavior_once
     except ImportError:
-        try:
-            import requests as httpx  # type: ignore
-        except ImportError:
-            logger.debug("[生活事件] httpx/requests 均不可用")
-            return None
-
-    import time as _time
+        logger.debug("[生活事件] p115client.tool.life 不可用")
+        return None
 
     events = []
-    headers = {
-        "Cookie":       cookie,
-        "User-Agent":   ua or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept":       "application/json, text/plain, */*",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Referer":      "https://115.com/",
-    }
-
-    limit  = 64
-    offset = 0
-    seen_ids: set = set()
-    raw_count = 0
-    page_num  = 0
-    cooldown  = 4  # 参考 p115strmhelper once_pull(cooldown=4)
-
     try:
-        while True:
-            page_num += 1
-            payload = {
-                "limit":  str(limit),
-                "offset": str(offset),
-                "type":   "",
-                "date":   "",
-            }
-            logger.debug("[生活事件] POST /behavior/detail page=%d offset=%d", page_num, offset)
-
-            resp = httpx.post(
-                "https://webapi.115.com/behavior/detail",
-                headers=headers,
-                data=payload,
-                timeout=15,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-
-            if not data.get("state"):
-                logger.warning("[生活事件] /behavior/detail 返回 state=False: %s",
-                               data.get("error", ""))
-                return None
-
-            page_list = data.get("data", {}).get("list", [])
-            total     = int(data.get("data", {}).get("count", 0))
-            logger.debug("[生活事件] 第 %d 页: 共 %d 条，本页 %d 条",
-                         page_num, total, len(page_list))
-
-            stop_flag = False
-            for raw in page_list:
-                raw_count += 1
-                ev_id_raw  = int(raw.get("id") or 0)
-                up_time    = int(raw.get("update_time") or raw.get("time") or 0)
-
-                # 跳过已处理过的事件（by from_id / from_time）
-                if from_id and ev_id_raw and ev_id_raw <= from_id:
-                    logger.debug("[生活事件] 达到 from_id=%d，停止翻页", from_id)
-                    stop_flag = True
-                    break
-                if from_time and up_time and up_time < from_time:
-                    logger.debug("[生活事件] 达到 from_time=%d，停止翻页", from_time)
-                    stop_flag = True
-                    break
-
-                # 去重（同一事件可能出现在多页）
-                if ev_id_raw and ev_id_raw in seen_ids:
-                    continue
-                if ev_id_raw:
-                    seen_ids.add(ev_id_raw)
-
-                parsed = _parse_event_fields(raw, raw_count)
-                if parsed is not None:
-                    events.append(parsed)
-
-            if stop_flag:
-                break
-
-            offset += len(page_list)
-            if offset >= total or not page_list:
-                break
-
-            # 翻页冷却（参考 p115strmhelper cooldown=4）
-            _time.sleep(cooldown)
+        logger.debug(
+            "[生活事件] iter_life_behavior_once 开始拉取 from_time=%d from_id=%d app=android",
+            from_time, from_id,
+        )
+        raw_count = 0
+        for event in iter_life_behavior_once(
+            client=p115_client,
+            from_time=from_time,
+            from_id=from_id,
+            cooldown=4,          # 参考 p115strmhelper once_pull(cooldown=4)
+            app="android",       # 非 web/desktop/harmony → 走 proapi POST 接口
+        ):
+            raw_count += 1
+            parsed = _parse_event_fields(event, raw_count)
+            if parsed is not None:
+                events.append(parsed)
 
         logger.debug(
-            "[生活事件] /behavior/detail 拉取完毕: 原始 %d 条，触发类型 %d 条",
+            "[生活事件] iter_life_behavior_once 拉取完毕: 原始 %d 条，触发类型 %d 条",
             raw_count, len(events),
         )
         return events
 
     except Exception as e:
-        logger.warning("[生活事件] POST /behavior/detail 异常: %s", e, exc_info=True)
+        logger.warning("[生活事件] iter_life_behavior_once 异常: %s", e, exc_info=True)
         return None
 
 
@@ -516,7 +455,7 @@ class P115LifeMonitorService:
     async def _poll_once(self) -> list:
         """
         拉取本轮新事件。
-        直接 POST webapi.115.com/behavior/detail（绕过 p115client GET 的 405 问题）。
+        用 p115client.iter_life_behavior_once(app="android") 走 proapi POST 接口。
         带 3 次重试（参考 p115strmhelper once_pull），失败等待 2 秒。
         拉取成功后更新 _last_event_time / _last_event_id。
         """
@@ -525,16 +464,9 @@ class P115LifeMonitorService:
             logger.debug("[生活事件] 115 未启用或未就绪，跳过本轮")
             return []
 
-        # 获取 cookie（web CK）
-        try:
-            auth = manager.adapter._auth
-            if not getattr(auth, "has_cookie", False):
-                logger.debug("[生活事件] 无 cookie，跳过本轮")
-                return []
-            cookie = auth.cookie
-            ua = auth.get_cookie_headers().get("User-Agent", "")
-        except Exception as e:
-            logger.debug("[生活事件] 获取 auth 失败: %s", e)
+        p115_client = manager.adapter._get_p115_client()
+        if p115_client is None:
+            logger.debug("[生活事件] p115_client 不可用，跳过本轮")
             return []
 
         # 重试机制（参考 p115strmhelper once_pull: 3 次重试，失败等 2 秒）
@@ -543,8 +475,8 @@ class P115LifeMonitorService:
         for attempt in range(max_retries, -1, -1):
             try:
                 events = await asyncio.to_thread(
-                    _sync_fetch_life_events_post,
-                    cookie, ua,
+                    _sync_fetch_life_events,
+                    p115_client,
                     self._last_event_time,
                     self._last_event_id,
                 )
