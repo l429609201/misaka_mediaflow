@@ -160,9 +160,21 @@ def _sync_fetch_life_events(p115_client, from_time: int, from_id: int) -> Option
             # 日志中错误路径 /ios/behavior/detail 说明 app="ios" 会强制用 iOS 接口
         ):
             raw_count += 1
-            # behavior_type 在不同接口/版本下可能是数字或字符串，统一转为数字
-            raw_type  = event.get("behavior_type") or event.get("type")
+            # p115client 返回的事件字段（来自 p115client/tool/life.py 源码）：
+            #   "type"        → 数字 int（如 2），是主字段
+            #   "event_name"  → p115client 自动加的行为名字符串（如 "upload_file"）
+            #   "file_id"     → 文件 ID 字符串
+            #   "file_name"   → 文件名（部分事件可能没有）
+            #   "parent_id"   → 父目录 ID
+            #   "pick_code"/"pc" → pickcode
+            #   "update_time" → 时间戳（部分事件可能没有）
+            #   "id"          → 事件 ID 字符串
+            # webapi life_list 返回的是 "behavior_type"（字符串），通过 _parse_behavior_type 兼容
+            raw_type  = event.get("type") or event.get("behavior_type")
             ev_type   = _parse_behavior_type(raw_type)
+            # p115client 自动注入的行为名，可直接用于日志
+            ev_name   = (event.get("event_name")
+                         or _BEHAVIOR_TYPE_NAMES.get(ev_type, f"未知({ev_type})"))
             file_name = (event.get("file_name") or event.get("file_name_show")
                          or event.get("fn") or "")
             file_id   = str(event.get("file_id") or event.get("fid") or "")
@@ -175,19 +187,17 @@ def _sync_fetch_life_events(p115_client, from_time: int, from_id: int) -> Option
             logger.debug(
                 "[生活事件] 原始事件 #%d: type=%d(%s) file=%r "
                 "file_id=%s parent_id=%s pick=%s time=%d ev_id=%d",
-                raw_count, ev_type,
-                _BEHAVIOR_TYPE_NAMES.get(ev_type, f"未知({ev_type})"),
+                raw_count, ev_type, ev_name,
                 file_name, file_id, parent_id, pick_code, up_time, ev_id,
             )
 
             if ev_type not in _SYNC_TRIGGER_TYPES:
-                logger.debug("[生活事件] 忽略事件类型 %d(%s)",
-                             ev_type, _BEHAVIOR_TYPE_NAMES.get(ev_type, "?"))
+                logger.debug("[生活事件] 忽略事件类型 %d(%s)", ev_type, ev_name)
                 continue
 
             events.append({
                 "type":      ev_type,
-                "type_name": _BEHAVIOR_TYPE_NAMES.get(ev_type, f"未知({ev_type})"),
+                "type_name": ev_name,
                 "file_name": file_name,
                 "file_id":   file_id,
                 "parent_id": parent_id,
