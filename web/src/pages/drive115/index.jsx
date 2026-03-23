@@ -152,13 +152,6 @@ export const Drive115 = () => {
       if (cfg.full_sync_cfg) setFullSyncCfg(c => ({ ...c, ...cfg.full_sync_cfg }))
       if (cfg.inc_sync_cfg)  setIncSyncCfg(c  => ({ ...c, ...cfg.inc_sync_cfg  }))
       if (cfg.full_overwrite_mode) setFullOverwriteMode(cfg.full_overwrite_mode)
-      if (cfg.sync_pairs?.length) {
-        const pair = cfg.sync_pairs[0]
-        if (!mappingForm.getFieldValue('cloud_prefix') && pair.cloud_path)
-          mappingForm.setFieldValue('cloud_prefix', pair.cloud_path)
-        if (!mappingForm.getFieldValue('strm_prefix') && pair.strm_path)
-          mappingForm.setFieldValue('strm_prefix', pair.strm_path)
-      }
     } catch { /* ignore */ }
   }, [mappingForm])
 
