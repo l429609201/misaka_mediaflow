@@ -378,6 +378,7 @@ class P115StrmSyncService:
                     Path(strm_root), video_exts, link_host, url_tmpl,
                     from_time=last_sync_time,
                 )
+                # 注意：增量同步固定 overwrite_mode="skip"（只处理新增文件，不覆盖已有）
                 for k in stats:
                     stats[k] += pair_stats.get(k, 0)
                 self._progress = {"stage": "scanning", **stats}
@@ -411,161 +412,114 @@ class P115StrmSyncService:
         link_host: str,
         url_tmpl: str = "",
         from_time: int = 0,
-        overwrite_mode: str = "skip",   # "skip"=跳过已存在, "overwrite"=覆盖已存在
+        overwrite_mode: str = "skip",
     ) -> dict:
         """
-        遍历 115 目录树，对每个视频文件写 .strm。
-        overwrite_mode: 对齐 p115strmhelper full_sync_overwrite_mode
-          - "skip"      → 文件已存在时跳过（默认）
-          - "overwrite" → 文件已存在时覆盖写入
+        遍历 115 目录树（递归），对每个视频文件写 .strm。
+
+        使用 iterdir 手动递归遍历整棵目录树，自己维护完整路径：
+          - iterdir 只列当前目录一层（无递归），但结构简单、兼容所有 CK 类型
+          - 每层目录遍历后，对子目录递归调用，拼接路径
+          - 完整路径由我们自己构建，不依赖接口返回的 path 字段
+          - cooldown=1s 避免频率限制
+
+        overwrite_mode: "skip"=跳过已存在, "overwrite"=覆盖已存在
         """
         stats = {"created": 0, "skipped": 0, "errors": 0}
         p115_client = manager.adapter._get_p115_client()
 
-        # 根据 login_app 动态选择接口 app 参数（避免 CK 类型不匹配导致 405 风控）
-        # 参考 p115strmhelper configer.get_ios_ua_app() 的思路：
-        #   web/desktop/harmony CK → app="web"（使用 /web/2.0/files 接口）
-        #   android/ios/alipaymini  → app=login_app（使用对应 app 接口）
+        if p115_client is None:
+            logger.error("【全量STRM生成】p115_client 不可用，无法同步")
+            return stats
+
+        # 根据 login_app 动态选择接口（避免 CK 类型不匹配导致 405 风控）
         login_app = getattr(getattr(manager.adapter, "_auth", None), "login_app", "web") or "web"
         _WEB_APPS = {"", "web", "desktop", "harmony"}
         iter_app = "web" if login_app in _WEB_APPS else login_app
-        logger.debug("【全量STRM生成】login_app=%s → iter_app=%s", login_app, iter_app)
+        logger.info("【全量STRM生成】开始遍历 cid=%s cloud_path=%r iter_app=%s overwrite=%s",
+                    cid, cloud_path, iter_app, overwrite_mode)
 
-        # ── 方案A：iterdir_traverse（p115client 标准 API）────────────────────
-        # 注意：iter_files_with_path 内部有 fetch_dirs 子流程，
-        #       会调用 download_folders_app（/os_windows/ufile/downfolders），
-        #       该接口需要 windows cookie，与 web CK 不兼容，故改用 iterdir_traverse。
-        # cooldown=2：每次请求间隔 2 秒，对齐 p115strmhelper 的 cooldown 设置，避免 405 风控。
-        if p115_client is not None:
-            try:
-                from p115client.tool.iterdir import iterdir_traverse
-                logger.debug("【全量STRM生成】使用 iterdir_traverse cid=%s from_time=%d app=%s",
-                             cid, from_time, iter_app)
-                scan_count = 0
-                for item in iterdir_traverse(
-                    client=p115_client,
-                    cid=int(cid),
-                    predicate=True,   # True = 只返回文件，跳过目录
-                    cooldown=2,       # 对齐 p115strmhelper cooldown=2，避免 405 风控
-                    app=iter_app,     # 根据 login_app 动态选择，避免接口不匹配
-                ):
-                    scan_count += 1
-                    # normalize_attr 已标准化所有字段
-                    name      = item.get("name", "")
-                    pick_code = item.get("pickcode") or item.get("pick_code", "")
-                    item_mtime = int(item.get("mtime") or item.get("ctime") or 0)
-                    item_path  = item.get("path", "")
+        # cloud_path_full：遍历根的完整云盘路径，用于拼接子路径
+        cloud_path_full = "/" + cloud_path.strip("/")
+        scan_count = 0
 
-                    if from_time > 0 and item_mtime <= from_time:
-                        logger.debug("【全量STRM生成】跳过旧文件(mtime=%d <= from_time=%d): %s",
-                                     item_mtime, from_time, name)
-                        stats["skipped"] += 1
-                        continue
-                    ext = Path(name).suffix.lstrip(".").lower()
-                    if ext not in video_exts:
-                        logger.debug("【全量STRM生成】跳过非视频文件: %s", name)
-                        stats["skipped"] += 1
-                        continue
-                    if not pick_code:
-                        logger.error("【全量STRM生成】%s 不存在 pickcode 值，无法生成 STRM 文件", name)
-                        stats["errors"] += 1
-                        continue
-                    # 参考 p115strmhelper: pickcode 必须是 17 位纯字母数字
-                    if not (len(pick_code) == 17 and pick_code.isalnum()):
-                        logger.error("【全量STRM生成】错误的 pickcode 值 %r，跳过: %s", pick_code, name)
-                        stats["errors"] += 1
-                        continue
-                    rel = self._calc_rel_path(item_path, cloud_path)
-                    strm_url = self._render_strm_url(url_tmpl, link_host, pick_code, name, item_path)
-                    result = self._write_strm(strm_root, rel, name, strm_url, overwrite_mode)
-                    if result == "created":
-                        stats["created"] += 1
-                    elif result == "skipped":
-                        stats["skipped"] += 1
-                    else:
-                        stats["errors"] += 1
-                logger.debug("【全量STRM生成】iterdir_traverse 共扫描 %d 项, stats=%s", scan_count, stats)
-                return stats
-            except ImportError:
-                logger.debug("【全量STRM生成】iterdir_traverse 不可用，使用回退方案")
-            except Exception as e:
-                logger.warning("【全量STRM生成】iterdir_traverse 出错，使用回退方案: %s", e, exc_info=True)
-
-        # ── 方案B：iter_fs_files 回退────────────────────────────────────────
-        # iter_fs_files 每次 yield 一整页的 resp 字典，结构：
-        #   resp["data"] = 原始文件/目录列表（未经 normalize_attr）
-        #   原始字段：n=文件名, pc=pickcode, te=mtime, fid=文件ID（有fid表示是文件）
-        if p115_client is not None:
-            try:
-                from p115client.tool.fs_files import iter_fs_files
-                logger.debug("【全量STRM生成】使用 iter_fs_files cid=%s from_time=%d app=%s",
-                             cid, from_time, iter_app)
-                scan_count = 0
-                for resp in iter_fs_files(
-                    p115_client, int(cid),
-                    cooldown=2,         # 对齐 p115strmhelper cooldown=2，避免 405 风控
-                    app=iter_app,       # 根据 login_app 动态选择，避免接口不匹配
-                    max_workers=0,      # 单线程串行，避免并发接口
-                ):
-                    for raw in resp.get("data", []):
-                        scan_count += 1
-                        # 原始字段：有 fid 的是文件，没有 fid 的是目录
-                        if "fid" not in raw:
-                            continue
-                        # 原始字段：n=文件名, pc=pickcode, te=mtime
-                        name       = raw.get("n") or raw.get("fn") or raw.get("name", "")
-                        pick_code  = raw.get("pc") or raw.get("pickcode", "")
-                        item_mtime = int(raw.get("te") or raw.get("t") or raw.get("mtime") or 0)
-
-                        if from_time > 0 and item_mtime <= from_time:
-                            logger.debug("【全量STRM生成】跳过旧文件(mtime=%d <= from_time=%d): %s",
-                                         item_mtime, from_time, name)
-                            stats["skipped"] += 1
-                            continue
-                        ext = Path(name).suffix.lstrip(".").lower()
-                        if ext not in video_exts:
-                            logger.debug("【全量STRM生成】跳过非视频文件: %s", name)
-                            stats["skipped"] += 1
-                            continue
-                        if not pick_code:
-                            logger.error("【全量STRM生成】%s 不存在 pickcode 值，无法生成 STRM 文件", name)
-                            stats["errors"] += 1
-                            continue
-                        if not (len(pick_code) == 17 and pick_code.isalnum()):
-                            logger.error("【全量STRM生成】错误的 pickcode 值 %r，跳过: %s", pick_code, name)
-                            stats["errors"] += 1
-                            continue
-                        # iter_fs_files 不包含完整路径，路径留空走 cloud_path 根目录
-                        item_full_path = raw.get("path", "")
-                        rel = self._calc_rel_path(item_full_path, cloud_path)
-                        strm_url = self._render_strm_url(url_tmpl, link_host, pick_code, name, item_full_path)
-                        result = self._write_strm(strm_root, rel, name, strm_url, overwrite_mode)
-                        if result == "created":
-                            stats["created"] += 1
-                        elif result == "skipped":
-                            stats["skipped"] += 1
-                        else:
-                            stats["errors"] += 1
-                logger.debug("【全量STRM生成】iter_fs_files 共扫描 %d 项, stats=%s", scan_count, stats)
-                return stats
-            except ImportError:
-                logger.debug("【全量STRM生成】iter_fs_files 不可用，使用webapi回退")
-            except Exception as e:
-                logger.warning("【全量STRM生成】iter_fs_files 出错，使用webapi回退: %s", e, exc_info=True)
-
-        # ── 方案C：webapi 逐页列目录（p115client 完全不可用时）──────────────
-        logger.debug("【全量STRM生成】使用webapi逐页列目录 cid=%s", cid)
-        import asyncio as _asyncio
-        loop = _asyncio.new_event_loop()
         try:
-            loop.run_until_complete(
-                self._webapi_walk_and_write(
-                    manager, cid, cloud_path, strm_root,
-                    video_exts, link_host, url_tmpl, from_time, stats, overwrite_mode,
-                )
-            )
-        finally:
-            loop.close()
+            from p115client.tool.iterdir import iterdir
+        except ImportError:
+            logger.error("【全量STRM生成】p115client.tool.iterdir 不可用")
+            return stats
+
+        def _process_file(item: dict, item_path: str):
+            """处理单个文件条目，写 STRM，更新 stats"""
+            nonlocal scan_count
+            scan_count += 1
+            name      = item.get("name", "")
+            pick_code = item.get("pickcode") or item.get("pick_code") or item.get("pc", "")
+            item_mtime = int(item.get("mtime") or item.get("utime") or item.get("t") or 0)
+
+            if from_time > 0 and item_mtime <= from_time:
+                logger.debug("【全量STRM生成】跳过旧文件(mtime=%d <= from_time=%d): %s",
+                             item_mtime, from_time, name)
+                stats["skipped"] += 1
+                return
+            ext = Path(name).suffix.lstrip(".").lower()
+            if ext not in video_exts:
+                logger.debug("【全量STRM生成】跳过非视频文件: %s", name)
+                stats["skipped"] += 1
+                return
+            if not pick_code:
+                logger.error("【全量STRM生成】%s 不存在 pickcode 值，无法生成 STRM 文件", name)
+                stats["errors"] += 1
+                return
+            # 参考 p115strmhelper：pickcode 必须是 17 位纯字母数字
+            if not (len(pick_code) == 17 and pick_code.isalnum()):
+                logger.error("【全量STRM生成】错误的 pickcode 值 %r，跳过: %s", pick_code, name)
+                stats["errors"] += 1
+                return
+            rel      = self._calc_rel_path(item_path, cloud_path)
+            strm_url = self._render_strm_url(url_tmpl, link_host, pick_code, name, item_path)
+            result   = self._write_strm(strm_root, rel, name, strm_url, overwrite_mode)
+            if result == "created":
+                stats["created"] += 1
+            elif result == "skipped":
+                stats["skipped"] += 1
+            else:
+                stats["errors"] += 1
+
+        def _walk(walk_cid: int, walk_path: str, depth: int = 0):
+            """递归遍历：iterdir 列当前层，文件直接处理，目录递归进入"""
+            if depth > 50:
+                logger.warning("【全量STRM生成】目录层级超过50层，停止递归: %s", walk_path)
+                return
+            try:
+                items = list(iterdir(client=p115_client, cid=walk_cid,
+                                     cooldown=1, app=iter_app))
+            except Exception as e:
+                logger.warning("【全量STRM生成】iterdir 失败 cid=%s path=%s: %s",
+                               walk_cid, walk_path, e)
+                return
+
+            sub_dirs = []
+            for item in items:
+                name     = item.get("name", "")
+                if not name:
+                    continue
+                item_path = f"{walk_path}/{name}"
+                if item.get("is_dir"):
+                    sub_cid = int(item.get("id") or item.get("file_id") or 0)
+                    if sub_cid:
+                        sub_dirs.append((sub_cid, item_path))
+                else:
+                    _process_file(item, item_path)
+
+            # 先处理完当前层文件，再递归子目录（BFS 风格，便于调试）
+            for sub_cid, sub_path in sub_dirs:
+                logger.debug("【全量STRM生成】进入子目录: %s (cid=%s)", sub_path, sub_cid)
+                _walk(sub_cid, sub_path, depth + 1)
+
+        _walk(int(cid), cloud_path_full)
+        logger.info("【全量STRM生成】iterdir 递归遍历完成，共扫描 %d 个文件，stats=%s",
+                    scan_count, stats)
         return stats
 
     def _calc_rel_path(self, item_full_path: str, cloud_path: str) -> Path:
