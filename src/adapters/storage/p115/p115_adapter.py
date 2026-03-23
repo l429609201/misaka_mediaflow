@@ -198,7 +198,18 @@ class P115StorageAdapter(StorageAdapter):
             return DirectLink()
 
     async def list_files(self, cloud_path: str, cid: str = "0") -> list[FileEntry]:
-        """列出 115 目录内容"""
+        """列出 115 目录内容（第一页，最多100条，保留旧接口兼容）"""
+        entries, _ = await self.list_files_paged(cloud_path, cid=cid, offset=0, limit=100)
+        return entries
+
+    async def list_files_paged(
+        self, cloud_path: str, cid: str = "0",
+        offset: int = 0, limit: int = 100,
+    ) -> tuple[list[FileEntry], int]:
+        """
+        分页列出 115 目录内容，返回 (entries, total)。
+        按修改时间倒序（o=user_ptime, asc=0），便于增量同步遇旧即停。
+        """
         await self._rate.acquire()
         client = await self._ensure_client()
 
@@ -206,23 +217,25 @@ class P115StorageAdapter(StorageAdapter):
             resp = await client.get(
                 _115_FILES_URL,
                 params={
-                    "cid": cid,
-                    "limit": 1000,
+                    "cid":     cid,
+                    "offset":  offset,
+                    "limit":   limit,
                     "show_dir": 1,
-                    "o": "user_ptime",
-                    "asc": 0,
-                    "snap": 0,
+                    "o":       "user_ptime",  # 按修改时间排序
+                    "asc":     0,             # 倒序（最新在前）
+                    "snap":    0,
                     "natsort": 1,
-                    "source": "",
-                    "format": "json",
+                    "source":  "",
+                    "format":  "json",
                 },
                 headers=self._auth.get_cookie_headers(),
             )
             data = resp.json()
             if not data.get("state", True):
                 logger.error("115 目录列表失败: %s", data.get("error", ""))
-                return []
+                return [], 0
 
+            total = int(data.get("count", 0))
             entries: list[FileEntry] = []
             for item in data.get("data", []):
                 is_dir = "fid" not in item
@@ -235,20 +248,18 @@ class P115StorageAdapter(StorageAdapter):
                     pick_code=item.get("pc", ""),
                     sha1=item.get("sha", ""),
                     ed2k=item.get("ed2k", ""),
-                    mtime=item.get("te", ""),
-                    ctime=item.get("tp", ""),
+                    mtime=item.get("te", ""),   # te = 修改时间戳
+                    ctime=item.get("tp", ""),   # tp = 上传时间戳
                 )
                 entries.append(entry)
-
-                # 写入 ID/Path 缓存
                 if entry.file_id:
                     self._cache.put(entry.file_id, entry.path)
 
-            return entries
+            return entries, total
 
         except Exception as e:
             logger.error("115 目录列表异常: %s", e)
-            return []
+            return [], 0
 
     async def test_connection(self) -> bool:
         """测试 115 连接"""

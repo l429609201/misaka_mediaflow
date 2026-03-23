@@ -1,5 +1,10 @@
 # src/services/p115_strm_sync_service.py
-# 115 STRM 全量/增量生成服务 + 生活事件监控
+# 115 STRM 全量/增量生成服务
+#
+# 增量同步参考 emby-toolkit / p115strmhelper 的实现策略：
+#   - 全量：用 p115client.tool.iterdir.iter_files_with_path_skim 递归遍历整棵树
+#   - 增量：优先用 p115client.tool 按 from_time 筛选新文件，
+#           回退方案：webapi 列目录按时间倒序，遇到旧文件即停止（避免全量扫描）
 
 import asyncio
 import json
@@ -7,8 +12,6 @@ import logging
 import time
 from pathlib import Path
 from typing import Optional
-
-import httpx
 
 from src.db import get_async_session_local
 from src.db.models.system import SystemConfig
@@ -20,11 +23,8 @@ logger = logging.getLogger(__name__)
 _STRM_SYNC_CONFIG_KEY = "p115_strm_sync_config"
 _STRM_SYNC_STATUS_KEY = "p115_strm_sync_status"
 
-# 视频文件扩展名（与 p115_settings 中的 file_extensions 一致）
+# 视频文件扩展名
 _DEFAULT_VIDEO_EXTS = {"mp4", "mkv", "avi", "ts", "iso", "mov", "m2ts", "rmvb", "flv", "wmv", "m4v"}
-
-# 115 生活事件接口
-_LIFE_URL = "https://life.115.com/api/1.0/web/1.0/life_list"
 
 
 def _get_manager():
@@ -174,11 +174,15 @@ class P115StrmSyncService:
         self._current_task = asyncio.create_task(self._do_inc_sync())
         return {"success": True, "message": "增量同步已启动"}
 
+    # =========================================================================
+    # 全量同步
+    # =========================================================================
+
     async def _do_full_sync(self):
-        """执行全量同步"""
+        """全量同步：用 iter_files_with_path_skim 遍历整棵树，无分页限制"""
         self._running = True
         start_time = time.time()
-        stats = {"created": 0, "skipped": 0, "removed": 0, "errors": 0}
+        stats = {"created": 0, "skipped": 0, "errors": 0}
         self._progress = {"stage": "scanning", **stats}
 
         try:
@@ -189,7 +193,7 @@ class P115StrmSyncService:
                 return
 
             video_exts = self._get_video_exts(config)
-            link_host = self._get_link_host(config)
+            link_host  = self._get_link_host(config)
             sync_pairs = self._resolve_sync_pairs(config, "full")
 
             if not sync_pairs:
@@ -198,25 +202,19 @@ class P115StrmSyncService:
 
             for pair in sync_pairs:
                 cloud_path = pair.get("cloud_path", "").strip()
-                strm_root = pair.get("strm_path", "").strip()
+                strm_root  = pair.get("strm_path", "").strip()
                 if not cloud_path or not strm_root:
                     continue
-                # 解析云盘路径对应的 cid
                 start_cid = await self._resolve_cloud_cid(manager, cloud_path)
                 if not start_cid:
                     logger.warning("[全量STRM] 路径无法解析，跳过: %s", cloud_path)
                     continue
                 logger.info("[全量STRM] 开始扫描: %s (cid=%s) → %s", cloud_path, start_cid, strm_root)
-                pair_stats = await self._sync_dir_recursive(
-                    manager=manager,
-                    cid=start_cid,
-                    cloud_path=cloud_path,
-                    strm_root=Path(strm_root),
-                    rel_path=Path("."),
-                    video_exts=video_exts,
-                    link_host=link_host,
-                    full=True,
-                    last_sync_time=0,
+                pair_stats = await asyncio.to_thread(
+                    self._iter_and_write_strm,
+                    manager, start_cid, cloud_path,
+                    Path(strm_root), video_exts, link_host,
+                    from_time=0,
                 )
                 for k in stats:
                     stats[k] += pair_stats.get(k, 0)
@@ -227,27 +225,29 @@ class P115StrmSyncService:
             stats["errors"] += 1
         finally:
             elapsed = round(time.time() - start_time, 1)
-            status = {
+            await _save_status_to_db({
                 "last_full_sync": int(time.time()),
                 "last_full_sync_stats": stats,
                 "last_full_sync_elapsed": elapsed,
-            }
-            await _save_status_to_db(status)
+            })
             self._running = False
             self._progress = {"stage": "done", **stats}
             logger.info("[全量STRM] 完成: %s 耗时 %.1fs", stats, elapsed)
 
+    # =========================================================================
+    # 增量同步
+    # =========================================================================
+
     async def _do_inc_sync(self):
-        """执行增量同步（只处理 mtime > last_sync_time 的文件）"""
+        """增量同步：只处理上次同步时间之后新增的文件"""
         self._running = True
         start_time = time.time()
-        stats = {"created": 0, "skipped": 0, "removed": 0, "errors": 0}
+        stats = {"created": 0, "skipped": 0, "errors": 0}
         self._progress = {"stage": "scanning", **stats}
 
         try:
             config = await self.get_config()
             saved_status = await _load_status_from_db()
-            # 取上次全量或增量同步时间中的较大值
             last_sync_time = max(
                 saved_status.get("last_full_sync", 0),
                 saved_status.get("last_inc_sync", 0),
@@ -259,7 +259,7 @@ class P115StrmSyncService:
                 return
 
             video_exts = self._get_video_exts(config)
-            link_host = self._get_link_host(config)
+            link_host  = self._get_link_host(config)
             sync_pairs = self._resolve_sync_pairs(config, "inc")
 
             if not sync_pairs:
@@ -268,24 +268,22 @@ class P115StrmSyncService:
 
             for pair in sync_pairs:
                 cloud_path = pair.get("cloud_path", "").strip()
-                strm_root = pair.get("strm_path", "").strip()
+                strm_root  = pair.get("strm_path", "").strip()
                 if not cloud_path or not strm_root:
                     continue
                 start_cid = await self._resolve_cloud_cid(manager, cloud_path)
                 if not start_cid:
                     logger.warning("[增量STRM] 路径无法解析，跳过: %s", cloud_path)
                     continue
-                logger.info("[增量STRM] 开始扫描(last_sync=%d): %s (cid=%s) → %s", last_sync_time, cloud_path, start_cid, strm_root)
-                pair_stats = await self._sync_dir_recursive(
-                    manager=manager,
-                    cid=start_cid,
-                    cloud_path=cloud_path,
-                    strm_root=Path(strm_root),
-                    rel_path=Path("."),
-                    video_exts=video_exts,
-                    link_host=link_host,
-                    full=False,
-                    last_sync_time=last_sync_time,
+                logger.info(
+                    "[增量STRM] 开始扫描(last_sync=%d): %s (cid=%s) → %s",
+                    last_sync_time, cloud_path, start_cid, strm_root,
+                )
+                pair_stats = await asyncio.to_thread(
+                    self._iter_and_write_strm,
+                    manager, start_cid, cloud_path,
+                    Path(strm_root), video_exts, link_host,
+                    from_time=last_sync_time,
                 )
                 for k in stats:
                     stats[k] += pair_stats.get(k, 0)
@@ -296,31 +294,239 @@ class P115StrmSyncService:
             stats["errors"] += 1
         finally:
             elapsed = round(time.time() - start_time, 1)
-            status = {
+            await _save_status_to_db({
                 "last_inc_sync": int(time.time()),
                 "last_inc_sync_stats": stats,
                 "last_inc_sync_elapsed": elapsed,
-            }
-            await _save_status_to_db(status)
+            })
             self._running = False
             self._progress = {"stage": "done", **stats}
             logger.info("[增量STRM] 完成: %s 耗时 %.1fs", stats, elapsed)
 
-    async def _resolve_cloud_cid(self, manager, cloud_path: str) -> str:
-        """将云盘路径解析为 cid（目录 ID）。
-        策略：从根目录 cid='0' 开始，按路径段逐层查找对应目录。
-        若路径为 / 或空，直接返回 '0'（根目录）。
+    # =========================================================================
+    # 核心遍历 + 写 STRM（同步函数，在线程池中执行）
+    # =========================================================================
+
+    def _iter_and_write_strm(
+        self,
+        manager,
+        cid: str,
+        cloud_path: str,
+        strm_root: Path,
+        video_exts: set,
+        link_host: str,
+        from_time: int = 0,
+    ) -> dict:
         """
+        遍历 115 目录树，对每个视频文件写 .strm。
+        优先使用 p115client.tool.iterdir.iter_files_with_path_skim（支持 from_time 过滤）。
+        回退方案：p115client.tool.fs_files.iter_fs_files（逐页列目录，配合 mtime 过滤）。
+
+        参考 emby-toolkit 的 generate_strm_files 和 p115strmhelper 的 full_pull 实现。
+        """
+        stats = {"created": 0, "skipped": 0, "errors": 0}
+        p115_client = manager.adapter._get_p115_client()
+
+        # ── 方案A：iter_files_with_path_skim（p115client >= 0.0.5.6）──────────
+        if p115_client is not None:
+            try:
+                from p115client.tool.iterdir import iter_files_with_path_skim
+                logger.debug("[STRM遍历] 使用 iter_files_with_path_skim cid=%s from_time=%d", cid, from_time)
+                for item in iter_files_with_path_skim(
+                    client=p115_client,
+                    cid=int(cid),
+                    with_ancestors=True,
+                ):
+                    # item 是 dict，含 path/name/pickcode/ctime/mtime/size/is_dir 等
+                    if item.get("is_dir"):
+                        continue
+                    # mtime 过滤（增量时跳过旧文件）
+                    item_mtime = int(item.get("mtime", item.get("ctime", 0)) or 0)
+                    if from_time > 0 and item_mtime <= from_time:
+                        stats["skipped"] += 1
+                        continue
+                    ext = Path(item.get("name", "")).suffix.lstrip(".").lower()
+                    if ext not in video_exts:
+                        stats["skipped"] += 1
+                        continue
+                    pick_code = item.get("pickcode") or item.get("pick_code", "")
+                    if not pick_code:
+                        stats["errors"] += 1
+                        continue
+                    # 计算相对路径：item["path"] 是完整路径，去掉 cloud_path 前缀
+                    item_full_path = item.get("path", "")
+                    rel = self._calc_rel_path(item_full_path, cloud_path, item["name"])
+                    ok = self._write_strm(strm_root, rel, item["name"], pick_code, link_host)
+                    if ok:
+                        stats["created"] += 1
+                    else:
+                        stats["errors"] += 1
+                return stats
+            except ImportError:
+                logger.debug("[STRM遍历] iter_files_with_path_skim 不可用，使用回退方案")
+            except Exception as e:
+                logger.warning("[STRM遍历] iter_files_with_path_skim 出错，使用回退方案: %s", e)
+
+        # ── 方案B：iter_fs_files 回退────────────────────────────────────────
+        if p115_client is not None:
+            try:
+                from p115client.tool.fs_files import iter_fs_files
+                from p115client.tool.attr import normalize_attr
+                logger.debug("[STRM遍历] 使用 iter_fs_files cid=%s from_time=%d", cid, from_time)
+                for data in iter_fs_files(p115_client, cid, cooldown=1.5):
+                    for raw in data.get("data", []):
+                        item = normalize_attr(raw)
+                        if item.get("is_dir"):
+                            continue
+                        item_mtime = int(item.get("mtime", item.get("ctime", 0)) or 0)
+                        if from_time > 0 and item_mtime <= from_time:
+                            stats["skipped"] += 1
+                            continue
+                        ext = Path(item.get("name", "")).suffix.lstrip(".").lower()
+                        if ext not in video_exts:
+                            stats["skipped"] += 1
+                            continue
+                        pick_code = item.get("pickcode") or item.get("pick_code", "")
+                        if not pick_code:
+                            stats["errors"] += 1
+                            continue
+                        item_full_path = item.get("path", "")
+                        rel = self._calc_rel_path(item_full_path, cloud_path, item["name"])
+                        ok = self._write_strm(strm_root, rel, item["name"], pick_code, link_host)
+                        if ok:
+                            stats["created"] += 1
+                        else:
+                            stats["errors"] += 1
+                return stats
+            except ImportError:
+                logger.debug("[STRM遍历] iter_fs_files 不可用，使用webapi回退")
+            except Exception as e:
+                logger.warning("[STRM遍历] iter_fs_files 出错，使用webapi回退: %s", e)
+
+        # ── 方案C：webapi 逐页列目录（p115client 完全不可用时）──────────────
+        logger.debug("[STRM遍历] 使用webapi逐页列目录 cid=%s", cid)
+        import asyncio as _asyncio
+        loop = _asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(
+                self._webapi_walk_and_write(
+                    manager, cid, cloud_path, strm_root,
+                    video_exts, link_host, from_time, stats,
+                )
+            )
+        finally:
+            loop.close()
+        return stats
+
+    def _calc_rel_path(self, item_full_path: str, cloud_path: str, filename: str) -> Path:
+        """
+        计算文件相对于 cloud_path 根目录的相对路径（不含文件名）。
+        例：cloud_path=/影音, item_full_path=/影音/电影/xxx.mkv → rel=电影
+        """
+        cloud_root = "/" + cloud_path.strip("/")
+        full = "/" + item_full_path.strip("/")
+        try:
+            rel_str = Path(full).parent.relative_to(cloud_root)
+        except ValueError:
+            rel_str = Path(".")
+        return Path(rel_str)
+
+    def _write_strm(
+        self, strm_root: Path, rel: Path,
+        filename: str, pick_code: str, link_host: str,
+    ) -> bool:
+        """写 .strm 文件，返回 True 表示成功"""
+        try:
+            strm_dir = strm_root / rel
+            strm_dir.mkdir(parents=True, exist_ok=True)
+            strm_file = strm_dir / Path(filename).with_suffix(".strm").name
+            strm_content = f"{link_host}/p115/play/{pick_code}/{filename}"
+            strm_file.write_text(strm_content, encoding="utf-8")
+            logger.debug("[STRM写入] %s", strm_file)
+            return True
+        except Exception as e:
+            logger.error("[STRM写入] 失败 %s: %s", filename, e)
+            return False
+
+    async def _webapi_walk_and_write(
+        self,
+        manager, cid: str, cloud_path: str,
+        strm_root: Path, video_exts: set,
+        link_host: str, from_time: int, stats: dict,
+        depth: int = 0,
+    ):
+        """webapi 回退方案：递归列目录，带分页，遇到旧文件即停（增量模式）"""
+        if depth > 30:
+            return
+        offset = 0
+        page_size = 100
+        while True:
+            try:
+                entries, total = await manager.adapter.list_files_paged(
+                    cloud_path, cid=cid, offset=offset, limit=page_size,
+                )
+            except Exception as e:
+                logger.error("[STRM遍历] webapi列目录失败 cid=%s: %s", cid, e)
+                stats["errors"] += 1
+                break
+
+            stop_early = False
+            sub_dirs = []
+            for entry in entries:
+                if entry.is_dir:
+                    sub_dirs.append(entry)
+                    continue
+                ext = Path(entry.name).suffix.lstrip(".").lower()
+                if ext not in video_exts:
+                    continue
+                item_mtime = int(entry.mtime or entry.ctime or 0)
+                if from_time > 0 and item_mtime <= from_time:
+                    # 115 按时间倒序，遇到旧文件说明后面都是旧的
+                    stop_early = True
+                    stats["skipped"] += 1
+                    continue
+                if not entry.pick_code:
+                    stats["errors"] += 1
+                    continue
+                rel = self._calc_rel_path(entry.path, cloud_path, entry.name)
+                ok = self._write_strm(strm_root, rel, entry.name, entry.pick_code, link_host)
+                stats["created" if ok else "errors"] += 1
+
+            # 递归处理子目录
+            for sub in sub_dirs:
+                await self._webapi_walk_and_write(
+                    manager, sub.file_id, sub.path,
+                    strm_root, video_exts, link_host, from_time, stats, depth + 1,
+                )
+
+            offset += len(entries)
+            if stop_early or offset >= total or len(entries) < page_size:
+                break
+
+    async def _resolve_cloud_cid(self, manager, cloud_path: str) -> str:
+        """将云盘路径解析为 cid（目录 ID）"""
         cloud_path = cloud_path.strip().strip("/")
         if not cloud_path:
             return "0"
+        # 优先用 p115client（避免自己递归查）
+        p115_client = manager.adapter._get_p115_client()
+        if p115_client is not None:
+            try:
+                from p115client.tool.attr import get_id_to_path
+                cid = await asyncio.to_thread(
+                    get_id_to_path, p115_client, "/" + cloud_path
+                )
+                return str(cid)
+            except Exception as e:
+                logger.debug("[STRM同步] p115client 路径解析失败，改用webapi: %s", e)
+        # 回退：webapi 逐段查
         segments = [s for s in cloud_path.split("/") if s]
         cid = "0"
         current_path = ""
         for seg in segments:
             current_path = f"{current_path}/{seg}"
             try:
-                entries = await manager.adapter.list_files(current_path, cid=cid)
+                entries, _ = await manager.adapter.list_files_paged(current_path, cid=cid, limit=200)
                 found = next((e for e in entries if e.is_dir and e.name == seg), None)
                 if found:
                     cid = found.file_id
@@ -331,74 +537,4 @@ class P115StrmSyncService:
                 logger.error("[STRM同步] 解析路径失败 %s: %s", current_path, e)
                 return ""
         return cid
-
-    async def _sync_dir_recursive(
-        self, manager, cid: str, cloud_path: str,
-        strm_root: Path, rel_path: Path,
-        video_exts: set, link_host: str,
-        full: bool, last_sync_time: int,
-        depth: int = 0,
-    ) -> dict:
-        """递归同步目录（以 cid 为主键，cloud_path 仅用于日志）"""
-        if depth > 30:
-            return {"created": 0, "skipped": 0, "removed": 0, "errors": 0}
-
-        stats = {"created": 0, "skipped": 0, "removed": 0, "errors": 0}
-        try:
-            entries = await manager.adapter.list_files(cloud_path, cid=cid)
-        except Exception as e:
-            logger.error("[STRM同步] 列目录失败 cid=%s path=%s: %s", cid, cloud_path, e)
-            stats["errors"] += 1
-            return stats
-
-        sub_tasks = []
-        for entry in entries:
-            if entry.is_dir:
-                sub_tasks.append(self._sync_dir_recursive(
-                    manager=manager,
-                    cid=entry.file_id,
-                    cloud_path=entry.path,
-                    strm_root=strm_root,
-                    rel_path=rel_path / entry.name,
-                    video_exts=video_exts,
-                    link_host=link_host,
-                    full=full,
-                    last_sync_time=last_sync_time,
-                    depth=depth + 1,
-                ))
-            else:
-                ext = Path(entry.name).suffix.lstrip(".").lower()
-                if ext not in video_exts:
-                    continue
-                mtime = int(entry.mtime) if entry.mtime else 0
-                if not full and mtime <= last_sync_time:
-                    stats["skipped"] += 1
-                    continue
-                if not entry.pick_code:
-                    stats["errors"] += 1
-                    continue
-                # 生成 STRM 文件
-                strm_dir = strm_root / rel_path
-                strm_dir.mkdir(parents=True, exist_ok=True)
-                strm_filename = Path(entry.name).with_suffix(".strm").name
-                strm_file = strm_dir / strm_filename
-                strm_content = f"{link_host}/p115/play/{entry.pick_code}/{entry.name}"
-                try:
-                    strm_file.write_text(strm_content, encoding="utf-8")
-                    stats["created"] += 1
-                    logger.debug("[STRM同步] 生成: %s", strm_file)
-                except Exception as e:
-                    logger.error("[STRM同步] 写文件失败 %s: %s", strm_file, e)
-                    stats["errors"] += 1
-
-        # 并发处理子目录（最多8并发）
-        if sub_tasks:
-            for i in range(0, len(sub_tasks), 8):
-                results = await asyncio.gather(*sub_tasks[i:i+8], return_exceptions=True)
-                for r in results:
-                    if isinstance(r, dict):
-                        for k in stats:
-                            stats[k] += r.get(k, 0)
-
-        return stats
 
