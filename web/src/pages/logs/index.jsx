@@ -3,7 +3,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react'
 import {
-  Card, Select, Button, Space, Tag, Input, Row, Col,
+  Card, Select, Button, Space, Input, Row, Col,
   Typography, Badge, Segmented,
 } from 'antd'
 import {
@@ -12,59 +12,35 @@ import {
 } from '@ant-design/icons'
 import { useTranslation } from 'react-i18next'
 import { systemApi } from '@/apis'
+import { useThemeContext } from '@/ThemeProvider'
+import LevelSegmented, { LEVEL_SHOW_MAP } from '@/components/LevelSegmented'
 
 const { Text } = Typography
 
-// 日志级别配置
-const LEVELS = [
-  { value: '',        label: '全部',    color: 'default' },
-  { value: 'DEBUG',   label: 'DEBUG',   color: 'default' },
-  { value: 'INFO',    label: 'INFO',    color: 'blue'    },
-  { value: 'WARNING', label: 'WARNING', color: 'orange'  },
-  { value: 'ERROR',   label: 'ERROR',   color: 'red'     },
-]
-
 const LEVEL_COLORS = {
-  DEBUG:    '#888888',
-  INFO:     '#1677ff',
-  WARNING:  '#fa8c16',
-  ERROR:    '#ff4d4f',
-  CRITICAL: '#a8071a',
+  DEBUG: '#888888', INFO: '#1677ff', WARNING: '#fa8c16',
+  ERROR: '#ff4d4f', CRITICAL: '#a8071a',
 }
 
 /** 从日志行文本解析级别 */
 function parseLevel(line) {
-  const m = line.match(/\[(DEBUG|INFO|WARNING|ERROR|CRITICAL)\]/)
-  return m ? m[1] : ''
-}
-
-/** 单行日志渲染 */
-const LogLine = ({ line, index }) => {
-  const level = parseLevel(line)
-  const color = LEVEL_COLORS[level] || '#555'
-  return (
-    <div
-      key={index}
-      style={{
-        fontFamily: 'monospace', fontSize: 12, lineHeight: '1.6',
-        padding: '1px 0', borderBottom: '1px solid #f0f0f0',
-        color,
-        wordBreak: 'break-all', whiteSpace: 'pre-wrap',
-      }}
-    >
-      {line}
-    </div>
-  )
+  if (line.includes('[CRITICAL]')) return 'CRITICAL'
+  if (line.includes('[ERROR]'))    return 'ERROR'
+  if (line.includes('[WARNING]') || line.includes('[WARN]')) return 'WARNING'
+  if (line.includes('[INFO]'))     return 'INFO'
+  if (line.includes('[DEBUG]'))    return 'DEBUG'
+  return 'INFO'
 }
 
 export const Tasks = () => {
   const { t } = useTranslation()
+  const { isDark } = useThemeContext()
 
   // ── 模式：realtime=实时SSE, file=历史文件
   const [mode, setMode]   = useState('realtime')
 
-  // ── 级别过滤（前端过滤，不影响后端存储）
-  const [levelFilter, setLevelFilter] = useState('')
+  // ── 三档级别滑动选择器（默认 INFO）
+  const [levelSlider, setLevelSlider] = useState('INFO')
 
   // ── 关键字搜索
   const [keyword, setKeyword] = useState('')
@@ -151,17 +127,13 @@ export const Tasks = () => {
 
   // ── 前端过滤
   const getFilteredLines = (rawLines) => rawLines.filter(line => {
-    if (levelFilter && parseLevel(line) !== levelFilter) return false
+    const enabled = LEVEL_SHOW_MAP[levelSlider]
+    if (!enabled.has(parseLevel(line))) return false
     if (keyword && !line.toLowerCase().includes(keyword.toLowerCase())) return false
     return true
   })
 
   const displayLines = getFilteredLines(mode === 'realtime' ? lines : fileLines)
-
-  const levelOptions = LEVELS.map(l => ({
-    value: l.value,
-    label: <Tag color={l.color} style={{ margin: 0 }}>{l.label}</Tag>,
-  }))
 
   return (
     <Card
@@ -205,15 +177,8 @@ export const Tasks = () => {
             ]}
           />
 
-          {/* 级别过滤 */}
-          <Select
-            value={levelFilter}
-            onChange={setLevelFilter}
-            options={levelOptions}
-            style={{ width: 110 }}
-            size="small"
-            placeholder="全部级别"
-          />
+          {/* 级别过滤 — 三档滑动选择器 */}
+          <LevelSegmented value={levelSlider} onChange={setLevelSlider} isDark={isDark} />
 
           {/* 关键字搜索 */}
           <Input
@@ -272,7 +237,7 @@ export const Tasks = () => {
         <Col>
           <Text type="secondary" style={{ fontSize: 12 }}>
             显示 {displayLines.length} 条
-            {levelFilter ? `（级别: ${levelFilter}）` : '（全部级别）'}
+            {`（级别 ≥ ${levelSlider}）`}
             {keyword ? `（含「${keyword}」）` : ''}
             {mode === 'file'
               ? ' ｜ 历史文件为后台写入的完整 DEBUG 日志'
@@ -297,7 +262,19 @@ export const Tasks = () => {
           ? <Text type="secondary" style={{ fontSize: 12 }}>
               {paused ? '（已暂停，点击「继续」恢复）' : '暂无匹配日志'}
             </Text>
-          : displayLines.map((line, i) => <LogLine key={i} line={line} index={i} />)
+          : displayLines.map((line, i) => {
+              const level = parseLevel(line)
+              const color = LEVEL_COLORS[level] || '#555'
+              return (
+                <div key={i} style={{
+                  fontFamily: 'monospace', fontSize: 12, lineHeight: '1.6',
+                  padding: '1px 0', borderBottom: '1px solid #f0f0f0',
+                  color, wordBreak: 'break-all', whiteSpace: 'pre-wrap',
+                }}>
+                  {line}
+                </div>
+              )
+            })
         }
         <div ref={bottomRef} />
       </div>

@@ -70,18 +70,7 @@ def iter_and_write_strm(
         cid, cloud_path, str(strm_root), from_time, overwrite_mode, api_interval, video_exts,
     )
 
-    # ── 读取 login_app，决定 skim 参数 ──────────────────────────────────────
-    login_app_raw = getattr(getattr(manager.adapter, "_auth", None), "login_app", "") or ""
-    iter_app_for_skim = "web" if login_app_raw in _WEB_APPS_SET else login_app_raw
-    # skim 可用条件：库支持 AND 非 web CK（web CK 走 /os_windows 接口会 errno=99）
-    skim_usable = has_skim and (login_app_raw not in _WEB_APPS_SET)
-
-    logger.debug(
-        "【遍历】Cookie 类型: login_app=%r iter_app=%r skim_usable=%s",
-        login_app_raw, iter_app_for_skim, skim_usable,
-    )
-
-    # ── 尝试导入 p115client 遍历工具 ─────────────────────────────────────────
+    # ── 尝试导入 p115client 遍历工具（必须在 skim_usable 判断之前）────────────
     try:
         from p115client.tool.iterdir import iter_files_with_path_skim, iterdir
         has_skim = True
@@ -93,6 +82,17 @@ def iter_and_write_strm(
         except ImportError:
             logger.error("【遍历】p115client.tool.iterdir 不可用")
             return stats, fscache_batch, strmfile_batch
+
+    # ── 读取 login_app，决定 skim 参数 ──────────────────────────────────────
+    login_app_raw = getattr(getattr(manager.adapter, "_auth", None), "login_app", "") or ""
+    iter_app_for_skim = "web" if login_app_raw in _WEB_APPS_SET else login_app_raw
+    # skim 可用条件：库支持 AND 非 web CK（web CK 走 /os_windows 接口会 errno=99）
+    skim_usable = has_skim and (login_app_raw not in _WEB_APPS_SET)
+
+    logger.debug(
+        "【遍历】Cookie 类型: login_app=%r iter_app=%r skim_usable=%s",
+        login_app_raw, iter_app_for_skim, skim_usable,
+    )
 
     # ── 内部函数：处理单个文件条目 ────────────────────────────────────────────
     def _process_file(item: dict, item_path: str) -> None:

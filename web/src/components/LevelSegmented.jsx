@@ -3,11 +3,12 @@ import { useMemo } from 'react'
 import { Segmented } from 'antd'
 
 // 三档选项及对应的"显示哪些级别"映射
+// CRITICAL / ERROR 在任何档位都强制显示
 export const LEVEL_SLIDER_OPTIONS = ['DEBUG', 'INFO', 'WARNING']
 export const LEVEL_SHOW_MAP = {
-  DEBUG:   new Set(['DEBUG', 'INFO', 'WARNING']),
-  INFO:    new Set(['INFO', 'WARNING']),
-  WARNING: new Set(['WARNING']),
+  DEBUG:   new Set(['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']),
+  INFO:    new Set(['INFO', 'WARNING', 'ERROR', 'CRITICAL']),
+  WARNING: new Set(['WARNING', 'ERROR', 'CRITICAL']),
 }
 
 // 各级别的选中主色（亮/暗主题）
