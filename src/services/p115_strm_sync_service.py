@@ -354,12 +354,12 @@ class P115StrmSyncService:
                 for k in stats:
                     stats[k] += pair_stats.get(k, 0)
                 self._progress = {"stage": "scanning", **stats}
-               # ORM 写入目录树缓存 + STRM 文件记录
-               db_result = await self._save_fscache_and_strmfile(fc_batch, sf_batch)
-               logger.info(
-                   "【全量STRM生成】DB写入完成: FsCache=%d StrmFile=%d",
-                   db_result["fscache"], db_result["strmfile"],
-               )
+                # ORM 写入目录树缓存 + STRM 文件记录
+                db_result = await self._save_fscache_and_strmfile(fc_batch, sf_batch)
+                logger.info(
+                    "【全量STRM生成】DB写入完成: FsCache=%d StrmFile=%d",
+                    db_result["fscache"], db_result["strmfile"],
+                )
 
         except Exception as e:
             logger.error("【全量STRM生成】全量生成 STRM 文件失败: %s", e, exc_info=True)
@@ -444,12 +444,12 @@ class P115StrmSyncService:
                 for k in stats:
                     stats[k] += pair_stats.get(k, 0)
                 self._progress = {"stage": "scanning", **stats}
-               # ORM 写入目录树缓存 + STRM 文件记录
-               db_result = await self._save_fscache_and_strmfile(fc_batch, sf_batch)
-               logger.info(
-                   "【增量STRM生成】DB写入完成: FsCache=%d StrmFile=%d",
-                   db_result["fscache"], db_result["strmfile"],
-               )
+                # ORM 写入目录树缓存 + STRM 文件记录
+                db_result = await self._save_fscache_and_strmfile(fc_batch, sf_batch)
+                logger.info(
+                    "【增量STRM生成】DB写入完成: FsCache=%d StrmFile=%d",
+                    db_result["fscache"], db_result["strmfile"],
+                )
 
         except Exception as e:
             logger.error("【增量STRM生成】增量生成 STRM 文件失败: %s", e, exc_info=True)
@@ -560,11 +560,11 @@ class P115StrmSyncService:
             name       = item.get("name", "")
             pick_code  = item.get("pickcode") or item.get("pick_code") or item.get("pc", "")
             item_mtime = int(item.get("mtime") or item.get("utime") or item.get("t") or 0)
-           file_id    = str(item.get("id") or item.get("file_id") or item.get("fid") or "")
-           parent_id  = str(item.get("pid") or item.get("parent_id") or "")
-           sha1       = item.get("sha") or item.get("sha1") or ""
-           file_size  = int(item.get("s") or item.get("size") or item.get("file_size") or 0)
-           ctime      = str(item.get("t") or item.get("ctime") or "")
+            file_id    = str(item.get("id") or item.get("file_id") or item.get("fid") or "")
+            parent_id  = str(item.get("pid") or item.get("parent_id") or "")
+            sha1       = item.get("sha") or item.get("sha1") or ""
+            file_size  = int(item.get("s") or item.get("size") or item.get("file_size") or 0)
+            ctime      = str(item.get("t") or item.get("ctime") or "")
 
             logger.debug(
                 "【全量STRM生成】处理条目 #%d: name=%r path=%r pickcode=%r mtime=%d keys=%s",
@@ -600,47 +600,47 @@ class P115StrmSyncService:
             result   = self._write_strm(strm_root, rel, name, strm_url, overwrite_mode)
             if result == "created":
                 stats["created"] += 1
-               # 收集 FsCache（文件节点）
-               if file_id:
-                   fscache_batch.append({
-                       "file_id":   file_id,
-                       "parent_id": parent_id,
-                       "name":      name,
-                       "local_path": item_path,
-                       "sha1":      sha1,
-                       "pick_code": pick_code,
-                       "file_size": file_size,
-                       "is_dir":    0,
-                       "mtime":     str(item_mtime),
-                       "ctime":     ctime,
-                   })
-               # 收集 StrmFile 记录
-               _suffix = Path(name).suffix.lower()
-               _stem   = Path(name).stem
-               strm_name = f"{_stem}.iso.strm" if _suffix == ".iso" else f"{_stem}.strm"
-               strmfile_batch.append({
-                   "item_id":     pick_code,
-                   "strm_path":   str(strm_root / rel / strm_name),
-                   "strm_content": strm_url,
-                   "strm_mode":   "p115",
-                   "file_size":   file_size,
-               })
+                # 收集 FsCache（文件节点）
+                if file_id:
+                    fscache_batch.append({
+                        "file_id":   file_id,
+                        "parent_id": parent_id,
+                        "name":      name,
+                        "local_path": item_path,
+                        "sha1":      sha1,
+                        "pick_code": pick_code,
+                        "file_size": file_size,
+                        "is_dir":    0,
+                        "mtime":     str(item_mtime),
+                        "ctime":     ctime,
+                    })
+                # 收集 StrmFile 记录
+                _suffix = Path(name).suffix.lower()
+                _stem   = Path(name).stem
+                strm_name = f"{_stem}.iso.strm" if _suffix == ".iso" else f"{_stem}.strm"
+                strmfile_batch.append({
+                    "item_id":     pick_code,
+                    "strm_path":   str(strm_root / rel / strm_name),
+                    "strm_content": strm_url,
+                    "strm_mode":   "p115",
+                    "file_size":   file_size,
+                })
             elif result == "skipped":
                 stats["skipped"] += 1
-               # skipped 时也更新 FsCache（保持目录树最新）
-               if file_id:
-                   fscache_batch.append({
-                       "file_id":   file_id,
-                       "parent_id": parent_id,
-                       "name":      name,
-                       "local_path": item_path,
-                       "sha1":      sha1,
-                       "pick_code": pick_code,
-                       "file_size": file_size,
-                       "is_dir":    0,
-                       "mtime":     str(item_mtime),
-                       "ctime":     ctime,
-                   })
+                # skipped 时也更新 FsCache（保持目录树最新）
+                if file_id:
+                    fscache_batch.append({
+                        "file_id":   file_id,
+                        "parent_id": parent_id,
+                        "name":      name,
+                        "local_path": item_path,
+                        "sha1":      sha1,
+                        "pick_code": pick_code,
+                        "file_size": file_size,
+                        "is_dir":    0,
+                        "mtime":     str(item_mtime),
+                        "ctime":     ctime,
+                    })
             else:
                 stats["errors"] += 1
 
@@ -785,19 +785,19 @@ class P115StrmSyncService:
                     if sub_cid:
                         sub_dirs.append((sub_cid, item_path))
                         logger.debug("【全量STRM生成】发现子目录: %r cid=%d", item_path, sub_cid)
-                       # 收集目录节点到 FsCache
-                       fscache_batch.append({
-                           "file_id":   str(sub_cid),
-                           "parent_id": str(walk_cid),
-                           "name":      name,
-                           "local_path": item_path,
-                           "sha1":      "",
-                           "pick_code": "",
-                           "file_size": 0,
-                           "is_dir":    1,
-                           "mtime":     "",
-                           "ctime":     "",
-                       })
+                        # 收集目录节点到 FsCache
+                        fscache_batch.append({
+                            "file_id":   str(sub_cid),
+                            "parent_id": str(walk_cid),
+                            "name":      name,
+                            "local_path": item_path,
+                            "sha1":      "",
+                            "pick_code": "",
+                            "file_size": 0,
+                            "is_dir":    1,
+                            "mtime":     "",
+                            "ctime":     "",
+                        })
                 else:
                     _process_file(item, item_path)
             for idx, (sub_cid, sub_path) in enumerate(sub_dirs):
@@ -1064,26 +1064,26 @@ class P115StrmSyncService:
 
         p115_client = manager.adapter._get_p115_client()
 
-       # ── 方案0（优先）：查 P115FsCache 本地缓存 ───────────────────────────
-       # 遍历写入后命中率极高，直接返回，节省一次 API 调用
-       local_path_key = "/" + cloud_path
-       try:
-           async with get_async_session_local() as db:
-               result = await db.execute(
-                   select(P115FsCache.file_id).where(
-                       P115FsCache.local_path == local_path_key,
-                       P115FsCache.is_dir == 1,
-                   )
-               )
-               cached_cid = result.scalar()
-               if cached_cid:
-                   logger.debug(
-                       "【全量STRM生成】_resolve_cloud_cid: FsCache 命中 %r → cid=%s",
-                       cloud_path, cached_cid,
-                   )
-                   return str(cached_cid)
-       except Exception as e:
-           logger.debug("【全量STRM生成】FsCache 查询失败，走 API: %s", e)
+        # ── 方案0（优先）：查 P115FsCache 本地缓存 ───────────────────────────
+        # 遍历写入后命中率极高，直接返回，节省一次 API 调用
+        local_path_key = "/" + cloud_path
+        try:
+            async with get_async_session_local() as db:
+                result = await db.execute(
+                    select(P115FsCache.file_id).where(
+                        P115FsCache.local_path == local_path_key,
+                        P115FsCache.is_dir == 1,
+                    )
+                )
+                cached_cid = result.scalar()
+                if cached_cid:
+                    logger.debug(
+                        "【全量STRM生成】_resolve_cloud_cid: FsCache 命中 %r → cid=%s",
+                        cloud_path, cached_cid,
+                    )
+                    return str(cached_cid)
+        except Exception as e:
+            logger.debug("【全量STRM生成】FsCache 查询失败，走 API: %s", e)
 
         # 读取 login_app，决定接口（对齐 _iter_and_write_strm 的 iter_app 逻辑）
         login_app = getattr(getattr(manager.adapter, "_auth", None), "login_app", "web") or "web"
