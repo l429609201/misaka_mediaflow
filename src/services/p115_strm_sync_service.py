@@ -535,19 +535,30 @@ class P115StrmSyncService:
         #   - 不需要手动递归，不需要管子目录
         #   - 每个文件有 item["path"]（完整云盘绝对路径）直接使用
         #   - 风控最小：比 iterdir 递归少几十倍 API 调用
+        #
+        # ⚠️  iter_files_with_path_skim 实际签名（p115client 0.0.8.4.6）：
+        #       iter_files_with_path_skim(client, cid=0, escape=True,
+        #           with_ancestors=False, id_to_dirnode=None, path_already=False,
+        #           max_workers=None, max_files=0, max_dirs=0, app='android',
+        #           async_=False, **request_kwargs)
+        #   - 没有 cooldown 参数！传 cooldown 会进入 **request_kwargs 导致请求失败
+        #   - headers 通过 **request_kwargs 传递是正确的
+        #   - 只返回文件（非目录），item["path"] 携带完整云盘路径
         if has_skim:
             logger.info(
                 "【全量STRM生成】使用 iter_files_with_path_skim 遍历 cid=%s cloud_path=%r "
-                "cooldown=%.1fs overwrite=%s（iOS UA + app=ios 规避405）",
-                cid, cloud_path, api_interval, overwrite_mode,
+                "overwrite=%s（iOS UA + app=ios 规避405）",
+                cid, cloud_path, overwrite_mode,
             )
             try:
                 iter_kwargs = {
                     "cid": int(cid),
-                    "cooldown": api_interval,         # 分页请求间隔
-                    **self._ios_ua_kwargs(),           # iOS UA + app="ios"
+                    # ✅ 不传 cooldown（该函数无此参数，传入会进 request_kwargs 导致 API 报错）
+                    **self._ios_ua_kwargs(),           # headers=iOS UA + app="ios"
                 }
                 for item in iter_files_with_path_skim(p115_client, **iter_kwargs):
+                    # iter_files_with_path_skim 只返回文件，不返回目录
+                    # 但保留 is_dir 检查作为防御性代码
                     if item.get("is_dir"):
                         continue
                     item_path = item.get("path", "")
@@ -563,8 +574,9 @@ class P115StrmSyncService:
                 return stats
             except Exception as e:
                 logger.warning(
-                    "【全量STRM生成】iter_files_with_path_skim 失败: %s，"
-                    "回退到 iterdir 递归方案", e,
+                    "【全量STRM生成】iter_files_with_path_skim 失败: %s (type=%s)，"
+                    "回退到 iterdir 递归方案", e, type(e).__name__,
+                    exc_info=True,
                 )
                 # 重置 stats，用旧方案重跑
                 stats = {"created": 0, "skipped": 0, "errors": 0}
@@ -825,13 +837,14 @@ class P115StrmSyncService:
 
                 segments = [s for s in cloud_path.split("/") if s]
                 cid = await asyncio.to_thread(_resolve_by_iterdir, segments)
-                logger.debug("【全量STRM生成】iterdir 逐级解析 %r → cid=%s (app=%s)",
-                             cloud_path, cid, iter_app)
+                logger.info("【全量STRM生成】iterdir 逐级解析 %r → cid=%s (app=%s)",
+                            cloud_path, cid, iter_app)
                 return cid
             except ImportError:
-                logger.debug("【全量STRM生成】iterdir 不可用，尝试 fs_dir_getid")
+                logger.warning("【全量STRM生成】iterdir 不可用（ImportError），尝试 fs_dir_getid")
             except Exception as e:
-                logger.warning("【全量STRM生成】iterdir 路径解析失败: %s，尝试备用方案", e)
+                logger.warning("【全量STRM生成】iterdir 路径解析失败: %s (type=%s)，尝试备用方案",
+                               e, type(e).__name__, exc_info=True)
 
         # ── 方案B：fs_dir_getid（仅 web CK，iOS/Android 会 405）───────────
         if p115_client is not None and iter_app == "web":
