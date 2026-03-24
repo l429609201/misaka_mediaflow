@@ -166,10 +166,41 @@ def get_admin_password_hash() -> str:
     return _admin_password_hash
 
 
+async def reload_admin_password_from_db() -> Optional[str]:
+    """
+    实时从 user 表读取最新密码 hash，更新内存缓存并返回。
+    用于登录失败时兜底：外部脚本(reset_password)改了数据库后
+    无需重启服务即可生效。不受配置文件写死密码影响。
+    """
+    global _admin_password_hash
+    try:
+        from src.db import get_async_session_local
+        from src.db.models import User
+        from sqlalchemy import select
+        async with get_async_session_local() as db:
+            result = await db.execute(
+                select(User).where(User.username == ADMIN_USERNAME)
+            )
+            user = result.scalars().first()
+            if user and user.password_hash:
+                _admin_password_hash = user.password_hash
+                logger.debug("管理员密码已从数据库实时刷新")
+                return _admin_password_hash
+    except Exception as e:
+        logger.warning("实时刷新密码失败: %s", e)
+    return None
+
+
 async def update_admin_password(new_password: str):
     """更新管理员密码（异步写入 user 表）"""
     global _admin_password_hash
     _admin_password_hash = hash_password(new_password)
+    # 清除配置文件的"写死密码"优先级，让内存以此次修改为准
+    # 之后 reload_admin_password_from_db 也能从数据库读到最新值
+    try:
+        settings.security.admin_password = ""
+    except Exception:
+        pass
     try:
         from src.db import get_async_session_local
         from src.db.models import User

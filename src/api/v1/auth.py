@@ -14,6 +14,7 @@ from src.core.security import (
     verify_token,
     get_api_token,
     _check_ip_whitelist_async,
+    reload_admin_password_from_db,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,17 @@ async def login(payload: LoginPayload):
 
     password_hash = get_admin_password_hash()
     if not verify_password(payload.password, password_hash):
+        # 内存 hash 对不上 → 实时从数据库拉一次最新 hash 再试
+        # 场景：reset_password 脚本改了数据库 / 没有配置文件写死密码时有效
+        fresh_hash = await reload_admin_password_from_db()
+        if fresh_hash and verify_password(payload.password, fresh_hash):
+            logger.info("管理员登录成功（数据库实时刷新）: %s", payload.username)
+            token = create_jwt_token(payload.username)
+            return {
+                "token": token,
+                "token_type": "bearer",
+                "username": payload.username,
+            }
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户名或密码错误")
 
     token = create_jwt_token(payload.username)
