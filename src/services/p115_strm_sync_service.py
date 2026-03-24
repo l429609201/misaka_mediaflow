@@ -589,12 +589,18 @@ class P115StrmSyncService:
         login_app_raw = getattr(getattr(manager.adapter, "_auth", None), "login_app", "web") or "web"
         iter_app_for_skim = "web" if login_app_raw in _WEB_APPS_SET else login_app_raw
 
+        # ⚠️ iter_files_with_path_skim 内部走 download_files_app → /os_windows/ufile/downfiles
+        # 该端点是 Windows 客户端专用接口，web CK 访问返回 errno=99（请重新登录）
+        # 因此 web CK 必须完全跳过 skim，直接使用 iterdir 递归
+        skim_usable = has_skim and (iter_app_for_skim not in _WEB_APPS_SET)
+
         logger.debug(
-            "【全量STRM生成】Cookie 类型检测: login_app_raw=%r → iter_app_for_skim=%r",
-            login_app_raw, iter_app_for_skim,
+            "【全量STRM生成】Cookie 类型检测: login_app_raw=%r → iter_app_for_skim=%r, "
+            "skim_usable=%s (web CK 不可用 skim，会被 errno=99 拒绝)",
+            login_app_raw, iter_app_for_skim, skim_usable,
         )
 
-        if has_skim:
+        if skim_usable:
             logger.info(
                 "【全量STRM生成】使用 iter_files_with_path_skim 遍历 cid=%s cloud_path=%r "
                 "app=%s overwrite=%s",
@@ -653,14 +659,15 @@ class P115StrmSyncService:
                 stats = {"created": 0, "skipped": 0, "errors": 0}
                 scan_count = 0
 
-        # ══ 方案二：iterdir 递归（兜底，CK 类型不支持 skim 时使用）════════════
+        # ══ 方案二：iterdir 递归（web CK 直接走此路径；非 web CK skim 失败后回退）════
         # 根据 login_app 动态选择接口（Web CK 用 web，iOS CK 用 ios）
         login_app = getattr(getattr(manager.adapter, "_auth", None), "login_app", "web") or "web"
         _WEB_APPS = {"", "web", "desktop", "harmony"}
         iter_app  = "web" if login_app in _WEB_APPS else login_app
+        reason = "web CK 不支持 skim（errno=99），直接走 iterdir" if login_app in _WEB_APPS else "skim 失败，回退到 iterdir"
         logger.info(
-            "【全量STRM生成】使用 iterdir 递归遍历 cid=%s cloud_path=%r iter_app=%s overwrite=%s",
-            cid, cloud_path, iter_app, overwrite_mode,
+            "【全量STRM生成】使用 iterdir 递归遍历 cid=%s cloud_path=%r iter_app=%s overwrite=%s (%s)",
+            cid, cloud_path, iter_app, overwrite_mode, reason,
         )
 
         def _walk(walk_cid: int, walk_path: str, depth: int = 0):
