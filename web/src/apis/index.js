@@ -145,4 +145,18 @@ export const p115StrmApi = {
     sourcePaths?.length ? { source_paths: sourcePaths } : {}),
 }
 
+// ==================== 任务中心 ====================
+export const tasksApi = {
+  // 分页查询历史任务（支持按分类/状态过滤）
+  list: (params) => api.get('/tasks', { params }),
+  // 当前运行中任务快照
+  running: () => api.get('/tasks/running'),
+  // 单任务详情
+  get: (id) => api.get(`/tasks/${id}`),
+  // 删除单个任务记录
+  remove: (id) => api.delete(`/tasks/${id}`),
+  // 批量清除已完成/失败任务
+  clear: (params) => api.delete('/tasks', { params }),
+}
+
 

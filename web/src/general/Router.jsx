@@ -16,7 +16,7 @@ import Classify from '@/pages/classify/index.jsx'
 import { RealtimeSubtitle } from '@/pages/realtime-subtitle/index.jsx'
 import P115 from '@/pages/media-proxy/index.jsx'
 import SearchSource from '@/pages/search-source/index.jsx'
-import Tasks from '@/pages/logs/index.jsx'
+import Tasks from '@/pages/tasks/index.jsx'
 import Setting from '@/pages/setting/index.jsx'
 
 // Auth guard — 调 /auth/verify 验证凭证（JWT / IP白名单自动登录）

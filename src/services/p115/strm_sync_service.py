@@ -17,6 +17,7 @@ from src.services.p115.modules import (
     iter_and_write_strm, resolve_cloud_cid,
     save_fscache_and_strmfile,
 )
+from src.services.task_manager import get_task_manager
 
 logger = logging.getLogger(__name__)
 
@@ -86,12 +87,20 @@ class P115StrmSyncService:
         start_time = time.time()
         stats = {"created": 0, "skipped": 0, "errors": 0}
         self._progress = {"stage": "scanning", **stats}
+        tm = get_task_manager()
+        task_id = await tm.create_task(
+            task_name="全量 STRM 同步",
+            task_category="p115_strm",
+            task_type="full_sync",
+            triggered_by="manual",
+        )
 
         try:
             config         = await self.get_config()
             manager        = _get_manager()
             if not manager.enabled or not manager.ready:
                 logger.warning("【全量STRM生成】115 未启用或未就绪")
+                await tm.complete_task(task_id, stats, error_message="115 未启用或未就绪")
                 return
 
             video_exts     = get_video_exts(config)
@@ -109,6 +118,7 @@ class P115StrmSyncService:
 
             if not sync_pairs:
                 logger.warning("【全量STRM生成】未配置同步路径对")
+                await tm.complete_task(task_id, stats, error_message="未配置同步路径对")
                 return
 
             for pair in sync_pairs:
@@ -136,6 +146,7 @@ class P115StrmSyncService:
                 for k in stats:
                     stats[k] += pair_stats.get(k, 0)
                 self._progress = {"stage": "scanning", **stats}
+                tm.update_progress(task_id, "running", stats)
 
                 db_result = await save_fscache_and_strmfile(fc_batch, sf_batch)
                 logger.info("【全量STRM生成】DB写入: FsCache=%d StrmFile=%d",
@@ -144,6 +155,9 @@ class P115StrmSyncService:
         except Exception as e:
             logger.error("【全量STRM生成】失败: %s", e, exc_info=True)
             stats["errors"] += 1
+            await tm.complete_task(task_id, stats, error_message=str(e))
+        else:
+            await tm.complete_task(task_id, stats)
         finally:
             elapsed = round(time.time() - start_time, 1)
             await save_strm_status({
@@ -163,6 +177,13 @@ class P115StrmSyncService:
         start_time = time.time()
         stats = {"created": 0, "skipped": 0, "errors": 0}
         self._progress = {"stage": "scanning", **stats}
+        tm = get_task_manager()
+        task_id = await tm.create_task(
+            task_name="增量 STRM 同步",
+            task_category="p115_strm",
+            task_type="inc_sync",
+            triggered_by="manual",
+        )
 
         try:
             config         = await self.get_config()
@@ -174,6 +195,7 @@ class P115StrmSyncService:
             manager        = _get_manager()
             if not manager.enabled or not manager.ready:
                 logger.warning("【增量STRM生成】115 未启用或未就绪")
+                await tm.complete_task(task_id, stats, error_message="115 未启用或未就绪")
                 return
 
             video_exts    = get_video_exts(config)
@@ -186,6 +208,7 @@ class P115StrmSyncService:
 
             if not sync_pairs:
                 logger.warning("【增量STRM生成】未配置同步路径对")
+                await tm.complete_task(task_id, stats, error_message="未配置同步路径对")
                 return
 
             logger.info("【增量STRM生成】last_sync=%d pairs=%d", last_sync_time, len(sync_pairs))
@@ -215,6 +238,7 @@ class P115StrmSyncService:
                 for k in stats:
                     stats[k] += pair_stats.get(k, 0)
                 self._progress = {"stage": "scanning", **stats}
+                tm.update_progress(task_id, "running", stats)
 
                 db_result = await save_fscache_and_strmfile(fc_batch, sf_batch)
                 logger.info("【增量STRM生成】DB写入: FsCache=%d StrmFile=%d",
@@ -223,6 +247,9 @@ class P115StrmSyncService:
         except Exception as e:
             logger.error("【增量STRM生成】失败: %s", e, exc_info=True)
             stats["errors"] += 1
+            await tm.complete_task(task_id, stats, error_message=str(e))
+        else:
+            await tm.complete_task(task_id, stats)
         finally:
             elapsed = round(time.time() - start_time, 1)
             await save_strm_status({
