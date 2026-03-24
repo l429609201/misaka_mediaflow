@@ -150,14 +150,27 @@ class P115StrmSyncService:
         return _DEFAULT_VIDEO_EXTS
 
     def _get_link_host(self, config: dict) -> str:
-        """获取 STRM 链接地址（优先配置项，回退 external_url / go_port）"""
+        """获取 STRM 链接地址（优先配置项，回退 external_url / 主服务 port）
+
+        支持两种格式：
+          - 完整 URL：http://192.168.1.100:7789  → 原样返回（去掉末尾斜杠）
+          - 路径前缀：/ctl/115open              → 原样返回（去掉末尾斜杠）
+            用于反代场景，模板写 {{ base_url }}/p115/play/{{ pickcode }}/{{ file_name }}
+            生成结果如：/ctl/115open/p115/play/abc123/movie.mkv
+
+        Fallback 优先级（均无配置时）：
+          1. external_url（config.yaml 中的外部访问地址）
+          2. http://127.0.0.1:{port}  （主服务端口 7789，不是 go_port 9906）
+        """
         host = config.get("strm_link_host", "").strip().rstrip("/")
+        if host:
+            # 路径形式（以 / 开头）或完整 URL，直接返回
+            return host
+        from src.core.config import settings
+        host = (settings.server.external_url or "").rstrip("/")
         if not host:
-            from src.core.config import settings
-            host = (settings.server.external_url or "").rstrip("/")
-        if not host:
-            from src.core.config import settings
-            host = f"http://127.0.0.1:{settings.server.go_port}"
+            # 默认用主服务端口（7789），不是 Go 反代端口（9906）
+            host = f"http://127.0.0.1:{settings.server.port}"
         return host
 
     @staticmethod
