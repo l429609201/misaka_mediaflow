@@ -429,6 +429,27 @@ class P115StrmSyncService:
     # 核心遍历 + 写 STRM（同步函数，在线程池中执行）
     # =========================================================================
 
+    # ── iOS UA（参考 p115strmhelper get_ios_ua_app，走 proapi.115.com 规避405风控）──
+    _IOS_UA = (
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 18_2_1 like Mac OS X) "
+        "AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 "
+        "MicroMessenger/8.0.53(0x18003531) NetType/WIFI Language/zh_CN"
+    )
+
+    @classmethod
+    def _ios_ua_kwargs(cls) -> dict:
+        """
+        返回 iOS UA + app="ios" 参数包。
+        参考 p115strmhelper configer.get_ios_ua_app()：
+          - headers user-agent 走 iOS UA，让 115 路由到 proapi.115.com 端点
+          - app="ios" 告知 p115client 使用 iOS 专用接口（RSA加密直链接口）
+        两者缺一不可：只改 UA 还会走 web 接口，只改 app 但 UA 是 web 会 405。
+        """
+        return {
+            "headers": {"user-agent": cls._IOS_UA},
+            "app": "ios",
+        }
+
     def _iter_and_write_strm(
         self,
         manager,
@@ -443,13 +464,14 @@ class P115StrmSyncService:
         api_interval: float = 1.0,
     ) -> dict:
         """
-        遍历 115 目录树（递归），对每个视频文件写 .strm。
+        遍历 115 目录树，对每个视频文件写 .strm。
 
-        使用 iterdir 手动递归遍历整棵目录树，自己维护完整路径：
-          - iterdir 只列当前目录一层（无递归），但结构简单、兼容所有 CK 类型
-          - 每层目录遍历后，对子目录递归调用，拼接路径
-          - 完整路径由我们自己构建，不依赖接口返回的 path 字段
-          - cooldown 由 api_interval 配置控制
+        ⭐ 核心改造：参考 p115strmhelper，改用 iter_files_with_path_skim 替代 iterdir 递归：
+          - iter_files_with_path_skim：单次迭代直接拿整棵树所有文件，内部自动处理分页和子目录
+          - 每个 item 携带 item["path"] 完整云盘路径，无需我们自己拼路径
+          - 搭配 iOS UA + app="ios" 规避 405 风控，走 proapi.115.com 端点
+          - cooldown 控制分页间隔（p115strmhelper 用 1.5s，我们跟随用户 api_interval 配置）
+          - 失败时回退到 iterdir 递归（老方案兜底）
 
         overwrite_mode: "skip"=跳过已存在, "overwrite"=覆盖已存在
         """
@@ -460,48 +482,42 @@ class P115StrmSyncService:
             logger.error("【全量STRM生成】p115_client 不可用，无法同步")
             return stats
 
-        # 根据 login_app 动态选择接口（避免 CK 类型不匹配导致 405 风控）
-        login_app = getattr(getattr(manager.adapter, "_auth", None), "login_app", "web") or "web"
-        _WEB_APPS = {"", "web", "desktop", "harmony"}
-        iter_app = "web" if login_app in _WEB_APPS else login_app
-        logger.info("【全量STRM生成】开始遍历 cid=%s cloud_path=%r iter_app=%s overwrite=%s",
-                    cid, cloud_path, iter_app, overwrite_mode)
-
-        # cloud_path_full：遍历根的完整云盘路径，用于拼接子路径
         cloud_path_full = "/" + cloud_path.strip("/")
         scan_count = 0
 
+        # ── 尝试导入 iter_files_with_path_skim ────────────────────────────────
         try:
-            from p115client.tool.iterdir import iterdir
+            from p115client.tool.iterdir import iter_files_with_path_skim, iterdir
+            has_skim = True
         except ImportError:
-            logger.error("【全量STRM生成】p115client.tool.iterdir 不可用")
-            return stats
+            try:
+                from p115client.tool.iterdir import iterdir
+                has_skim = False
+            except ImportError:
+                logger.error("【全量STRM生成】p115client.tool.iterdir 不可用")
+                return stats
 
+        # ── _process_file：处理单个文件条目 ───────────────────────────────────
         def _process_file(item: dict, item_path: str):
-            """处理单个文件条目，写 STRM，更新 stats"""
             nonlocal scan_count
             scan_count += 1
-            name      = item.get("name", "")
-            pick_code = item.get("pickcode") or item.get("pick_code") or item.get("pc", "")
+            name       = item.get("name", "")
+            pick_code  = item.get("pickcode") or item.get("pick_code") or item.get("pc", "")
             item_mtime = int(item.get("mtime") or item.get("utime") or item.get("t") or 0)
 
             if from_time > 0 and item_mtime <= from_time:
-                logger.debug("【全量STRM生成】跳过旧文件(mtime=%d <= from_time=%d): %s",
-                             item_mtime, from_time, name)
                 stats["skipped"] += 1
                 return
             ext = Path(name).suffix.lstrip(".").lower()
             if ext not in video_exts:
-                logger.debug("【全量STRM生成】跳过非视频文件: %s", name)
                 stats["skipped"] += 1
                 return
             if not pick_code:
-                logger.error("【全量STRM生成】%s 不存在 pickcode 值，无法生成 STRM 文件", name)
+                logger.error("【全量STRM生成】%s 不存在 pickcode，跳过", name)
                 stats["errors"] += 1
                 return
-            # 参考 p115strmhelper：pickcode 必须是 17 位纯字母数字
             if not (len(pick_code) == 17 and pick_code.isalnum()):
-                logger.error("【全量STRM生成】错误的 pickcode 值 %r，跳过: %s", pick_code, name)
+                logger.error("【全量STRM生成】pickcode 格式错误 %r，跳过: %s", pick_code, name)
                 stats["errors"] += 1
                 return
             rel      = self._calc_rel_path(item_path, cloud_path)
@@ -514,43 +530,85 @@ class P115StrmSyncService:
             else:
                 stats["errors"] += 1
 
+        # ══ 方案一：iter_files_with_path_skim（推荐，参考 p115strmhelper）═══════
+        # 原理：p115client 内部一次拉整棵树，我们只消费迭代器输出
+        #   - 不需要手动递归，不需要管子目录
+        #   - 每个文件有 item["path"]（完整云盘绝对路径）直接使用
+        #   - 风控最小：比 iterdir 递归少几十倍 API 调用
+        if has_skim:
+            logger.info(
+                "【全量STRM生成】使用 iter_files_with_path_skim 遍历 cid=%s cloud_path=%r "
+                "cooldown=%.1fs overwrite=%s（iOS UA + app=ios 规避405）",
+                cid, cloud_path, api_interval, overwrite_mode,
+            )
+            try:
+                iter_kwargs = {
+                    "cid": int(cid),
+                    "cooldown": api_interval,         # 分页请求间隔
+                    **self._ios_ua_kwargs(),           # iOS UA + app="ios"
+                }
+                for item in iter_files_with_path_skim(p115_client, **iter_kwargs):
+                    if item.get("is_dir"):
+                        continue
+                    item_path = item.get("path", "")
+                    if not item_path:
+                        # 极少数情况下 path 缺失，用 name 兜底
+                        name = item.get("name", "")
+                        item_path = f"{cloud_path_full}/{name}"
+                    _process_file(item, item_path)
+                logger.info(
+                    "【全量STRM生成】iter_files_with_path_skim 完成，扫描 %d 个文件，stats=%s",
+                    scan_count, stats,
+                )
+                return stats
+            except Exception as e:
+                logger.warning(
+                    "【全量STRM生成】iter_files_with_path_skim 失败: %s，"
+                    "回退到 iterdir 递归方案", e,
+                )
+                # 重置 stats，用旧方案重跑
+                stats = {"created": 0, "skipped": 0, "errors": 0}
+                scan_count = 0
+
+        # ══ 方案二：iterdir 递归（兜底，CK 类型不支持 skim 时使用）════════════
+        # 根据 login_app 动态选择接口（Web CK 用 web，iOS CK 用 ios）
+        login_app = getattr(getattr(manager.adapter, "_auth", None), "login_app", "web") or "web"
+        _WEB_APPS = {"", "web", "desktop", "harmony"}
+        iter_app  = "web" if login_app in _WEB_APPS else login_app
+        logger.info(
+            "【全量STRM生成】使用 iterdir 递归遍历 cid=%s cloud_path=%r iter_app=%s overwrite=%s",
+            cid, cloud_path, iter_app, overwrite_mode,
+        )
+
         def _walk(walk_cid: int, walk_path: str, depth: int = 0):
-            """递归遍历：iterdir 列当前层，文件直接处理，目录递归进入"""
             nonlocal scan_count
             if depth > 50:
-                logger.warning("【全量STRM生成】目录层级超过50层，停止递归: %s", walk_path)
+                logger.warning("【全量STRM生成】目录层级超过50层，停止: %s", walk_path)
                 return
-
-            # 带重试的 iterdir 调用（参考 p115strmhelper: 3次重试 + 指数退避）
             items = None
             for attempt in range(3):
                 try:
                     items = list(iterdir(client=p115_client, cid=walk_cid,
                                          cooldown=api_interval, app=iter_app))
-                    break  # 成功
+                    break
                 except Exception as e:
                     err_str = str(e) or repr(e)
                     if attempt < 2:
-                        wait = 5 * (attempt + 1)  # 5s, 10s
+                        wait = 5 * (attempt + 1)
                         logger.warning(
-                            "【全量STRM生成】iterdir 失败(重试%d/3) cid=%s path=%s: %s，%ds后重试",
-                            attempt + 1, walk_cid, walk_path, err_str, wait,
+                            "【全量STRM生成】iterdir 失败(重试%d/3) path=%s: %s，%ds后重试",
+                            attempt + 1, walk_path, err_str, wait,
                         )
                         time.sleep(wait)
                     else:
-                        logger.error(
-                            "【全量STRM生成】iterdir 失败(重试耗尽) cid=%s path=%s: %s",
-                            walk_cid, walk_path, err_str,
-                        )
+                        logger.error("【全量STRM生成】iterdir 失败(重试耗尽) path=%s: %s", walk_path, err_str)
                         stats["errors"] += 1
                         return
-
             if items is None:
-                return  # 不应该到这里，但防御一下
-
+                return
             sub_dirs = []
             for item in items:
-                name     = item.get("name", "")
+                name = item.get("name", "")
                 if not name:
                     continue
                 item_path = f"{walk_path}/{name}"
@@ -560,18 +618,13 @@ class P115StrmSyncService:
                         sub_dirs.append((sub_cid, item_path))
                 else:
                     _process_file(item, item_path)
-
-            # 先处理完当前层文件，再递归子目录
-            # ⭐ 目录间加冷却，间隔由用户配置的 api_interval 控制
             for idx, (sub_cid, sub_path) in enumerate(sub_dirs):
-                logger.debug("【全量STRM生成】进入子目录: %s (cid=%s)", sub_path, sub_cid)
                 if idx > 0:
                     time.sleep(api_interval)
                 _walk(sub_cid, sub_path, depth + 1)
 
         _walk(int(cid), cloud_path_full)
-        logger.info("【全量STRM生成】iterdir 递归遍历完成，共扫描 %d 个文件，stats=%s",
-                    scan_count, stats)
+        logger.info("【全量STRM生成】iterdir 递归完成，扫描 %d 个文件，stats=%s", scan_count, stats)
         return stats
 
     def _calc_rel_path(self, item_full_path: str, cloud_path: str) -> Path:
