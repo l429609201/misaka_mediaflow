@@ -73,16 +73,27 @@ async def verify(request: Request):
             return {"valid": True, "username": ADMIN_USERNAME, "method": "api_token"}
 
     # 2. IP 白名单 → 自动签发 JWT Token
-    client_ip = request.client.host if request.client else ""
-    if await _check_ip_whitelist_async(client_ip):
-        token = create_jwt_token(ADMIN_USERNAME)
-        logger.info("白名单 IP %s 自动登录", client_ip)
-        return {
-            "valid": True,
-            "username": ADMIN_USERNAME,
-            "method": "whitelist",
-            "token": token,
-        }
+    # 优先从反代头取真实 IP（Nginx/Traefik 等会注入这些头）
+    tcp_ip = request.client.host if request.client else ""
+    xff = request.headers.get("x-forwarded-for", "")
+    xri = request.headers.get("x-real-ip", "")
+    # X-Forwarded-For 可能是逗号分隔的链路，取最左边（最原始客户端）
+    real_ip = xff.split(",")[0].strip() if xff else (xri.strip() if xri else tcp_ip)
+
+    # 逐个候选 IP 检查白名单（TCP直连IP / X-Real-IP / XFF首个IP）
+    candidates = list(dict.fromkeys(filter(None, [real_ip, tcp_ip])))
+    logger.debug("白名单检查 candidates=%s xff=%r xri=%r tcp=%s", candidates, xff, xri, tcp_ip)
+
+    for ip in candidates:
+        if await _check_ip_whitelist_async(ip):
+            token = create_jwt_token(ADMIN_USERNAME)
+            logger.info("白名单 IP %s 自动登录（来源: %s）", ip, "xff" if ip == real_ip and xff else "tcp")
+            return {
+                "valid": True,
+                "username": ADMIN_USERNAME,
+                "method": "whitelist",
+                "token": token,
+            }
 
     return {"valid": False}
 
