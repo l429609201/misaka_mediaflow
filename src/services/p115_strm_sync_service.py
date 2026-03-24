@@ -484,16 +484,37 @@ class P115StrmSyncService:
 
         def _walk(walk_cid: int, walk_path: str, depth: int = 0):
             """递归遍历：iterdir 列当前层，文件直接处理，目录递归进入"""
+            nonlocal scan_count
             if depth > 50:
                 logger.warning("【全量STRM生成】目录层级超过50层，停止递归: %s", walk_path)
                 return
-            try:
-                items = list(iterdir(client=p115_client, cid=walk_cid,
-                                     cooldown=1, app=iter_app))
-            except Exception as e:
-                logger.warning("【全量STRM生成】iterdir 失败 cid=%s path=%s: %s",
-                               walk_cid, walk_path, e)
-                return
+
+            # 带重试的 iterdir 调用（参考 p115strmhelper: 3次重试 + 指数退避）
+            items = None
+            for attempt in range(3):
+                try:
+                    items = list(iterdir(client=p115_client, cid=walk_cid,
+                                         cooldown=2, app=iter_app))
+                    break  # 成功
+                except Exception as e:
+                    err_str = str(e) or repr(e)
+                    if attempt < 2:
+                        wait = 5 * (attempt + 1)  # 5s, 10s
+                        logger.warning(
+                            "【全量STRM生成】iterdir 失败(重试%d/3) cid=%s path=%s: %s，%ds后重试",
+                            attempt + 1, walk_cid, walk_path, err_str, wait,
+                        )
+                        time.sleep(wait)
+                    else:
+                        logger.error(
+                            "【全量STRM生成】iterdir 失败(重试耗尽) cid=%s path=%s: %s",
+                            walk_cid, walk_path, err_str,
+                        )
+                        stats["errors"] += 1
+                        return
+
+            if items is None:
+                return  # 不应该到这里，但防御一下
 
             sub_dirs = []
             for item in items:
@@ -508,9 +529,12 @@ class P115StrmSyncService:
                 else:
                     _process_file(item, item_path)
 
-            # 先处理完当前层文件，再递归子目录（BFS 风格，便于调试）
-            for sub_cid, sub_path in sub_dirs:
+            # 先处理完当前层文件，再递归子目录
+            # ⭐ 关键：目录间加冷却，防止 115 API 风控（参考 p115strmhelper cooldown=2）
+            for idx, (sub_cid, sub_path) in enumerate(sub_dirs):
                 logger.debug("【全量STRM生成】进入子目录: %s (cid=%s)", sub_path, sub_cid)
+                if idx > 0:
+                    time.sleep(0.5)  # 同层子目录之间间隔 0.5 秒
                 _walk(sub_cid, sub_path, depth + 1)
 
         _walk(int(cid), cloud_path_full)
@@ -591,14 +615,29 @@ class P115StrmSyncService:
         offset = 0
         page_size = 100
         while True:
-            try:
-                entries, total = await manager.adapter.list_files_paged(
-                    cloud_path, cid=cid, offset=offset, limit=page_size,
-                )
-            except Exception as e:
-                logger.error("【全量STRM生成】webapi列目录失败 cid=%s: %s", cid, e)
-                stats["errors"] += 1
-                break
+            # 带重试的列目录（参考 p115strmhelper: 3 次重试 + 退避）
+            entries = None
+            total = 0
+            for attempt in range(3):
+                try:
+                    entries, total = await manager.adapter.list_files_paged(
+                        cloud_path, cid=cid, offset=offset, limit=page_size,
+                    )
+                    break
+                except Exception as e:
+                    if attempt < 2:
+                        wait = 5 * (attempt + 1)
+                        logger.warning(
+                            "【全量STRM生成】webapi列目录失败(重试%d/3) cid=%s: %s，%ds后重试",
+                            attempt + 1, cid, e, wait,
+                        )
+                        await asyncio.sleep(wait)
+                    else:
+                        logger.error("【全量STRM生成】webapi列目录失败(重试耗尽) cid=%s: %s", cid, e)
+                        stats["errors"] += 1
+
+            if entries is None:
+                break  # 3 次都失败，跳出翻页循环
 
             logger.debug("【全量STRM生成】webapi cid=%s offset=%d 获取 %d/%d 条",
                          cid, offset, len(entries), total)
@@ -636,7 +675,9 @@ class P115StrmSyncService:
                     stats["errors"] += 1
 
             # 递归处理子目录
-            for sub in sub_dirs:
+            for idx, sub in enumerate(sub_dirs):
+                if idx > 0:
+                    await asyncio.sleep(0.5)  # 子目录间冷却
                 await self._webapi_walk_and_write(
                     manager, sub.file_id, sub.path,
                     strm_root, video_exts, link_host, url_tmpl, from_time, stats, overwrite_mode, depth + 1,
@@ -645,6 +686,7 @@ class P115StrmSyncService:
             offset += len(entries)
             if stop_early or offset >= total or len(entries) < page_size:
                 break
+            await asyncio.sleep(1)  # 翻页间冷却 1 秒
 
     async def _resolve_cloud_cid(self, manager, cloud_path: str) -> str:
         """将云盘路径解析为 cid（目录 ID）。
