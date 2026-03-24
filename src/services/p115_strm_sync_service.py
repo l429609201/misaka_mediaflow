@@ -84,6 +84,7 @@ class P115StrmSyncService:
         self._running = False          # 是否正在执行同步
         self._current_task: Optional[asyncio.Task] = None
         self._progress = {}            # 实时进度
+        self._api_interval: float = 1.0   # API 请求间隔（秒），同步开始时从数据库读取
 
     async def get_config(self) -> dict:
         """获取同步配置"""
@@ -98,6 +99,23 @@ class P115StrmSyncService:
         }
         saved = await _load_config_from_db()
         return {**defaults, **saved}
+
+    @staticmethod
+    async def _get_p115_settings() -> dict:
+        """从数据库读取 115 高级设置（api_interval, api_concurrent 等）"""
+        _defaults = {"api_interval": 1.0, "api_concurrent": 3}
+        try:
+            async with get_async_session_local() as db:
+                result = await db.execute(
+                    select(SystemConfig).where(SystemConfig.key == "p115_settings")
+                )
+                cfg = result.scalars().first()
+                if cfg and cfg.value:
+                    saved = json.loads(cfg.value)
+                    return {**_defaults, **saved}
+        except Exception as e:
+            logger.warning("读取 p115_settings 失败: %s", e)
+        return _defaults
 
     async def save_config(self, config: dict) -> bool:
         """保存同步配置"""
@@ -278,6 +296,12 @@ class P115StrmSyncService:
             link_host  = self._get_link_host(config)
             url_tmpl   = await self._get_url_template()
             sync_pairs = self._resolve_sync_pairs(config, "full")
+            # 读取 115 高级设置：API 请求间隔 + 并发线程数
+            p115_settings = await self._get_p115_settings()
+            api_interval = float(p115_settings.get("api_interval", 1.0))
+            api_concurrent = int(p115_settings.get("api_concurrent", 3))
+            logger.info("【全量STRM生成】API配置: interval=%.1fs, concurrent=%d", api_interval, api_concurrent)
+            self._api_interval = api_interval
             # 覆盖模式：skip=跳过已存在, overwrite=覆盖已存在（对齐 p115strmhelper full_sync_overwrite_mode）
             overwrite_mode = config.get("full_overwrite_mode", "skip")
 
@@ -302,6 +326,7 @@ class P115StrmSyncService:
                     Path(strm_root), video_exts, link_host, url_tmpl,
                     from_time=0,
                     overwrite_mode=overwrite_mode,
+                    api_interval=api_interval,
                 )
                 for k in stats:
                     stats[k] += pair_stats.get(k, 0)
@@ -351,6 +376,11 @@ class P115StrmSyncService:
             url_tmpl   = await self._get_url_template()
             sync_pairs = self._resolve_sync_pairs(config, "inc")
 
+            # 读取 115 高级设置
+            p115_settings = await self._get_p115_settings()
+            api_interval = float(p115_settings.get("api_interval", 1.0))
+            self._api_interval = api_interval
+
             if not sync_pairs:
                 logger.warning("【增量STRM生成】未配置同步路径对（请在STRM生成卡片中保存路径配置）")
                 return
@@ -373,6 +403,7 @@ class P115StrmSyncService:
                     manager, start_cid, cloud_path,
                     Path(strm_root), video_exts, link_host, url_tmpl,
                     from_time=last_sync_time,
+                    api_interval=api_interval,
                 )
                 # 注意：增量同步固定 overwrite_mode="skip"（只处理新增文件，不覆盖已有）
                 for k in stats:
@@ -409,6 +440,7 @@ class P115StrmSyncService:
         url_tmpl: str = "",
         from_time: int = 0,
         overwrite_mode: str = "skip",
+        api_interval: float = 1.0,
     ) -> dict:
         """
         遍历 115 目录树（递归），对每个视频文件写 .strm。
@@ -417,7 +449,7 @@ class P115StrmSyncService:
           - iterdir 只列当前目录一层（无递归），但结构简单、兼容所有 CK 类型
           - 每层目录遍历后，对子目录递归调用，拼接路径
           - 完整路径由我们自己构建，不依赖接口返回的 path 字段
-          - cooldown=1s 避免频率限制
+          - cooldown 由 api_interval 配置控制
 
         overwrite_mode: "skip"=跳过已存在, "overwrite"=覆盖已存在
         """
@@ -494,7 +526,7 @@ class P115StrmSyncService:
             for attempt in range(3):
                 try:
                     items = list(iterdir(client=p115_client, cid=walk_cid,
-                                         cooldown=2, app=iter_app))
+                                         cooldown=api_interval, app=iter_app))
                     break  # 成功
                 except Exception as e:
                     err_str = str(e) or repr(e)
@@ -530,11 +562,11 @@ class P115StrmSyncService:
                     _process_file(item, item_path)
 
             # 先处理完当前层文件，再递归子目录
-            # ⭐ 关键：目录间加冷却，防止 115 API 风控（参考 p115strmhelper cooldown=2）
+            # ⭐ 目录间加冷却，间隔由用户配置的 api_interval 控制
             for idx, (sub_cid, sub_path) in enumerate(sub_dirs):
                 logger.debug("【全量STRM生成】进入子目录: %s (cid=%s)", sub_path, sub_cid)
                 if idx > 0:
-                    time.sleep(0.5)  # 同层子目录之间间隔 0.5 秒
+                    time.sleep(api_interval)
                 _walk(sub_cid, sub_path, depth + 1)
 
         _walk(int(cid), cloud_path_full)
@@ -677,7 +709,7 @@ class P115StrmSyncService:
             # 递归处理子目录
             for idx, sub in enumerate(sub_dirs):
                 if idx > 0:
-                    await asyncio.sleep(0.5)  # 子目录间冷却
+                    await asyncio.sleep(self._api_interval)
                 await self._webapi_walk_and_write(
                     manager, sub.file_id, sub.path,
                     strm_root, video_exts, link_host, url_tmpl, from_time, stats, overwrite_mode, depth + 1,
@@ -686,7 +718,7 @@ class P115StrmSyncService:
             offset += len(entries)
             if stop_early or offset >= total or len(entries) < page_size:
                 break
-            await asyncio.sleep(1)  # 翻页间冷却 1 秒
+            await asyncio.sleep(self._api_interval)
 
     async def _resolve_cloud_cid(self, manager, cloud_path: str) -> str:
         """将云盘路径解析为 cid（目录 ID）。
