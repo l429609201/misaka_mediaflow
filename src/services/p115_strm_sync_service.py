@@ -217,12 +217,12 @@ class P115StrmSyncService:
           {{ file_name | lower }}      → 转小写
 
         若模板为空或渲染失败，回退到默认格式：
-          {link_host}/p115/play/{pick_code}/{file_name}
+          {link_host}/api/v1/p115/play/redirect_url/{pick_code}/{file_name}
         """
         import re
         from urllib.parse import quote as _url_quote
 
-        default_url = f"{link_host}/p115/play/{pick_code}/{file_name}"
+        default_url = f"{link_host}/api/v1/p115/play/redirect_url/{pick_code}/{file_name}"
         if not tmpl_str:
             return default_url
         try:

@@ -2,7 +2,9 @@
 # 115 网盘管理 API
 
 import json as _json
-from fastapi import APIRouter, Depends
+import logging
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -12,6 +14,7 @@ from src.db import get_async_session_local
 from src.db.models.system import SystemConfig
 from src.services.p115_service import P115Service
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/p115", tags=["115 网盘"])
 _p115_service = P115Service()
 
@@ -283,3 +286,101 @@ async def save_scrape_config(payload: ScrapeConfigPayload):
             db.add(cfg)
         await db.commit()
     return {"success": True}
+
+
+# ──────────────────── /p115/play/redirect_url 播放入口 ────────────────────
+# 对齐 p115strmhelper redirect_url 协议，挂在 /api/v1/p115/play/redirect_url
+# 无需鉴权（播放器直接访问）
+#
+# 支持两种形式：
+#   参数形式：GET /api/v1/p115/play/redirect_url?pickcode={pickcode}
+#   路径形式：GET /api/v1/p115/play/redirect_url/{pickcode}/{filename}
+#
+# 内部复用 RedirectService.resolve_any（与 /redirect_url 路由共享逻辑）
+
+from fastapi import Request as _Request
+from fastapi.responses import RedirectResponse as _RedirectResponse, JSONResponse as _JSONResponse
+from src.services.redirect_service import RedirectService as _RedirectService
+
+_play_redirect_svc = _RedirectService()
+
+
+def _extract_play_params(request: _Request, pickcode: str = "", args_path: str = "") -> dict:
+    """提取请求参数，路径中的 pickcode 优先于 query_params"""
+    q = request.query_params
+    return dict(
+        pickcode=pickcode or q.get("pickcode", "") or q.get("pick_code", ""),
+        pick_code="",
+        args_path=args_path,
+        path=q.get("path", ""),
+        url=q.get("url", ""),
+        file_name=q.get("file_name", "") or q.get("filename", ""),
+        share_code=q.get("share_code", ""),
+        receive_code=q.get("receive_code", ""),
+        item_id=q.get("item_id", ""),
+        storage_id=int(q.get("storage_id", 0) or 0),
+        api_key=q.get("api_key", "") or q.get("X-Emby-Token", ""),
+    )
+
+
+async def _handle_play(request: _Request, pickcode: str = "", args_path: str = ""):
+    """统一处理：pickcode → 直链 → 302"""
+    params = _extract_play_params(request, pickcode=pickcode, args_path=args_path)
+    result = await _play_redirect_svc.resolve_any(**params)
+    if result.get("url"):
+        logger.info("[p115/play] 302 → source=%s pickcode=%s", result.get("source"), params.get("pickcode"))
+        return _RedirectResponse(url=result["url"], status_code=302)
+    logger.warning("[p115/play] 解析失败: %s pickcode=%s", result.get("error"), params.get("pickcode"))
+    return _JSONResponse(
+        status_code=200,
+        content={"error": result.get("error", "resolve failed"), "source": result.get("source", "")},
+    )
+
+
+# ── 参数形式：?pickcode=xxx ──────────────────────────────────────────────
+@router.get("/play/redirect_url", include_in_schema=True, summary="115播放302入口（参数形式）")
+async def p115_play_redirect_get(request: _Request):
+    """`GET /api/v1/p115/play/redirect_url?pickcode={pickcode}&file_name={filename}`"""
+    return await _handle_play(request)
+
+
+@router.head("/play/redirect_url", include_in_schema=True, summary="115播放302入口（HEAD）")
+async def p115_play_redirect_head(request: _Request):
+    """HEAD /api/v1/p115/play/redirect_url — 播放器探测"""
+    return await _handle_play(request)
+
+
+@router.post("/play/redirect_url", include_in_schema=True, summary="115播放302入口（POST）")
+async def p115_play_redirect_post(request: _Request):
+    """POST /api/v1/p115/play/redirect_url"""
+    return await _handle_play(request)
+
+
+# ── 路径形式：/{pickcode}/{filename} — 必须在 /{pickcode} 之前注册 ────────
+@router.get("/play/redirect_url/{pickcode}/{filename:path}", include_in_schema=True,
+            summary="115播放302入口（路径形式）")
+async def p115_play_redirect_path_get(pickcode: str, filename: str, request: _Request):
+    """`GET /api/v1/p115/play/redirect_url/{pickcode}/{filename}`"""
+    return await _handle_play(request, pickcode=pickcode, args_path=filename)
+
+
+@router.head("/play/redirect_url/{pickcode}/{filename:path}", include_in_schema=True,
+             summary="115播放302入口（路径形式 HEAD）")
+async def p115_play_redirect_path_head(pickcode: str, filename: str, request: _Request):
+    """HEAD /api/v1/p115/play/redirect_url/{pickcode}/{filename}"""
+    return await _handle_play(request, pickcode=pickcode, args_path=filename)
+
+
+# ── 路径形式：/{pickcode} 仅 pickcode，无文件名 ──────────────────────────
+@router.get("/play/redirect_url/{pickcode}", include_in_schema=True,
+            summary="115播放302入口（仅pickcode路径）")
+async def p115_play_redirect_pickcode_get(pickcode: str, request: _Request):
+    """`GET /api/v1/p115/play/redirect_url/{pickcode}`"""
+    return await _handle_play(request, pickcode=pickcode)
+
+
+@router.head("/play/redirect_url/{pickcode}", include_in_schema=True,
+             summary="115播放302入口（仅pickcode路径 HEAD）")
+async def p115_play_redirect_pickcode_head(pickcode: str, request: _Request):
+    """HEAD /api/v1/p115/play/redirect_url/{pickcode}"""
+    return await _handle_play(request, pickcode=pickcode)

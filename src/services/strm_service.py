@@ -150,7 +150,8 @@ class StrmService:
             # ⭐ 115 直链模式 — 优先使用用户配置的 Jinja2 模板渲染
             link_host = self._get_strm_link_host() or external_url
             if not link_host:
-                link_host = f"http://127.0.0.1:{settings.server.go_port}"
+                # 默认用主服务端口（7789），不是 Go 反代端口（9906）
+                link_host = f"http://127.0.0.1:{settings.server.port}"
             link_host = link_host.rstrip("/")
 
             from pathlib import Path as _Path
@@ -175,8 +176,8 @@ class StrmService:
                 except Exception as e:
                     logger.warning("[strm] 模板渲染失败，使用默认格式: %s", e)
 
-            # 兜底：默认 /p115/play/<pick_code>/<filename>
-            return f"{link_host}/p115/play/{item.pick_code}/{filename}"
+            # 兜底：/api/v1/p115/play/redirect_url/{pick_code}/{filename}（Python 主服务 7789 可处理）
+            return f"{link_host}/api/v1/p115/play/redirect_url/{item.pick_code}/{filename}"
 
         elif mode == "p115_path":
             # 115 本地路径模式
