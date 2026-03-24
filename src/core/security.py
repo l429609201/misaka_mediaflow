@@ -250,8 +250,11 @@ async def _load_whitelist_from_db_async() -> list:
             cfg = result.scalars().first()
             _whitelist_cache = _json.loads(cfg.value) if (cfg and cfg.value) else []
             _whitelist_cache_ts = _time.time()
-    except Exception:
-        pass
+            logger.debug("IP白名单已从DB刷新，共 %d 条: %s", len(_whitelist_cache), _whitelist_cache)
+    except Exception as e:
+        logger.warning("IP白名单从DB刷新失败: %s，继续使用缓存(%d 条)", e, len(_whitelist_cache))
+        # 失败时更新时间戳，避免每次请求都重试触发DB压力（10秒冷却）
+        _whitelist_cache_ts = _time.time()
     return _whitelist_cache
 
 
@@ -278,12 +281,13 @@ async def _check_ip_whitelist_async(client_ip: str) -> bool:
     import ipaddress
     import time as _time
 
-    # 缓存过期则异步刷新
+    # 缓存过期则异步刷新（10秒TTL）
     if not _whitelist_cache_ts or _time.time() - _whitelist_cache_ts >= 10:
         await _load_whitelist_from_db_async()
 
     whitelist = _whitelist_cache
     if not whitelist:
+        logger.debug("IP白名单为空，跳过检查 client_ip=%s", client_ip)
         return False
 
     # ::ffff:127.0.0.1 / ::1 统一映射为 127.0.0.1
@@ -292,6 +296,8 @@ async def _check_ip_whitelist_async(client_ip: str) -> bool:
         normalized = "127.0.0.1"
     if normalized.startswith("::ffff:"):
         normalized = normalized[7:]
+
+    logger.debug("IP白名单检查 client_ip=%s normalized=%s whitelist=%s", client_ip, normalized, whitelist)
 
     try:
         addr = ipaddress.ip_address(normalized)
@@ -304,14 +310,19 @@ async def _check_ip_whitelist_async(client_ip: str) -> bool:
                     entry_str = entry_str[7:]
                 if '/' in entry_str:
                     if addr in ipaddress.ip_network(entry_str, strict=False):
+                        logger.info("IP白名单命中(CIDR) client_ip=%s entry=%s", client_ip, entry_str)
                         return True
                 else:
                     if addr == ipaddress.ip_address(entry_str):
+                        logger.info("IP白名单命中 client_ip=%s entry=%s", client_ip, entry_str)
                         return True
             except ValueError:
+                logger.warning("IP白名单条目格式无效，已跳过: %r", entry)
                 continue
     except ValueError:
+        logger.warning("客户端IP格式无效，无法解析: %r", client_ip)
         return False
+    logger.debug("IP白名单未命中 client_ip=%s", client_ip)
     return False
 
 

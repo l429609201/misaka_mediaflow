@@ -94,7 +94,7 @@ async def verify(request: Request):
 
     # 逐个候选 IP 检查白名单（TCP直连IP / X-Real-IP / XFF首个IP）
     candidates = list(dict.fromkeys(filter(None, [real_ip, tcp_ip])))
-    logger.debug("白名单检查 candidates=%s xff=%r xri=%r tcp=%s", candidates, xff, xri, tcp_ip)
+    logger.info("白名单检查 candidates=%s xff=%r xri=%r tcp=%s", candidates, xff, xri, tcp_ip)
 
     for ip in candidates:
         if await _check_ip_whitelist_async(ip):
