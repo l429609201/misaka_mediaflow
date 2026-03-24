@@ -59,7 +59,7 @@ def _normalize_path(raw: str) -> str:
 
 
 class RedirectService:
-    """统一 302 解析服务（对齐 P115StrmHelper redirect_url 协议）"""
+    """统一 302 解析服务（对齐  redirect_url 协议）"""
 
     # ──────────────────────────────────────────────────────────────────────
     #  主入口：统一解析

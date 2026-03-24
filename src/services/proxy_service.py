@@ -189,8 +189,16 @@ class ProxyService:
                     relative = file_path[len(prefix):]
                     if not relative.startswith("/"):
                         relative = "/" + relative
-                    # 2. 拼接云端前缀，还原完整云端路径
-                    cloud_path = (cloud_prefix + relative) if cloud_prefix else relative
+                    # 2. 智能拼接：
+                    #    如果 relative 已经以 cloud_prefix 开头（用户本地前缀不含云端目录层），
+                    #    说明相对路径就是完整云端路径，直接使用，避免重复拼接。
+                    #    例: prefix=/cd2/115open  cloud_prefix=/影音
+                    #        relative=/影音/动漫/xxx.mp4  → 已含云端前缀，直接用 ✅
+                    #        relative=/动漫/xxx.mp4       → 需要拼接 → /影音/动漫/xxx.mp4 ✅
+                    if cloud_prefix and relative.startswith(cloud_prefix + "/"):
+                        cloud_path = relative   # 已包含云端前缀，无需重复拼
+                    else:
+                        cloud_path = (cloud_prefix + relative) if cloud_prefix else relative
                     if not cloud_path.startswith("/"):
                         cloud_path = "/" + cloud_path
                     logger.info(
