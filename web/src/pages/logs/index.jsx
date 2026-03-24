@@ -4,7 +4,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import {
   Card, Select, Button, Space, Tag, Input, Row, Col,
-  Typography, Badge, Tooltip,
+  Typography, Badge, Segmented,
 } from 'antd'
 import {
   ReloadOutlined, ClearOutlined, PauseOutlined, PlayCircleOutlined,
@@ -178,25 +178,32 @@ export const Tasks = () => {
       }
       extra={
         <Space>
-          {/* 模式切换 */}
-          <Button.Group>
-            <Tooltip title="实时日志（SSE推流）">
-              <Button
-                type={mode === 'realtime' ? 'primary' : 'default'}
-                icon={<ThunderboltOutlined />}
-                onClick={() => setMode('realtime')}
-                size="small"
-              >实时</Button>
-            </Tooltip>
-            <Tooltip title="历史文件（后台写入全部DEBUG日志）">
-              <Button
-                type={mode === 'file' ? 'primary' : 'default'}
-                icon={<FileTextOutlined />}
-                onClick={() => setMode('file')}
-                size="small"
-              >历史</Button>
-            </Tooltip>
-          </Button.Group>
+          {/* 模式切换 — 滑动开关 */}
+          <Segmented
+            value={mode}
+            onChange={setMode}
+            size="small"
+            options={[
+              {
+                value: 'realtime',
+                label: (
+                  <Space size={4}>
+                    <ThunderboltOutlined />
+                    实时
+                  </Space>
+                ),
+              },
+              {
+                value: 'file',
+                label: (
+                  <Space size={4}>
+                    <FileTextOutlined />
+                    历史
+                  </Space>
+                ),
+              },
+            ]}
+          />
 
           {/* 级别过滤 */}
           <Select

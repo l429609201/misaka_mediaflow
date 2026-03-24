@@ -96,9 +96,9 @@ def setup_logging():
     # 全局过滤器
     src_logger.addFilter(SensitiveInfoFilter())
 
-    # 1. 控制台
+    # 1. 控制台 — Docker 容器日志始终全量 DEBUG，方便 `docker logs` 查看全链路
     console_handler = logging.StreamHandler()
-    console_handler.setLevel(log_level)
+    console_handler.setLevel(logging.DEBUG)
     console_handler.setFormatter(verbose_formatter)
     src_logger.addHandler(console_handler)
 
@@ -138,9 +138,9 @@ def setup_logging():
     go_file_handler.setFormatter(verbose_formatter)
     go_logger.addHandler(go_file_handler)
 
-    # Go 日志也输出到控制台
+    # Go 日志也输出到控制台 — 同样全量 DEBUG
     go_console_handler = logging.StreamHandler()
-    go_console_handler.setLevel(log_level)
+    go_console_handler.setLevel(logging.DEBUG)
     go_console_handler.setFormatter(verbose_formatter)
     go_logger.addHandler(go_console_handler)
 
