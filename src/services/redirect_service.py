@@ -13,6 +13,7 @@
 
 import logging
 import re
+import time
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, unquote
 
@@ -84,11 +85,18 @@ class RedirectService:
         统一解析入口，返回 {url, expires_in, source, error}
         source 字段标记解析来源，便于日志追踪。
         """
+        _t0 = time.monotonic()
+        logger.info("[redirect⏱] 开始解析 pickcode=%r path=%r args_path=%r item_id=%r ua=%s",
+                    pickcode or pick_code, path, args_path, item_id,
+                    (user_agent or "")[:50])
+
         # ── 1. pickcode 直接命中 ────────────────────────────────────────
         pc = (pickcode or pick_code or "").strip()
         if pc:
             logger.info("[redirect] 优先级1 pickcode=%s", pc)
-            return await self._resolve_by_pickcode(pc, user_agent=user_agent, source="pickcode")
+            result = await self._resolve_by_pickcode(pc, user_agent=user_agent, source="pickcode")
+            logger.info("[redirect⏱] pickcode路径完成 耗时=%.3fs ok=%s", time.monotonic()-_t0, bool(result.get("url")))
+            return result
 
         # ── 2. url 中提取 pickcode ──────────────────────────────────────
         if url:
@@ -103,6 +111,7 @@ class RedirectService:
             logger.info("[redirect] 优先级3 args_path=%s", normalized)
             async with get_async_session_local() as db:
                 result = await self._resolve_by_path(db, normalized, storage_id, source="args_path")
+            logger.info("[redirect⏱] args_path路径完成 耗时=%.3fs ok=%s", time.monotonic()-_t0, bool(result.get("url")))
             if result.get("url"):
                 return result
 
@@ -112,6 +121,7 @@ class RedirectService:
             logger.info("[redirect] 优先级4 query.path=%s", normalized)
             async with get_async_session_local() as db:
                 result = await self._resolve_by_path(db, normalized, storage_id, source="query_path")
+            logger.info("[redirect⏱] query_path路径完成 耗时=%.3fs ok=%s", time.monotonic()-_t0, bool(result.get("url")))
             if result.get("url"):
                 return result
 
@@ -148,6 +158,7 @@ class RedirectService:
 
     async def _resolve_by_pickcode(self, pickcode: str, user_agent: str = "", source: str = "pickcode") -> dict:
         """通过 pick_code 直接获取 115 直链"""
+        _t0 = time.monotonic()
         try:
             from src.adapters.storage.p115 import P115Manager
             manager = P115Manager()
@@ -155,23 +166,31 @@ class RedirectService:
                 return {"url": "", "expires_in": 0, "source": source, "error": "115 not enabled"}
 
             # ── 确保已初始化 ─────────────────────────────────────────────────
+            _t1 = time.monotonic()
             if not manager.ready:
                 manager.initialize()
+            logger.debug("[redirect⏱] manager初始化检查 %.3fs", time.monotonic()-_t1)
 
             # ── 从数据库加载 Cookie（解决扫码后重启 Cookie 丢失问题）─────────
+            _t2 = time.monotonic()
             if not manager.auth.has_cookie:
                 await self._load_cookie_from_db(manager)
+            logger.debug("[redirect⏱] cookie检查 %.3fs", time.monotonic()-_t2)
 
             if not manager.auth.has_cookie:
                 return {"url": "", "expires_in": 0, "source": source, "error": "115 cookie not set"}
 
+            _t3 = time.monotonic()
             link = await manager.adapter.get_direct_link("", pick_code=pickcode, user_agent=user_agent)
+            logger.info("[redirect⏱] get_direct_link耗时=%.3fs pickcode=%s ok=%s",
+                        time.monotonic()-_t3, pickcode, bool(link and link.url))
             if link and link.url:
-                logger.info("[redirect] pickcode=%s 直链成功 source=%s", pickcode, source)
+                logger.info("[redirect] pickcode=%s 直链成功 source=%s 总耗时=%.3fs",
+                            pickcode, source, time.monotonic()-_t0)
                 return {"url": link.url, "expires_in": link.expires_in, "source": source, "error": ""}
             return {"url": "", "expires_in": 0, "source": source, "error": "empty link from 115"}
         except Exception as e:
-            logger.error("[redirect] pickcode=%s 直链异常: %s", pickcode, e)
+            logger.error("[redirect] pickcode=%s 直链异常: %s 耗时=%.3fs", pickcode, e, time.monotonic()-_t0)
             return {"url": "", "expires_in": 0, "source": source, "error": str(e)}
 
     @staticmethod
@@ -227,11 +246,15 @@ class RedirectService:
                     return {"url": content, "expires_in": 0, "source": f"{source}_strm_direct", "error": ""}
 
         # 2. PathMapping：本地挂载路径 → 云端路径
+        _tp1 = time.monotonic()
         cloud_path = await self._apply_path_mapping(db, file_path)
+        logger.info("[redirect⏱] PathMapping耗时=%.3fs cloud_path=%r", time.monotonic()-_tp1, cloud_path)
 
         # 3. P115FsCache 查 pickcode（精确路径）
         if cloud_path:
+            _tp2 = time.monotonic()
             pc = await self._lookup_pickcode_from_fscache(db, cloud_path)
+            logger.info("[redirect⏱] FsCache精确查询耗时=%.3fs hit=%s", time.monotonic()-_tp2, bool(pc))
             if pc:
                 logger.info("[redirect] FsCache命中 cloud_path=%s → pickcode=%s", cloud_path, pc)
                 return await self._resolve_by_pickcode(pc, source=f"{source}_fscache")
@@ -239,7 +262,9 @@ class RedirectService:
         # 4. 用文件名再尝试一次 FsCache
         filename = Path(file_path).name
         if filename:
+            _tp3 = time.monotonic()
             pc = await self._lookup_pickcode_by_filename(db, filename)
+            logger.info("[redirect⏱] FsCache文件名查询耗时=%.3fs hit=%s", time.monotonic()-_tp3, bool(pc))
             if pc:
                 logger.info("[redirect] 文件名命中 filename=%s → pickcode=%s", filename, pc)
                 return await self._resolve_by_pickcode(pc, source=f"{source}_filename")
@@ -250,7 +275,9 @@ class RedirectService:
             logger.info(
                 "[redirect] FsCache未命中，尝试直接调用 115 API 搜索: cloud_path=%s", cloud_path
             )
+            _tp4 = time.monotonic()
             pc = await self._search_115_by_cloud_path(cloud_path, source)
+            logger.info("[redirect⏱] 115API搜索耗时=%.3fs hit=%s", time.monotonic()-_tp4, bool(pc))
             if pc:
                 return await self._resolve_by_pickcode(pc, source=f"{source}_api_search")
 
