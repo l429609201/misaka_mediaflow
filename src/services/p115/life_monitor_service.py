@@ -5,7 +5,7 @@
 #   web/desktop/harmony CK → life_list(app="web")  → life.115.com ✅
 #   android/ios/alipaymini → iter_life_behavior_once(app=login_app) ✅
 #
-# 流控（对齐 p115strmhelper once_pull）：
+# 流控：
 #   cooldown=4s；失败重试 3 次，间隔 2s；无新事件等 20s；出错等 30s
 
 import asyncio

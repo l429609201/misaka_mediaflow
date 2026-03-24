@@ -61,7 +61,7 @@ async def warmup_p115_client() -> None:
         # 在线程池内执行 warmup（P115Client 构造是同步阻塞操作）
         ok = await asyncio.to_thread(manager.adapter.warmup)
         if ok:
-            logger.info("[预热] ✅ P115Client 预热完成，首次 302 将无冷启动延迟")
+            logger.info("[预热]  P115Client 预热完成，首次 302 将无冷启动延迟")
         else:
             logger.warning("[预热] P115Client 预热失败，首次 302 仍会触发冷启动")
 
