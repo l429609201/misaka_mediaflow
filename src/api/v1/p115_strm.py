@@ -6,8 +6,8 @@ from pydantic import BaseModel
 from typing import List, Optional
 
 from src.core.security import verify_token
-from src.services.p115_strm_sync_service import P115StrmSyncService
-from src.services.p115_life_monitor_service import get_life_monitor_service
+from src.services.p115.strm_sync_service import P115StrmSyncService
+from src.services.p115.life_monitor_service import get_life_monitor_service
 from src.services.p115_organize_service import P115OrganizeService
 
 router = APIRouter(prefix="/p115-strm", tags=["115 STRM 管理"])
