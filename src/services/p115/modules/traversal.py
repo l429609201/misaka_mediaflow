@@ -3,7 +3,6 @@
 # 负责 115 网盘目录树遍历和 STRM 文件生成的核心逻辑。
 # 所有函数为普通同步函数（在 asyncio.to_thread 中执行），或 async 函数（调用 DB）。
 #
-# 对齐 p115strmhelper full.py FullSyncStrmHelper：
 #   - 优先使用 iter_files_with_path_skim（单次流式遍历整棵树）
 #   - fallback 到 iterdir 手动递归
 #   - 边遍历边写 STRM，收集 fscache_batch / strmfile_batch
@@ -74,7 +73,8 @@ def iter_and_write_strm(
     # ── 读取 login_app，决定 skim 参数 ──────────────────────────────────────
     login_app_raw = getattr(getattr(manager.adapter, "_auth", None), "login_app", "") or ""
     iter_app_for_skim = "web" if login_app_raw in _WEB_APPS_SET else login_app_raw
-    skim_usable = login_app_raw not in _WEB_APPS_SET
+    # skim 可用条件：库支持 AND 非 web CK（web CK 走 /os_windows 接口会 errno=99）
+    skim_usable = has_skim and (login_app_raw not in _WEB_APPS_SET)
 
     logger.debug(
         "【遍历】Cookie 类型: login_app=%r iter_app=%r skim_usable=%s",
@@ -201,11 +201,14 @@ def iter_and_write_strm(
             logger.warning("【遍历】iter_files_with_path_skim 失败，回退到 iterdir 递归: %s",
                            e, exc_info=True)
 
-    # ══ 方案二：iterdir 手动递归遍历（web CK 或 skim 失败时的 fallback）════════
+    # ── 方案二：iterdir 手动递归 —— 确定 iter_app ────────────────────────────
+    # login_app 与 iter_app 必须对齐：web CK 用 "web"，iOS/Android CK 用对应值
+    login_app_raw2 = getattr(getattr(manager.adapter, "_auth", None), "login_app", "") or ""
+    iter_app = "web" if login_app_raw2 in _WEB_APPS_SET else login_app_raw2
     reason = "web CK 不支持 skim" if not skim_usable else "skim 失败，降级"
     logger.info(
-        "【遍历】使用 iterdir 递归: cid=%s cloud_path=%r (%s)",
-        cid, cloud_path, reason,
+        "【遍历】使用 iterdir 递归: cid=%s cloud_path=%r (%s) iter_app=%s",
+        cid, cloud_path, reason, iter_app,
     )
 
     def _walk(walk_cid: int, walk_path: str, depth: int = 0) -> None:
@@ -220,6 +223,7 @@ def iter_and_write_strm(
                     client=p115_client,
                     cid=walk_cid,
                     cooldown=api_interval,
+                    app=iter_app,
                 ))
                 break
             except Exception as e:
