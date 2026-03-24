@@ -2,7 +2,7 @@
 // 卡片行 + marginBottom间距 + Switch级别过滤 + 级别颜色左边框 + 搜索高亮 + 复制
 
 import { useCallback, useEffect, useState, useMemo, useRef } from 'react'
-import { Modal, Button, Tooltip, Input, Select, Space, Spin, Tag, Typography, message, Segmented } from 'antd'
+import { Modal, Button, Tooltip, Input, Select, Space, Spin, Tag, Typography, message } from 'antd'
 import {
   CopyOutlined, ReloadOutlined, SearchOutlined,
   VerticalAlignTopOutlined, VerticalAlignBottomOutlined,
@@ -10,17 +10,10 @@ import {
 import { useTranslation } from 'react-i18next'
 import { systemApi } from '@/apis'
 import { useThemeContext } from '@/ThemeProvider'
+import LevelSegmented, { LEVEL_SHOW_MAP } from './LevelSegmented'
 
 const { Text } = Typography
 const MEMORY_LOG_KEY = '__memory__'
-
-// 三档滑动选择器：选中档位 = 显示该级别及以上
-const LEVEL_SLIDER_OPTIONS = ['DEBUG', 'INFO', 'WARNING']
-const LEVEL_SHOW_MAP = {
-  DEBUG:   new Set(['DEBUG', 'INFO', 'WARNING']),
-  INFO:    new Set(['INFO', 'WARNING']),
-  WARNING: new Set(['WARNING']),
-}
 
 const LEVEL_COLOR = {
   dark:  { CRITICAL: '#ff1744', ERROR: '#ff4d4f', WARNING: '#faad14', INFO: '#52c41a', DEBUG: '#1677ff' },
@@ -117,12 +110,7 @@ export default function HistoryLogModal({ open, onClose }) {
       {/* 级别 Segmented 工具栏 — 三档左右拨动选择器 */}
       <div style={{ padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', background: barBg, borderBottom: `1px solid ${barBorder}` }}>
         <Text style={{ color: labelClr, fontSize: 12, whiteSpace: 'nowrap', marginRight: 4 }}>{t('tasks.levelFilter', '级别过滤')}：</Text>
-        <Segmented
-          size="small"
-          value={levelSlider}
-          onChange={setLevelSlider}
-          options={LEVEL_SLIDER_OPTIONS.map(lv => ({ value: lv, label: lv }))}
-        />
+        <LevelSegmented value={levelSlider} onChange={setLevelSlider} isDark={isDark} />
       </div>
       {/* 文件选择 + 搜索 + 操作 */}
       <div style={{ padding: '8px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, background: barBg, borderBottom: `1px solid ${barBorder}` }}>

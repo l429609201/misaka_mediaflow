@@ -2,21 +2,14 @@
 // 卡片行 + marginBottom间距 + 级别Switch(颜色联动主题色) + 左边框 + 搜索高亮 + 单行复制
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Drawer, Input, Space, Switch, Tag, Tooltip, Typography, message, Segmented } from 'antd'
+import { Button, Drawer, Input, Space, Switch, Tag, Tooltip, Typography, message } from 'antd'
 import { ClearOutlined, CopyOutlined, SearchOutlined, VerticalAlignBottomOutlined } from '@ant-design/icons'
 import { useTranslation } from 'react-i18next'
 import { useThemeContext } from '@/ThemeProvider'
+import LevelSegmented, { LEVEL_SHOW_MAP } from './LevelSegmented'
 
 const { Text } = Typography
 const MAX_LINES = 1000
-
-// 三档滑动选择器：选中档位 = 显示该级别及以上
-const LEVEL_SLIDER_OPTIONS = ['DEBUG', 'INFO', 'WARNING']
-const LEVEL_SHOW_MAP = {
-  DEBUG:   new Set(['DEBUG', 'INFO', 'WARNING']),
-  INFO:    new Set(['INFO', 'WARNING']),
-  WARNING: new Set(['WARNING']),
-}
 
 const LEVEL_COLOR = {
   dark:  { CRITICAL: '#ff1744', ERROR: '#ff4d4f', WARNING: '#faad14', INFO: '#52c41a', DEBUG: '#1677ff' },
@@ -133,12 +126,7 @@ export default function LiveLogDrawer({ open, onClose }) {
         <Text style={{ color: labelClr, fontSize: 12, whiteSpace: 'nowrap', marginRight: 4 }}>
           {t('tasks.levelFilter', '级别过滤')}：
         </Text>
-        <Segmented
-          size="small"
-          value={levelSlider}
-          onChange={setLevelSlider}
-          options={LEVEL_SLIDER_OPTIONS.map(lv => ({ value: lv, label: lv }))}
-        />
+        <LevelSegmented value={levelSlider} onChange={setLevelSlider} isDark={isDark} />
       </div>
 
       {/* 搜索 + 操作按钮行 */}

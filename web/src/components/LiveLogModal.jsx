@@ -2,22 +2,14 @@
 // 实时日志弹窗 — 样式对齐 HistoryLogModal（卡片行+左侧彩色竖条）
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Modal, Button, Tooltip, Switch, Input, Space, Tag, Typography, message, Segmented } from 'antd'
+import { Modal, Button, Tooltip, Switch, Input, Space, Tag, Typography, message } from 'antd'
 import { ClearOutlined, VerticalAlignBottomOutlined, SearchOutlined, CopyOutlined } from '@ant-design/icons'
 import { useTranslation } from 'react-i18next'
 import { useThemeContext } from '@/ThemeProvider'
+import LevelSegmented, { LEVEL_SHOW_MAP } from './LevelSegmented'
 
 const { Text } = Typography
 const MAX_LINES = 1000
-
-// 三档滑动选择器：选中档位 = 显示该级别及以上
-// DEBUG → DEBUG+INFO+WARNING   INFO → INFO+WARNING   WARNING → 仅WARNING
-const LEVEL_SLIDER_OPTIONS = ['DEBUG', 'INFO', 'WARNING']
-const LEVEL_SHOW_MAP = {
-  DEBUG:   new Set(['DEBUG', 'INFO', 'WARNING']),
-  INFO:    new Set(['INFO', 'WARNING']),
-  WARNING: new Set(['WARNING']),
-}
 
 // 与 HistoryLogModal 完全一致的颜色表
 const LEVEL_COLOR = {
@@ -173,15 +165,7 @@ export default function LiveLogModal({ open, onClose }) {
       <div style={{ padding: '8px 16px', borderBottom: `1px solid ${borderColor}`, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10, background: bg }}>
         {/* 级别过滤 — 三档左右拨动选择器 */}
         <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap', marginRight: 2 }}>级别过滤：</Text>
-        <Segmented
-          size="small"
-          value={levelSlider}
-          onChange={setLevelSlider}
-          options={LEVEL_SLIDER_OPTIONS.map(lv => ({
-            value: lv,
-            label: lv,
-          }))}
-        />
+        <LevelSegmented value={levelSlider} onChange={setLevelSlider} isDark={isDark} />
         <Input
           size="small" placeholder="搜索…" prefix={<SearchOutlined />} allowClear
           value={searchText} onChange={e => setSearchText(e.target.value)}
