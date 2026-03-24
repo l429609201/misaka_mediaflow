@@ -178,68 +178,49 @@ function parseYamlCfg(text) {
       continue
     }
 
-    // 二级 key（缩进2~6，格式 "分类名:"）
-    if (indent >= 2 && indent <= 6) {
-      const catMatch = content.match(/^([^:]+):\s*$/)
-      if (catMatch) {
-        if (cur) categories.push(cur)
-        const catName = catMatch[1].trim()
-        // 如果当前是 tv 段，且该分类名已经在 movie 段出现过 → all 类型
-        if (mediaType === 'tv') {
-          const existIdx = findExisting(catName)
-          if (existIdx >= 0) {
-            // 已存在（来自 movie 段），标记为 all；不新建，将其作为 cur 继续收集字段
-            categories[existIdx].media_type = 'all'
-            cur = categories[existIdx]
-            // 从 categories 中暂时移出，等循环结束后重新 push（避免重复）
-            categories.splice(existIdx, 1)
-            continue
-          }
+    // 二级 key（缩进2或4，格式 "分类名:"，值为空）
+    if ((indent === 2 || indent === 4) && content.match(/^[^:]+:\s*$/)) {
+      if (cur) categories.push(cur)
+      const catName = content.split(':')[0].trim()
+      // tv 段发现同名分类（已在 movie 段出现）→ 标记为 all，继续复用
+      if (mediaType === 'tv') {
+        const existIdx = findExisting(catName)
+        if (existIdx >= 0) {
+          categories[existIdx].media_type = 'all'
+          cur = categories[existIdx]
+          categories.splice(existIdx, 1)
+          // 不 continue：让后续字段行正常填充到 cur
+          continue
         }
-        cur = {
-          name: catName,
-          target_dir: catName,
-          media_type: mediaType,
-          match_all: false,
-          genre_ids: [], country: [], language: [],
-          keyword: [], keyword_dir: [], regex: [],
-        }
-        continue
       }
-    }
-
-    // 三级字段（缩进>4，格式 "key: value"）
-    if (indent > 4 && cur) {
-      const colonIdx = content.indexOf(':')
-      if (colonIdx < 0) continue
-      const key = content.slice(0, colonIdx).trim()
-      const val = content.slice(colonIdx + 1).trim()
-
-      if (key === 'genre_ids')                            cur.genre_ids  = listVal(val)
-      else if (key === 'origin_country')                  cur.country    = listVal(val)
-      else if (key === 'production_countries')            cur.country    = listVal(val)
-      else if (key === 'original_language')               cur.language   = listVal(val)
-      else if (key === 'keyword')                         cur.keyword    = listVal(val)
-      else if (key === 'keyword_dir')                     cur.keyword_dir= listVal(val)
-      else if (key === 'regex')                           cur.regex      = listVal(val)
-      else if (key === 'match_all')                       cur.match_all  = val === 'true'
+      cur = {
+        name: catName,
+        target_dir: catName,
+        media_type: mediaType,
+        match_all: false,
+        genre_ids: [], country: [], language: [],
+        keyword: [], keyword_dir: [], regex: [],
+      }
       continue
     }
 
-    // 兼容 indent=2 时的三级字段（部分编辑器缩进两格）
-    if (indent === 4 && cur) {
+    // 三级字段（缩进4或6，格式 "key: value"）
+    if ((indent === 4 || indent === 6) && cur) {
       const colonIdx = content.indexOf(':')
       if (colonIdx < 0) continue
       const key = content.slice(0, colonIdx).trim()
       const val = content.slice(colonIdx + 1).trim()
-      if (key === 'genre_ids')             cur.genre_ids  = listVal(val)
-      else if (key === 'origin_country')   cur.country    = listVal(val)
-      else if (key === 'production_countries') cur.country= listVal(val)
-      else if (key === 'original_language')cur.language   = listVal(val)
-      else if (key === 'keyword')          cur.keyword    = listVal(val)
-      else if (key === 'keyword_dir')      cur.keyword_dir= listVal(val)
-      else if (key === 'regex')            cur.regex      = listVal(val)
-      else if (key === 'match_all')        cur.match_all  = val === 'true'
+      // 排除分类名行（值为空时已在上面处理）
+      if (!val) continue
+      if (key === 'genre_ids')                        cur.genre_ids   = listVal(val)
+      else if (key === 'origin_country')              cur.country     = listVal(val)
+      else if (key === 'production_countries')        cur.country     = listVal(val)
+      else if (key === 'original_language')           cur.language    = listVal(val)
+      else if (key === 'keyword')                     cur.keyword     = listVal(val)
+      else if (key === 'keyword_dir')                 cur.keyword_dir = listVal(val)
+      else if (key === 'regex')                       cur.regex       = listVal(val)
+      else if (key === 'match_all')                   cur.match_all   = val === 'true'
+      continue
     }
   }
   if (cur) categories.push(cur)
@@ -1399,46 +1380,57 @@ export const Classify = () => {
                 暂无分类规则，点击「添加分类」开始配置
               </div>
             : (() => {
-                const movieCats = uiCats.map((cat, i) => ({ cat, i })).filter(({ cat }) => cat.media_type === 'movie' || cat.media_type === 'all' || !cat.media_type)
-                const tvCats    = uiCats.map((cat, i) => ({ cat, i })).filter(({ cat }) => cat.media_type === 'tv'    || cat.media_type === 'all' || !cat.media_type)
+                // 三类严格分组，不重叠：all=全部、movie=仅电影、tv=仅电视
+                const allCats   = uiCats.map((cat, i) => ({ cat, i })).filter(({ cat }) => !cat.media_type || cat.media_type === 'all')
+                const movieCats = uiCats.map((cat, i) => ({ cat, i })).filter(({ cat }) => cat.media_type === 'movie')
+                const tvCats    = uiCats.map((cat, i) => ({ cat, i })).filter(({ cat }) => cat.media_type === 'tv')
                 const sectionStyle = {
                   fontSize: 12, fontWeight: 600, color: 'var(--ant-color-text-secondary)',
                   letterSpacing: 1, padding: '4px 0 6px', marginTop: 8,
                   display: 'flex', alignItems: 'center', gap: 6,
                 }
                 const dividerStyle = { flex: 1, height: 1, background: 'var(--ant-color-border)', marginLeft: 4 }
+                const renderItem = ({ cat, i }) => (
+                  <CategoryItem key={i} cat={cat} idx={i} total={uiCats.length}
+                    color={CAT_COLORS[i % CAT_COLORS.length]}
+                    onEdit={() => openEdit(cat, i)}
+                    onDelete={() => deleteCat(i)}
+                    onMove={dir => moveCat(i, dir)}
+                  />
+                )
+                const hasMultiGroup = (movieCats.length > 0 || tvCats.length > 0)
                 return (
                   <>
+                    {/* 全部（all）类型 — 不加分组标题 */}
+                    {allCats.length > 0 && (
+                      <>
+                        {hasMultiGroup && (
+                          <div style={sectionStyle}>
+                            全部
+                            <span style={dividerStyle} />
+                          </div>
+                        )}
+                        {allCats.map(renderItem)}
+                      </>
+                    )}
+                    {/* 仅电影 */}
                     {movieCats.length > 0 && (
                       <>
-                        <div style={sectionStyle}>
+                        <div style={{ ...sectionStyle, marginTop: allCats.length > 0 ? 16 : 8 }}>
                           <i className="iconfont icon-dianying" />电影
                           <span style={dividerStyle} />
                         </div>
-                        {movieCats.map(({ cat, i }) => (
-                          <CategoryItem key={i} cat={cat} idx={i} total={uiCats.length}
-                            color={CAT_COLORS[i % CAT_COLORS.length]}
-                            onEdit={() => openEdit(cat, i)}
-                            onDelete={() => deleteCat(i)}
-                            onMove={dir => moveCat(i, dir)}
-                          />
-                        ))}
+                        {movieCats.map(renderItem)}
                       </>
                     )}
+                    {/* 仅电视 */}
                     {tvCats.length > 0 && (
                       <>
-                        <div style={{ ...sectionStyle, marginTop: movieCats.length > 0 ? 16 : 8 }}>
+                        <div style={{ ...sectionStyle, marginTop: (allCats.length > 0 || movieCats.length > 0) ? 16 : 8 }}>
                           <i className="iconfont icon-dianshiju" />电视节目
                           <span style={dividerStyle} />
                         </div>
-                        {tvCats.map(({ cat, i }) => (
-                          <CategoryItem key={i} cat={cat} idx={i} total={uiCats.length}
-                            color={CAT_COLORS[i % CAT_COLORS.length]}
-                            onEdit={() => openEdit(cat, i)}
-                            onDelete={() => deleteCat(i)}
-                            onMove={dir => moveCat(i, dir)}
-                          />
-                        ))}
+                        {tvCats.map(renderItem)}
                       </>
                     )}
                   </>
