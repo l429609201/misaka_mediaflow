@@ -305,6 +305,12 @@ class P115StrmSyncService:
             # 覆盖模式：skip=跳过已存在, overwrite=覆盖已存在（对齐 p115strmhelper full_sync_overwrite_mode）
             overwrite_mode = config.get("full_overwrite_mode", "skip")
 
+            logger.debug(
+                "【全量STRM生成】配置快照: video_exts=%s link_host=%r url_tmpl=%r "
+                "sync_pairs=%s overwrite_mode=%r",
+                video_exts, link_host, url_tmpl, sync_pairs, overwrite_mode,
+            )
+
             if not sync_pairs:
                 logger.warning("【全量STRM生成】未配置同步路径对（请在STRM生成卡片中保存路径配置）")
                 return
@@ -313,6 +319,7 @@ class P115StrmSyncService:
                 cloud_path = pair.get("cloud_path", "").strip()
                 strm_root  = pair.get("strm_path", "").strip()
                 if not cloud_path or not strm_root:
+                    logger.debug("【全量STRM生成】跳过空路径对: cloud_path=%r strm_path=%r", cloud_path, strm_root)
                     continue
                 start_cid = await self._resolve_cloud_cid(manager, cloud_path)
                 if not start_cid:
@@ -385,10 +392,16 @@ class P115StrmSyncService:
                 logger.warning("【增量STRM生成】未配置同步路径对（请在STRM生成卡片中保存路径配置）")
                 return
 
+            logger.debug(
+                "【增量STRM生成】配置快照: last_sync_time=%d video_exts=%s link_host=%r sync_pairs=%s",
+                last_sync_time, video_exts, link_host, sync_pairs,
+            )
+
             for pair in sync_pairs:
                 cloud_path = pair.get("cloud_path", "").strip()
                 strm_root  = pair.get("strm_path", "").strip()
                 if not cloud_path or not strm_root:
+                    logger.debug("【增量STRM生成】跳过空路径对: cloud_path=%r strm_path=%r", cloud_path, strm_root)
                     continue
                 start_cid = await self._resolve_cloud_cid(manager, cloud_path)
                 if not start_cid:
@@ -485,14 +498,25 @@ class P115StrmSyncService:
         cloud_path_full = "/" + cloud_path.strip("/")
         scan_count = 0
 
+        # DEBUG：打印函数入参快照
+        logger.debug(
+            "【全量STRM生成】_iter_and_write_strm 入参: cid=%r cloud_path=%r "
+            "strm_root=%r from_time=%d overwrite_mode=%r api_interval=%.1f "
+            "video_exts=%s p115_client_type=%s",
+            cid, cloud_path, str(strm_root), from_time, overwrite_mode, api_interval,
+            video_exts, type(p115_client).__name__,
+        )
+
         # ── 尝试导入 iter_files_with_path_skim ────────────────────────────────
         try:
             from p115client.tool.iterdir import iter_files_with_path_skim, iterdir
             has_skim = True
+            logger.debug("【全量STRM生成】iter_files_with_path_skim 导入成功，使用 skim 模式")
         except ImportError:
             try:
                 from p115client.tool.iterdir import iterdir
                 has_skim = False
+                logger.debug("【全量STRM生成】iter_files_with_path_skim 不可用，降级到 iterdir 递归模式")
             except ImportError:
                 logger.error("【全量STRM生成】p115client.tool.iterdir 不可用")
                 return stats
@@ -505,15 +529,25 @@ class P115StrmSyncService:
             pick_code  = item.get("pickcode") or item.get("pick_code") or item.get("pc", "")
             item_mtime = int(item.get("mtime") or item.get("utime") or item.get("t") or 0)
 
+            logger.debug(
+                "【全量STRM生成】处理条目 #%d: name=%r path=%r pickcode=%r mtime=%d keys=%s",
+                scan_count, name, item_path, pick_code, item_mtime, list(item.keys()),
+            )
+
             if from_time > 0 and item_mtime <= from_time:
+                logger.debug(
+                    "【全量STRM生成】跳过(mtime旧): %r mtime=%d <= from_time=%d",
+                    name, item_mtime, from_time,
+                )
                 stats["skipped"] += 1
                 return
             ext = Path(name).suffix.lstrip(".").lower()
             if ext not in video_exts:
+                logger.debug("【全量STRM生成】跳过(非视频): %r ext=%r", name, ext)
                 stats["skipped"] += 1
                 return
             if not pick_code:
-                logger.error("【全量STRM生成】%s 不存在 pickcode，跳过", name)
+                logger.error("【全量STRM生成】%s 不存在 pickcode，跳过；item完整字段=%s", name, dict(item))
                 stats["errors"] += 1
                 return
             if not (len(pick_code) == 17 and pick_code.isalnum()):
@@ -522,6 +556,10 @@ class P115StrmSyncService:
                 return
             rel      = self._calc_rel_path(item_path, cloud_path)
             strm_url = self._render_strm_url(url_tmpl, link_host, pick_code, name, item_path)
+            logger.debug(
+                "【全量STRM生成】准备写STRM: name=%r rel=%r strm_url=%r",
+                name, str(rel), strm_url,
+            )
             result   = self._write_strm(strm_root, rel, name, strm_url, overwrite_mode)
             if result == "created":
                 stats["created"] += 1
@@ -551,6 +589,11 @@ class P115StrmSyncService:
         login_app_raw = getattr(getattr(manager.adapter, "_auth", None), "login_app", "web") or "web"
         iter_app_for_skim = "web" if login_app_raw in _WEB_APPS_SET else login_app_raw
 
+        logger.debug(
+            "【全量STRM生成】Cookie 类型检测: login_app_raw=%r → iter_app_for_skim=%r",
+            login_app_raw, iter_app_for_skim,
+        )
+
         if has_skim:
             logger.info(
                 "【全量STRM生成】使用 iter_files_with_path_skim 遍历 cid=%s cloud_path=%r "
@@ -565,16 +608,35 @@ class P115StrmSyncService:
                 # 非 web CK（iOS/Android 等）才需要加对应 UA，避免 405 风控
                 if iter_app_for_skim not in _WEB_APPS_SET:
                     iter_kwargs["headers"] = {"user-agent": self._IOS_UA}
+
+                logger.debug(
+                    "【全量STRM生成】iter_files_with_path_skim 调用参数: %s",
+                    {k: v for k, v in iter_kwargs.items()},
+                )
+
+                _first_item_logged = False
                 for item in iter_files_with_path_skim(p115_client, **iter_kwargs):
+                    # 打印第一个 item 的完整字段，帮助确认数据结构
+                    if not _first_item_logged:
+                        logger.debug(
+                            "【全量STRM生成】iter_files_with_path_skim 第一个 item 原始字段: %s",
+                            dict(item),
+                        )
+                        _first_item_logged = True
                     # iter_files_with_path_skim 只返回文件，不返回目录
                     # 但保留 is_dir 检查作为防御性代码
                     if item.get("is_dir"):
+                        logger.debug("【全量STRM生成】跳过目录 item: %r", item.get("name"))
                         continue
                     item_path = item.get("path", "")
                     if not item_path:
                         # 极少数情况下 path 缺失，用 name 兜底
                         name = item.get("name", "")
                         item_path = f"{cloud_path_full}/{name}"
+                        logger.debug(
+                            "【全量STRM生成】item 缺少 path 字段，用 name 兜底: %r → %r",
+                            name, item_path,
+                        )
                     _process_file(item, item_path)
                 logger.info(
                     "【全量STRM生成】iter_files_with_path_skim 完成，扫描 %d 个文件，stats=%s",
@@ -606,11 +668,13 @@ class P115StrmSyncService:
             if depth > 50:
                 logger.warning("【全量STRM生成】目录层级超过50层，停止: %s", walk_path)
                 return
+            logger.debug("【全量STRM生成】iterdir 递归进入: cid=%d path=%r depth=%d", walk_cid, walk_path, depth)
             items = None
             for attempt in range(3):
                 try:
                     items = list(iterdir(client=p115_client, cid=walk_cid,
                                          cooldown=api_interval, app=iter_app))
+                    logger.debug("【全量STRM生成】iterdir cid=%d 返回 %d 条目", walk_cid, len(items))
                     break
                 except Exception as e:
                     err_str = str(e) or repr(e)
@@ -637,6 +701,7 @@ class P115StrmSyncService:
                     sub_cid = int(item.get("id") or item.get("file_id") or 0)
                     if sub_cid:
                         sub_dirs.append((sub_cid, item_path))
+                        logger.debug("【全量STRM生成】发现子目录: %r cid=%d", item_path, sub_cid)
                 else:
                     _process_file(item, item_path)
             for idx, (sub_cid, sub_path) in enumerate(sub_dirs):
@@ -818,6 +883,12 @@ class P115StrmSyncService:
         _WEB_APPS = {"", "web", "desktop", "harmony"}
         iter_app = "web" if login_app in _WEB_APPS else login_app
 
+        logger.debug(
+            "【全量STRM生成】_resolve_cloud_cid: cloud_path=%r login_app=%r iter_app=%r p115_client=%s",
+            cloud_path, login_app, iter_app,
+            type(p115_client).__name__ if p115_client else "None",
+        )
+
         # ── 方案A：iterdir 逐级遍历（参考 p115strmhelper get_pid_by_path）───
         # 核心修复：fs_dir_getid 调用 webapi.115.com/files/getid，
         # iOS/Android CK 对该接口返回 405 Method Not Allowed，
@@ -830,21 +901,37 @@ class P115StrmSyncService:
                     cid = 0
                     for seg in segments:
                         found = None
-                        for item in iterdir(
+                        logger.debug(
+                            "【全量STRM生成】iterdir 查找路径段 %r (parent_cid=%d, app=%s)",
+                            seg, cid, iter_app,
+                        )
+                        dir_items = list(iterdir(
                             client=p115_client,
                             cid=cid,
                             cooldown=1,
                             app=iter_app,
-                        ):
+                        ))
+                        logger.debug(
+                            "【全量STRM生成】iterdir cid=%d 返回 %d 条目，查找 %r",
+                            cid, len(dir_items), seg,
+                        )
+                        for item in dir_items:
                             if item.get("is_dir") and item.get("name") == seg:
                                 found = item
                                 break
                         if found is None:
+                            dir_names = [i.get("name") for i in dir_items if i.get("is_dir")]
+                            logger.debug(
+                                "【全量STRM生成】路径段 %r 未找到，当前层目录列表: %s",
+                                seg, dir_names,
+                            )
                             raise ValueError(f"路径段未找到: {seg!r} (parent_cid={cid})")
                         cid = int(found.get("id") or found.get("file_id") or 0)
+                        logger.debug("【全量STRM生成】路径段 %r 找到, cid=%d", seg, cid)
                     return str(cid)
 
                 segments = [s for s in cloud_path.split("/") if s]
+                logger.debug("【全量STRM生成】开始 iterdir 逐级解析: segments=%s", segments)
                 cid = await asyncio.to_thread(_resolve_by_iterdir, segments)
                 logger.info("【全量STRM生成】iterdir 逐级解析 %r → cid=%s (app=%s)",
                             cloud_path, cid, iter_app)
@@ -858,18 +945,21 @@ class P115StrmSyncService:
         # ── 方案B：fs_dir_getid（仅 web CK，iOS/Android 会 405）───────────
         if p115_client is not None and iter_app == "web":
             try:
+                logger.debug("【全量STRM生成】尝试方案B fs_dir_getid: path=%r", "/" + cloud_path)
                 def _get_dir_id(path: str) -> str:
                     resp = p115_client.fs_dir_getid(path)
+                    logger.debug("【全量STRM生成】fs_dir_getid 原始响应: %s", resp)
                     if resp.get("state") and resp.get("id") is not None:
                         return str(resp["id"])
                     raise ValueError(f"fs_dir_getid 返回异常: {resp}")
                 cid = await asyncio.to_thread(_get_dir_id, "/" + cloud_path)
-                logger.debug("【全量STRM生成】fs_dir_getid 解析 %r → cid=%s", cloud_path, cid)
+                logger.debug("【全量STRM生成】方案B fs_dir_getid 解析 %r → cid=%s", cloud_path, cid)
                 return cid
             except Exception as e:
-                logger.debug("【全量STRM生成】fs_dir_getid 路径解析失败，改用webapi: %s", e)
+                logger.debug("【全量STRM生成】方案B fs_dir_getid 失败，改用方案C webapi: %s", e)
 
         # ── 方案C：webapi list_files_paged 逐段（最终兜底）────────────────
+        logger.debug("【全量STRM生成】使用方案C: webapi list_files_paged 逐段解析 %r", cloud_path)
         segments = [s for s in cloud_path.split("/") if s]
         cid = "0"
         current_path = ""
@@ -881,6 +971,7 @@ class P115StrmSyncService:
                 found = next((e for e in entries if e.is_dir and e.name == seg), None)
                 if found:
                     cid = found.file_id
+                    logger.debug("【全量STRM生成】方案C: 路径段 %r 找到 cid=%s", seg, cid)
                 else:
                     logger.warning("【全量STRM生成】路径段未找到: %s (parent_cid=%s)", seg, cid)
                     return ""
