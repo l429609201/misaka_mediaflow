@@ -2,15 +2,22 @@
 // 实时日志弹窗 — 样式对齐 HistoryLogModal（卡片行+左侧彩色竖条）
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Modal, Button, Tooltip, Switch, Input, Space, Tag, Typography, message } from 'antd'
+import { Modal, Button, Tooltip, Switch, Input, Space, Tag, Typography, message, Segmented } from 'antd'
 import { ClearOutlined, VerticalAlignBottomOutlined, SearchOutlined, CopyOutlined } from '@ant-design/icons'
 import { useTranslation } from 'react-i18next'
 import { useThemeContext } from '@/ThemeProvider'
 
 const { Text } = Typography
 const MAX_LINES = 1000
-const ALL_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
-const LEVEL_VALUES = { DEBUG: 10, INFO: 20, WARNING: 30, ERROR: 40, CRITICAL: 50 }
+
+// 三档滑动选择器：选中档位 = 显示该级别及以上
+// DEBUG → DEBUG+INFO+WARNING   INFO → INFO+WARNING   WARNING → 仅WARNING
+const LEVEL_SLIDER_OPTIONS = ['DEBUG', 'INFO', 'WARNING']
+const LEVEL_SHOW_MAP = {
+  DEBUG:   new Set(['DEBUG', 'INFO', 'WARNING']),
+  INFO:    new Set(['INFO', 'WARNING']),
+  WARNING: new Set(['WARNING']),
+}
 
 // 与 HistoryLogModal 完全一致的颜色表
 const LEVEL_COLOR = {
@@ -104,8 +111,8 @@ export default function LiveLogModal({ open, onClose }) {
   const [logs, setLogs] = useState([])
   const [connected, setConnected] = useState(false)
   const [autoScroll, setAutoScroll] = useState(true)
-  // 默认 INFO 及以上开启，DEBUG 关闭
-  const [enabledLevels, setEnabledLevels] = useState(new Set(['INFO', 'WARNING', 'ERROR', 'CRITICAL']))
+  // 三档滑动选择器，默认 INFO（显示 INFO + WARNING）
+  const [levelSlider, setLevelSlider] = useState('INFO')
   const [searchText, setSearchText] = useState('')
   const containerRef = useRef(null)
   const esRef = useRef(null)
@@ -135,7 +142,8 @@ export default function LiveLogModal({ open, onClose }) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight
   }, [logs, autoScroll])
 
-  // 过滤
+  // 过滤：根据三档选择器 + 关键词
+  const enabledLevels = LEVEL_SHOW_MAP[levelSlider]
   const filtered = useMemo(() => {
     const kw = searchText.trim().toLowerCase()
     return logs.filter(line => {
@@ -144,15 +152,7 @@ export default function LiveLogModal({ open, onClose }) {
       if (kw && !line.toLowerCase().includes(kw)) return false
       return true
     })
-  }, [logs, enabledLevels, searchText])
-
-  const toggleLevel = (lv) => {
-    setEnabledLevels(prev => {
-      const next = new Set(prev)
-      next.has(lv) ? next.delete(lv) : next.add(lv)
-      return next
-    })
-  }
+  }, [logs, levelSlider, searchText])
 
   const bg = isDark ? '#141414' : '#fafafa'
   const borderColor = isDark ? '#303030' : '#e8e8e8'
@@ -171,25 +171,17 @@ export default function LiveLogModal({ open, onClose }) {
     >
       {/* 工具栏 */}
       <div style={{ padding: '8px 16px', borderBottom: `1px solid ${borderColor}`, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10, background: bg }}>
-        {/* 级别过滤 — 对齐 HistoryLogModal：Switch + 彩色文字标签 */}
+        {/* 级别过滤 — 三档左右拨动选择器 */}
         <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap', marginRight: 2 }}>级别过滤：</Text>
-        {ALL_LEVELS.map(lv => {
-          const clr = getLevelColor(lv, isDark)
-          const on  = enabledLevels.has(lv)
-          return (
-            <Space key={lv} size={5} style={{ alignItems: 'center' }}>
-              <Switch
-                size="small" checked={on} onChange={() => toggleLevel(lv)}
-                style={on ? { backgroundColor: clr } : {}}
-              />
-              <Text style={{
-                fontSize: 12, fontWeight: on ? 700 : 400, userSelect: 'none',
-                color: on ? clr : (isDark ? '#3a3a3a' : '#ccc'),
-                transition: 'color 0.2s',
-              }}>{lv}</Text>
-            </Space>
-          )
-        })}
+        <Segmented
+          size="small"
+          value={levelSlider}
+          onChange={setLevelSlider}
+          options={LEVEL_SLIDER_OPTIONS.map(lv => ({
+            value: lv,
+            label: lv,
+          }))}
+        />
         <Input
           size="small" placeholder="搜索…" prefix={<SearchOutlined />} allowClear
           value={searchText} onChange={e => setSearchText(e.target.value)}

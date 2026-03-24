@@ -2,14 +2,21 @@
 // 卡片行 + marginBottom间距 + 级别Switch(颜色联动主题色) + 左边框 + 搜索高亮 + 单行复制
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Drawer, Input, Space, Switch, Tag, Tooltip, Typography, message } from 'antd'
+import { Button, Drawer, Input, Space, Switch, Tag, Tooltip, Typography, message, Segmented } from 'antd'
 import { ClearOutlined, CopyOutlined, SearchOutlined, VerticalAlignBottomOutlined } from '@ant-design/icons'
 import { useTranslation } from 'react-i18next'
 import { useThemeContext } from '@/ThemeProvider'
 
 const { Text } = Typography
 const MAX_LINES = 1000
-const ALL_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
+
+// 三档滑动选择器：选中档位 = 显示该级别及以上
+const LEVEL_SLIDER_OPTIONS = ['DEBUG', 'INFO', 'WARNING']
+const LEVEL_SHOW_MAP = {
+  DEBUG:   new Set(['DEBUG', 'INFO', 'WARNING']),
+  INFO:    new Set(['INFO', 'WARNING']),
+  WARNING: new Set(['WARNING']),
+}
 
 const LEVEL_COLOR = {
   dark:  { CRITICAL: '#ff1744', ERROR: '#ff4d4f', WARNING: '#faad14', INFO: '#52c41a', DEBUG: '#1677ff' },
@@ -52,7 +59,8 @@ export default function LiveLogDrawer({ open, onClose }) {
   const [connected, setConnected]   = useState(false)
   const [autoScroll, setAutoScroll] = useState(true)
   const [searchText, setSearchText] = useState('')
-  const [levelOn, setLevelOn]       = useState({ DEBUG: false, INFO: true, WARNING: true, ERROR: true, CRITICAL: true })
+  // 三档滑动选择器，默认 INFO
+  const [levelSlider, setLevelSlider] = useState('INFO')
   const [hoveredIdx, setHoveredIdx] = useState(null)
   const containerRef = useRef(null)
   const esRef        = useRef(null)
@@ -82,11 +90,12 @@ export default function LiveLogDrawer({ open, onClose }) {
     return () => { es.close(); esRef.current = null; setConnected(false) }
   }, [open])
 
-  // 过滤：级别开关 + 关键词搜索
+  // 过滤：三档选择器 + 关键词搜索
   const filteredLogs = useMemo(() => {
     const kw = searchText.toLowerCase()
-    return logs.filter(line => levelOn[parseLevel(line)] && (!kw || line.toLowerCase().includes(kw)))
-  }, [logs, levelOn, searchText])
+    const enabled = LEVEL_SHOW_MAP[levelSlider]
+    return logs.filter(line => enabled.has(parseLevel(line)) && (!kw || line.toLowerCase().includes(kw)))
+  }, [logs, levelSlider, searchText])
 
   // 自动滚动到底部
   useEffect(() => {
@@ -94,7 +103,6 @@ export default function LiveLogDrawer({ open, onClose }) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight
   }, [filteredLogs, autoScroll])
 
-  const toggleLevel = (lv) => setLevelOn(prev => ({ ...prev, [lv]: !prev[lv] }))
   const copyAll  = () => navigator.clipboard.writeText(filteredLogs.join('\n'))
     .then(() => messageApi.success(t('common.copied', '已复制'))).catch(() => {})
   const copyLine = useCallback((line) => navigator.clipboard.writeText(line)
@@ -115,7 +123,7 @@ export default function LiveLogDrawer({ open, onClose }) {
     >
       {ctxHolder}
 
-      {/* 级别 Switch 工具栏 — 弹幕库同款，级别颜色做Switch背景色 */}
+      {/* 级别 Segmented 工具栏 — 三档左右拨动选择器 */}
       <div style={{
         marginBottom: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
         padding: '8px 12px', borderRadius: 8,
@@ -125,20 +133,12 @@ export default function LiveLogDrawer({ open, onClose }) {
         <Text style={{ color: labelClr, fontSize: 12, whiteSpace: 'nowrap', marginRight: 4 }}>
           {t('tasks.levelFilter', '级别过滤')}：
         </Text>
-        {ALL_LEVELS.map(lv => {
-          const clr = getLevelColor(lv, isDark)
-          const on  = levelOn[lv]
-          return (
-            <Space key={lv} size={5} style={{ alignItems: 'center' }}>
-              <Switch size="small" checked={on} onChange={() => toggleLevel(lv)}
-                style={on ? { backgroundColor: clr } : {}} />
-              <Text style={{ fontSize: 12, fontWeight: on ? 700 : 400, userSelect: 'none',
-                color: on ? clr : (isDark ? '#3a3a3a' : '#ccc'), transition: 'color 0.2s' }}>
-                {lv}
-              </Text>
-            </Space>
-          )
-        })}
+        <Segmented
+          size="small"
+          value={levelSlider}
+          onChange={setLevelSlider}
+          options={LEVEL_SLIDER_OPTIONS.map(lv => ({ value: lv, label: lv }))}
+        />
       </div>
 
       {/* 搜索 + 操作按钮行 */}

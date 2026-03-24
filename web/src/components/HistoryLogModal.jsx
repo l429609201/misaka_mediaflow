@@ -2,7 +2,7 @@
 // 卡片行 + marginBottom间距 + Switch级别过滤 + 级别颜色左边框 + 搜索高亮 + 复制
 
 import { useCallback, useEffect, useState, useMemo, useRef } from 'react'
-import { Modal, Button, Tooltip, Input, Select, Space, Spin, Switch, Tag, Typography, message } from 'antd'
+import { Modal, Button, Tooltip, Input, Select, Space, Spin, Tag, Typography, message, Segmented } from 'antd'
 import {
   CopyOutlined, ReloadOutlined, SearchOutlined,
   VerticalAlignTopOutlined, VerticalAlignBottomOutlined,
@@ -13,7 +13,14 @@ import { useThemeContext } from '@/ThemeProvider'
 
 const { Text } = Typography
 const MEMORY_LOG_KEY = '__memory__'
-const ALL_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
+
+// 三档滑动选择器：选中档位 = 显示该级别及以上
+const LEVEL_SLIDER_OPTIONS = ['DEBUG', 'INFO', 'WARNING']
+const LEVEL_SHOW_MAP = {
+  DEBUG:   new Set(['DEBUG', 'INFO', 'WARNING']),
+  INFO:    new Set(['INFO', 'WARNING']),
+  WARNING: new Set(['WARNING']),
+}
 
 const LEVEL_COLOR = {
   dark:  { CRITICAL: '#ff1744', ERROR: '#ff4d4f', WARNING: '#faad14', INFO: '#52c41a', DEBUG: '#1677ff' },
@@ -57,8 +64,8 @@ export default function HistoryLogModal({ open, onClose }) {
   const [search, setSearch]       = useState('')
   const [logFiles, setLogFiles]   = useState([])
   const [selectedFile, setSelectedFile] = useState(MEMORY_LOG_KEY)
-  // 默认 INFO 及以上开启，DEBUG 关闭
-  const [levelOn, setLevelOn]     = useState({ DEBUG: false, INFO: true, WARNING: true, ERROR: true, CRITICAL: true })
+  // 三档滑动选择器，默认 INFO
+  const [levelSlider, setLevelSlider] = useState('INFO')
   const [hoveredIdx, setHoveredIdx] = useState(null)
   const [messageApi, ctxHolder]   = message.useMessage()
   const topRef    = useRef(null)
@@ -87,12 +94,11 @@ export default function HistoryLogModal({ open, onClose }) {
   useEffect(() => { if (open) { setSelectedFile(MEMORY_LOG_KEY); setSearch(''); fetchLogFiles() } }, [open])
   useEffect(() => { if (open) fetchLogs() }, [open, selectedFile])
 
-  const toggleLevel = (lv) => setLevelOn(prev => ({ ...prev, [lv]: !prev[lv] }))
-
   const filteredLogs = useMemo(() => {
     const kw = search.toLowerCase()
-    return logs.filter(line => levelOn[parseLevel(line)] && (!kw || line.toLowerCase().includes(kw)))
-  }, [logs, search, levelOn])
+    const enabled = LEVEL_SHOW_MAP[levelSlider]
+    return logs.filter(line => enabled.has(parseLevel(line)) && (!kw || line.toLowerCase().includes(kw)))
+  }, [logs, search, levelSlider])
 
   const copyAll  = () => navigator.clipboard.writeText(filteredLogs.join('\n')).then(() => messageApi.success(t('common.copied', '已复制'))).catch(() => {})
   const copyLine = useCallback((line) => navigator.clipboard.writeText(line).then(() => messageApi.success(t('common.copied', '已复制'))).catch(() => {}), [messageApi, t])
@@ -108,19 +114,15 @@ export default function HistoryLogModal({ open, onClose }) {
       styles={{ body: { padding: 0 } }}
     >
       {ctxHolder}
-      {/* 级别 Switch 工具栏 */}
+      {/* 级别 Segmented 工具栏 — 三档左右拨动选择器 */}
       <div style={{ padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', background: barBg, borderBottom: `1px solid ${barBorder}` }}>
         <Text style={{ color: labelClr, fontSize: 12, whiteSpace: 'nowrap', marginRight: 4 }}>{t('tasks.levelFilter', '级别过滤')}：</Text>
-        {ALL_LEVELS.map(lv => {
-          const clr = getLevelColor(lv, isDark)
-          const on  = levelOn[lv]
-          return (
-            <Space key={lv} size={5} style={{ alignItems: 'center' }}>
-              <Switch size="small" checked={on} onChange={() => toggleLevel(lv)} style={on ? { backgroundColor: clr } : {}} />
-              <Text style={{ fontSize: 12, fontWeight: on ? 700 : 400, userSelect: 'none', color: on ? clr : (isDark ? '#3a3a3a' : '#ccc'), transition: 'color 0.2s' }}>{lv}</Text>
-            </Space>
-          )
-        })}
+        <Segmented
+          size="small"
+          value={levelSlider}
+          onChange={setLevelSlider}
+          options={LEVEL_SLIDER_OPTIONS.map(lv => ({ value: lv, label: lv }))}
+        />
       </div>
       {/* 文件选择 + 搜索 + 操作 */}
       <div style={{ padding: '8px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, background: barBg, borderBottom: `1px solid ${barBorder}` }}>
