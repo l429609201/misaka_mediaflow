@@ -542,20 +542,29 @@ class P115StrmSyncService:
         #           max_workers=None, max_files=0, max_dirs=0, app='android',
         #           async_=False, **request_kwargs)
         #   - 没有 cooldown 参数！传 cooldown 会进入 **request_kwargs 导致请求失败
-        #   - headers 通过 **request_kwargs 传递是正确的
-        #   - 只返回文件（非目录），item["path"] 携带完整云盘路径
+        #   - app 参数必须与 Cookie 类型（login_app）匹配，不能写死 "ios"
+        #     web CK 传 "ios" → 用 iOS 接口但 Cookie 是 web → 115 返回空列表（不报错！）
+        #   - headers(iOS UA) 只在非 web CK 时才需要传
+
+        # 读取 login_app，决定 app 参数（必须与 Cookie 类型匹配）
+        _WEB_APPS_SET = {"", "web", "desktop", "harmony"}
+        login_app_raw = getattr(getattr(manager.adapter, "_auth", None), "login_app", "web") or "web"
+        iter_app_for_skim = "web" if login_app_raw in _WEB_APPS_SET else login_app_raw
+
         if has_skim:
             logger.info(
                 "【全量STRM生成】使用 iter_files_with_path_skim 遍历 cid=%s cloud_path=%r "
-                "overwrite=%s（iOS UA + app=ios 规避405）",
-                cid, cloud_path, overwrite_mode,
+                "app=%s overwrite=%s",
+                cid, cloud_path, iter_app_for_skim, overwrite_mode,
             )
             try:
-                iter_kwargs = {
+                iter_kwargs: dict = {
                     "cid": int(cid),
-                    # ✅ 不传 cooldown（该函数无此参数，传入会进 request_kwargs 导致 API 报错）
-                    **self._ios_ua_kwargs(),           # headers=iOS UA + app="ios"
+                    "app": iter_app_for_skim,   # 与 Cookie 类型匹配，不写死 "ios"
                 }
+                # 非 web CK（iOS/Android 等）才需要加对应 UA，避免 405 风控
+                if iter_app_for_skim not in _WEB_APPS_SET:
+                    iter_kwargs["headers"] = {"user-agent": self._IOS_UA}
                 for item in iter_files_with_path_skim(p115_client, **iter_kwargs):
                     # iter_files_with_path_skim 只返回文件，不返回目录
                     # 但保留 is_dir 检查作为防御性代码
