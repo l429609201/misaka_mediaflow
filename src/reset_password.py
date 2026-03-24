@@ -41,10 +41,14 @@ async def reset_password(username: str):
     session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
     async with session_factory() as session:
+        # 检测数据库类型：PostgreSQL 中 user 是保留关键字，必须加双引号
+        _is_pg = (settings.database.type or "").lower() in ("postgresql", "postgres", "pg")
+        _tbl = '"user"' if _is_pg else "user"
+
         # 2. 检查 user 表是否存在以及用户是否存在
         try:
             result = await session.execute(
-                text("SELECT COUNT(*) FROM user WHERE username = :username"),
+                text(f"SELECT COUNT(*) FROM {_tbl} WHERE username = :username"),
                 {"username": username}
             )
             row = result.scalar()
@@ -68,14 +72,14 @@ async def reset_password(username: str):
             if row and row > 0:
                 # 更新已有用户
                 await session.execute(
-                    text("UPDATE user SET password_hash = :hash, updated_at = :now WHERE username = :username"),
+                    text(f"UPDATE {_tbl} SET password_hash = :hash, updated_at = :now WHERE username = :username"),
                     {"hash": hashed_password, "now": now, "username": username}
                 )
             else:
                 # 插入新用户
                 await session.execute(
                     text(
-                        "INSERT INTO user (username, password_hash, role, is_active, created_at, updated_at) "
+                        f"INSERT INTO {_tbl} (username, password_hash, role, is_active, created_at, updated_at) "
                         "VALUES (:username, :hash, :role, :active, :now, :now)"
                     ),
                     {
