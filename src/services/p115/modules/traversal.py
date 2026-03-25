@@ -160,7 +160,7 @@ def iter_and_write_strm(
             logger.debug("iter_files_with_path_skim 不可用，将使用 iter_files_with_path")
         except ImportError:
             try:
-                from p115client.tool.iterdir import iterdir as _iterdir  # type: ignore[import]
+                from p115client.tool.iterdir import iterdir as _iterdir_fn  # type: ignore[import] as _iterdir  # type: ignore[import]
                 _fn_iterdir = _iterdir
                 logger.debug("仅 iterdir 可用，将使用手动递归")
             except ImportError:
@@ -215,9 +215,11 @@ def iter_and_write_strm(
             else:
                 logger.warning("skim 失败，降级: %s", e, exc_info=True)
 
-    # ── 方案二：iter_files_with_path（所有 CK，库封装递归）───────────────
-    if not fetched and has_iwp and _fn_iwp is not None:
-        reason = "web CK 不支持 skim" if not skim_usable else "skim 失败"
+    # ── 方案二：iter_files_with_path（非 web CK，库封装递归）────────────
+    # 注意：iter_files_with_path 内部同样会调用 /os_windows 接口，
+    # web CK 使用该接口会返回 errno=99，因此 web CK 也必须跳过方案二，直接走方案三。
+    if not fetched and has_iwp and _fn_iwp is not None and skim_usable:
+        reason = "skim 失败"
         logger.info(
             "【阶段一】iter_files_with_path 拉取云盘树: cid=%s (%s) iter_app=%s cooldown=%.1f",
             cid, reason, iter_app, api_interval,
@@ -564,13 +566,13 @@ async def resolve_cloud_cid(manager, cloud_path: str) -> str:
     # ── 方案A：iterdir 逐级遍历 ──────────────────────────────────────────────
     if p115_client is not None:
         try:
-            from p115client.tool.iterdir import iterdir
+            from p115client.tool.iterdir import iterdir as _iterdir_fn  # type: ignore[import]
 
             def _resolve_by_iterdir(segments: list) -> str:
                 cur_cid = 0
                 for seg in segments:
                     logger.debug("【resolve_cid】iterdir 查找 %r (parent_cid=%d)", seg, cur_cid)
-                    dir_items = list(_fn_iterdir(client=p115_client, cid=cur_cid, cooldown=1, app=iter_app))
+                    dir_items = list(_iterdir_fn(client=p115_client, cid=cur_cid, cooldown=1, app=iter_app))
                     found = next((i for i in dir_items if i.get("is_dir") and i.get("name") == seg), None)
                     if found is None:
                         raise ValueError(f"路径段未找到: {seg!r} (parent_cid={cur_cid})")
