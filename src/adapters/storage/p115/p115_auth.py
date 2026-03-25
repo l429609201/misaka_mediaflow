@@ -230,6 +230,11 @@ class P115AuthService:
         """
         扫码登录第2步 — 轮询状态
         :return: {status: "waiting"|"scanned"|"success"|"expired"|"canceled", cookie?: str}
+
+        说明：115 二维码状态接口响应通常在 1s 内完成。
+        使用较短的 timeout=8s，避免每次轮询阻塞太久（全局 client timeout=30s 不适合轮询场景）。
+        超时视为 waiting 返回，让前端继续轮询；
+        前端需自行设置最大轮询次数兜底（防止二维码过期后永远轮询）。
         """
         if app not in self.ALLOWED_APP_TYPES:
             app = "web"
@@ -238,6 +243,7 @@ class P115AuthService:
             resp = await client.get(
                 _115_QRCODE_STATUS_URL,
                 params={"uid": uid, "time": time_val, "sign": sign},
+                timeout=8,  # 状态接口应快速响应，短 timeout 避免长时间阻塞
             )
             data = resp.json()
             status_code = data.get("data", {}).get("status", -1)
@@ -258,7 +264,8 @@ class P115AuthService:
             else:
                 return {"status": "waiting"}
         except httpx.TimeoutException:
-            # 轮询超时是正常的（等待用户扫码），静默返回 waiting
+            # 轮询超时：等待用户扫码期间偶发正常，静默返回 waiting
+            # 前端有最大轮询次数兜底（约5分钟），超出后自动标记 expired
             logger.debug("二维码状态轮询超时 uid=%s", uid)
             return {"status": "waiting"}
         except Exception as e:

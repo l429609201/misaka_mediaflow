@@ -62,7 +62,7 @@ export const Drive115 = () => {
   const [qrModal,  setQrModal]  = useState(false)
   const [qrData,   setQrData]   = useState(null)
   const [qrStatus, setQrStatus] = useState('idle')
-  const [qrApp,    setQrApp]    = useState('web')
+  const [qrApp,    setQrApp]    = useState('alipaymini')
   const pollRef = useRef(null)
 
   const [settingsLoading, setSettingsLoading] = useState(true)
@@ -398,15 +398,15 @@ export const Drive115 = () => {
     expired: t('p115.qrExpired'), failed: t('p115.qrFailed'),
   }
   const APP_OPTIONS = [
-    { value: 'web',        label: t('p115.appWeb'),        icon: <DesktopOutlined /> },
-    { value: 'android',    label: t('p115.appAndroid'),    icon: <MobileOutlined /> },
-    { value: 'ios',        label: t('p115.appIos'),        icon: <MobileOutlined /> },
     { value: 'alipaymini', label: t('p115.appAlipay'),     icon: <AlipayCircleOutlined /> },
     { value: 'wechatmini', label: t('p115.appWechat'),     icon: <WechatOutlined /> },
+    { value: 'android',    label: t('p115.appAndroid'),    icon: <MobileOutlined /> },
+    { value: '115android', label: t('p115.app115Android'), icon: <MobileOutlined /> },
+    { value: 'ios',        label: t('p115.appIos'),        icon: <MobileOutlined /> },
+    { value: '115ios',     label: t('p115.app115Ios'),     icon: <MobileOutlined /> },
+    { value: 'web',        label: t('p115.appWeb'),        icon: <DesktopOutlined /> },
     { value: 'tv',         label: t('p115.appTv'),         icon: <DesktopOutlined /> },
     { value: 'qandroid',   label: t('p115.appQandroid'),   icon: <MobileOutlined /> },
-    { value: '115android', label: t('p115.app115Android'), icon: <MobileOutlined /> },
-    { value: '115ios',     label: t('p115.app115Ios'),     icon: <MobileOutlined /> },
     { value: '115ipad',    label: t('p115.app115Ipad'),    icon: <MobileOutlined /> },
   ]
   const formatSize = (bytes) => {
