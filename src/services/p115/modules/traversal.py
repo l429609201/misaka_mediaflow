@@ -3,11 +3,15 @@
 # 负责 115 网盘目录树遍历和 STRM 文件生成的核心逻辑。
 # 所有函数为普通同步函数（在 asyncio.to_thread 中执行），或 async 函数（调用 DB）。
 #
-#   优先级（三档降级）：
-#   1. iter_files_with_path_skim（非 web CK 专用，一次 API 拉取整棵树，最快）
-#   2. iter_files_with_path    （所有 CK 通用，库封装递归+内置冷却，中速）
-#   3. iterdir 手动递归        （最终 fallback，逐目录 API，最慢）
-#   - 边遍历边写 STRM，收集 fscache_batch / strmfile_batch
+#   两阶段设计：
+#   阶段一：从网盘拉取完整目录树到内存（唯一调用网盘 API 的阶段）
+#     - 方案1: iter_files_with_path_skim（非 web CK，一次请求，最快）
+#     - 方案2: iter_files_with_path    （所有 CK，库封装递归+内置冷却）
+#     - 方案3: iterdir 手动递归        （最终 fallback）
+#   阶段二：本地对比 + 写入（零网盘 API 调用）
+#     - 扫描本地 STRM 目录，与云盘列表对比
+#     - 按 overwrite_mode 决定新建/跳过/覆盖
+#     - 无论结果如何，都写 FsCache + StrmFile（供文件列表页显示）
 
 import asyncio
 import logging
@@ -15,7 +19,7 @@ import time
 from pathlib import Path
 
 from src.services.p115.modules.strm_writer import (
-    calc_rel_path, get_strm_filename, render_strm_url, write_strm,
+    calc_rel_path, get_strm_filename, render_strm_url,
 )
 from src.services.p115.modules.db_ops import lookup_cid_by_path
 
@@ -96,14 +100,14 @@ def iter_and_write_strm(
     fscache_tree: dict | None = None,
 ) -> tuple[dict, list[dict], list[dict]]:
     """
-    遍历 115 目录树，对每个视频文件写 .strm。
-    返回 (stats, fscache_batch, strmfile_batch)：
-      stats         — {"created": N, "skipped": N, "errors": N}
-      fscache_batch — 目录节点+文件节点，供调用方用 ORM 写入 P115FsCache
-      strmfile_batch — 新建的 STRM 记录，供调用方用 ORM 写入 StrmFile
+    两阶段遍历：
+      阶段一：从网盘拉取整棵目录树到内存列表（唯一调用网盘 API 的阶段）
+      阶段二：扫本地 STRM、对比、写文件、写缓存（零网盘 API 调用）
 
-    优先使用 iter_files_with_path_skim（skim 可用且非 web CK）；
-    fallback 到 iterdir 手动递归。
+    返回 (stats, fscache_batch, strmfile_batch)：
+      stats          — {"created": N, "skipped": N, "errors": N}
+      fscache_batch  — 所有云盘条目（目录+文件），写入 P115FsCache
+      strmfile_batch — 所有视频文件（含 skip），写入 StrmFile 供列表页显示
     """
     stats: dict = {"created": 0, "skipped": 0, "errors": 0}
     fscache_batch: list[dict] = []
@@ -111,34 +115,37 @@ def iter_and_write_strm(
 
     p115_client = manager.adapter._get_p115_client()
     if p115_client is None:
-        logger.error("【遍历】p115_client 不可用，无法同步")
+        logger.error("p115_client 不可用，无法同步")
         return stats, fscache_batch, strmfile_batch
 
     cloud_path_full = "/" + cloud_path.strip("/")
-    scan_count = 0
 
     logger.debug(
-        "【遍历】入参: cid=%r cloud_path=%r strm_root=%r "
-        "from_time=%d overwrite_mode=%r api_interval=%.1f video_exts=%s",
-        cid, cloud_path, str(strm_root), from_time, overwrite_mode, api_interval, video_exts,
+        "入参: cid=%r cloud_path=%r strm_root=%r "
+        "from_time=%d overwrite_mode=%r api_interval=%.1f",
+        cid, cloud_path, str(strm_root), from_time, overwrite_mode, api_interval,
     )
 
-    # ── 尝试导入 p115client 遍历工具（必须在 skim_usable 判断之前）────────────
-    # 优先级：skim > iter_files_with_path > iterdir 手动递归
-    iter_files_with_path_skim  = None
-    iter_files_with_path       = None
-    iterdir                    = None
-    has_skim = False
-    has_iwp  = False     # iter_files_with_path 是否可用
+    # ══════════════════════════════════════════════════════════════════════
+    # 阶段一：拉取网盘目录树 → cloud_items 内存列表
+    # 这是整个流程唯一调用网盘 API 的阶段
+    # ══════════════════════════════════════════════════════════════════════
+
+    # ── 导入 p115client 工具函数 ──────────────────────────────────────────
+    _fn_skim:    object = None
+    _fn_iwp:     object = None
+    _fn_iterdir: object = None
+    has_skim: bool = False
+    has_iwp:  bool = False
     try:
         from p115client.tool.iterdir import (  # type: ignore[import]
             iter_files_with_path_skim as _skim,
             iter_files_with_path      as _iwp,
             iterdir                   as _iterdir,
         )
-        iter_files_with_path_skim = _skim
-        iter_files_with_path      = _iwp
-        iterdir                   = _iterdir
+        _fn_skim    = _skim
+        _fn_iwp     = _iwp
+        _fn_iterdir = _iterdir
         has_skim = True
         has_iwp  = True
     except ImportError:
@@ -147,375 +154,381 @@ def iter_and_write_strm(
                 iter_files_with_path as _iwp,
                 iterdir              as _iterdir,
             )
-            iter_files_with_path = _iwp
-            iterdir              = _iterdir
-            has_skim = False
+            _fn_iwp     = _iwp
+            _fn_iterdir = _iterdir
             has_iwp  = True
-            logger.debug("【遍历】iter_files_with_path_skim 不可用，将使用 iter_files_with_path")
+            logger.debug("iter_files_with_path_skim 不可用，将使用 iter_files_with_path")
         except ImportError:
             try:
                 from p115client.tool.iterdir import iterdir as _iterdir  # type: ignore[import]
-                iterdir  = _iterdir
-                has_skim = False
-                has_iwp  = False
-                logger.debug("【遍历】仅 iterdir 可用，将使用手动递归")
+                _fn_iterdir = _iterdir
+                logger.debug("仅 iterdir 可用，将使用手动递归")
             except ImportError:
-                logger.error("【遍历】p115client.tool.iterdir 不可用")
+                logger.error("p115client.tool.iterdir 不可用")
                 return stats, fscache_batch, strmfile_batch
 
-    # ── 读取 login_app，决定 skim 参数 ──────────────────────────────────────
+    # ── 判断 CK 类型 ──────────────────────────────────────────────────────
     login_app_raw = getattr(getattr(manager.adapter, "_auth", None), "login_app", "") or ""
     iter_app_for_skim = "web" if login_app_raw in _WEB_APPS_SET else login_app_raw
-    # skim 可用条件：库支持 AND 非 web CK（web CK 走 /os_windows 接口会 errno=99）
     skim_usable = has_skim and (login_app_raw not in _WEB_APPS_SET)
+    iter_app    = "web" if login_app_raw in _WEB_APPS_SET else login_app_raw
+    logger.debug("CK类型: login_app=%r skim_usable=%s", login_app_raw, skim_usable)
 
-    logger.debug(
-        "【遍历】Cookie 类型: login_app=%r iter_app=%r skim_usable=%s",
-        login_app_raw, iter_app_for_skim, skim_usable,
-    )
+    # cloud_items: 收集所有原始条目（含目录，用于 FsCache）
+    # cloud_files: 只含视频文件候选（供阶段二对比）
+    cloud_items: list[dict] = []   # 所有条目（文件+目录）
+    cloud_files: list[dict] = []   # 仅文件条目（含 item_path 字段）
 
-    # ── 内部函数：处理单个文件条目 ────────────────────────────────────────────
-    def _process_file(item: dict, item_path: str) -> None:
-        nonlocal scan_count
-        scan_count += 1
+    def _collect_item(item: dict, item_path: str) -> None:
+        """把云盘条目收入内存列表（不做任何本地 IO / 网盘 API 调用）"""
+        d = dict(item)
+        d["_item_path"] = item_path   # 注入完整路径，供阶段二使用
+        cloud_items.append(d)
+        if not d.get("is_dir"):
+            cloud_files.append(d)
 
-        name      = item.get("name", "")
-        pick_code = item.get("pickcode") or item.get("pick_code") or item.get("pc", "")
-        item_mtime= int(item.get("mtime") or item.get("utime") or item.get("t") or 0)
-        file_id   = str(item.get("id") or item.get("file_id") or item.get("fid") or "")
-        parent_id = str(item.get("pid") or item.get("parent_id") or "")
-        sha1      = item.get("sha") or item.get("sha1") or ""
-        file_size = int(item.get("s") or item.get("size") or item.get("file_size") or 0)
-        ctime     = str(item.get("t") or item.get("ctime") or "")
+    fetched = False   # 是否已成功拉取到数据
 
-        logger.debug(
-            "【遍历】处理条目 #%d: name=%r path=%r pickcode=%r mtime=%d",
-            scan_count, name, item_path, pick_code, item_mtime,
-        )
-
-        if from_time > 0 and item_mtime <= from_time:
-            logger.debug("【遍历】跳过(mtime旧): %r mtime=%d <= from_time=%d", name, item_mtime, from_time)
-            stats["skipped"] += 1
-            return
-
-        ext = Path(name).suffix.lstrip(".").lower()
-        if ext not in video_exts:
-            logger.debug("【遍历】跳过(非视频): %r ext=%r", name, ext)
-            stats["skipped"] += 1
-            return
-
-        if not pick_code:
-            logger.error("【遍历】%s 不存在 pickcode，跳过: keys=%s", name, list(item.keys()))
-            stats["errors"] += 1
-            return
-
-        if not (len(pick_code) == 17 and pick_code.isalnum()):
-            logger.error("【遍历】pickcode 格式错误 %r，跳过: %s", pick_code, name)
-            stats["errors"] += 1
-            return
-
-        rel      = calc_rel_path(item_path, cloud_path)
-        strm_url = render_strm_url(url_tmpl, link_host, pick_code, name, item_path)
-
-        logger.debug("【遍历】准备写STRM: name=%r rel=%r url=%r", name, str(rel), strm_url)
-        result = write_strm(strm_root, rel, name, strm_url, overwrite_mode)
-
-        # 无论 created/skipped 都写 FsCache（保持目录树最新）
-        if file_id:
-            fscache_batch.append({
-                "file_id":    file_id,
-                "parent_id":  parent_id,
-                "name":       name,
-                "local_path": item_path,
-                "sha1":       sha1,
-                "pick_code":  pick_code,
-                "file_size":  file_size,
-                "is_dir":     0,
-                "mtime":      str(item_mtime),
-                "ctime":      ctime,
-            })
-
-        if result == "created":
-            stats["created"] += 1
-            # 只有实际写出文件才记录 StrmFile
-            strm_name = get_strm_filename(name)
-            strmfile_batch.append({
-                "item_id":      pick_code,
-                "strm_path":    str(strm_root / rel / strm_name),
-                "strm_content": strm_url,
-                "strm_mode":    "p115",
-                "file_size":    file_size,
-            })
-        elif result == "skipped":
-            stats["skipped"] += 1
-        else:
-            stats["errors"] += 1
-
-    # ══ 方案一：iter_files_with_path_skim（非 web CK 可用）════════════════════
-    if has_skim and skim_usable:
+    # ── 方案一：iter_files_with_path_skim（非 web CK，一次请求）──────────
+    if has_skim and skim_usable and _fn_skim is not None:
         logger.info(
-            "【遍历】使用 iter_files_with_path_skim: cid=%s cloud_path=%r app=%s overwrite=%s",
-            cid, cloud_path, iter_app_for_skim, overwrite_mode,
+            "【阶段一】skim 拉取云盘树: cid=%s cloud_path=%r app=%s",
+            cid, cloud_path, iter_app_for_skim,
         )
         try:
-            iter_kwargs: dict = {
-                "cid": int(cid),
-                "app": iter_app_for_skim,
-            }
+            iter_kwargs: dict = {"cid": int(cid), "app": iter_app_for_skim}
             if iter_app_for_skim not in _WEB_APPS_SET:
                 iter_kwargs["headers"] = {"user-agent": _IOS_UA}
-
-            _first_logged = False
-            for item in iter_files_with_path_skim(p115_client, **iter_kwargs):
-                if not _first_logged:
-                    logger.debug("【遍历】skim 第一个 item 字段: %s", dict(item))
-                    _first_logged = True
-                item_path = item.get("path") or cloud_path_full + "/" + item.get("name", "")
-                _process_file(dict(item), item_path)
-
-            logger.info("【遍历】iter_files_with_path_skim 完成，扫描 %d 个条目，stats=%s",
-                        scan_count, stats)
-            return stats, fscache_batch, strmfile_batch
-
+            first = True
+            for item in _fn_skim(p115_client, **iter_kwargs):  # type: ignore[operator]
+                if first:
+                    logger.debug("skim 首条字段: %s", list(dict(item).keys()))
+                    first = False
+                ip = item.get("path") or cloud_path_full + "/" + item.get("name", "")
+                _collect_item(dict(item), ip)
+            logger.info("【阶段一】skim 完成，共收集 %d 条目", len(cloud_items))
+            fetched = True
         except Exception as e:
             if _is_405_error(e):
-                cooldown = _405_COOLDOWN_BASE
-                logger.warning(
-                    "【遍历】iter_files_with_path_skim 遭遇 405 WAF 屏蔽，"
-                    "冷却 %.0fs 后降级到 iter_files_with_path: %s", cooldown, e,
-                )
-                time.sleep(cooldown)
+                logger.warning("skim 遭遇 405，冷却 %.0fs 后降级: %s", _405_COOLDOWN_BASE, e)
+                time.sleep(_405_COOLDOWN_BASE)
             else:
-                logger.warning("【遍历】iter_files_with_path_skim 失败，降级到 iter_files_with_path: %s",
-                               e, exc_info=True)
+                logger.warning("skim 失败，降级: %s", e, exc_info=True)
 
-    # ── 确定 iter_app（web CK 用 "web"，iOS/Android CK 用对应值）─────────────
-    login_app_raw2 = getattr(getattr(manager.adapter, "_auth", None), "login_app", "") or ""
-    iter_app = "web" if login_app_raw2 in _WEB_APPS_SET else login_app_raw2
-
-    # ══ 方案二：iter_files_with_path（支持所有 CK，库封装递归，内置冷却）═══════
-    # 相比手动 _walk：同样是分页递归，但由库封装并发和重试，比手动更优雅
-    # 返回的 item 含标准化字段（pickcode、id、parent_id、path、sha1、size、mtime）
-    if has_iwp and iter_files_with_path is not None:
-        reason2 = "web CK 不支持 skim" if not skim_usable else "skim 失败，降级"
+    # ── 方案二：iter_files_with_path（所有 CK，库封装递归）───────────────
+    if not fetched and has_iwp and _fn_iwp is not None:
+        reason = "web CK 不支持 skim" if not skim_usable else "skim 失败"
         logger.info(
-            "【遍历】使用 iter_files_with_path: cid=%s cloud_path=%r (%s) iter_app=%s cooldown=%.1f",
-            cid, cloud_path, reason2, iter_app, api_interval,
+            "【阶段一】iter_files_with_path 拉取云盘树: cid=%s (%s) iter_app=%s cooldown=%.1f",
+            cid, reason, iter_app, api_interval,
         )
         try:
-            _first_logged2 = False
-            for item in iter_files_with_path(
+            first = True
+            for item in _fn_iwp(  # type: ignore[operator]
                 p115_client,
                 cid=int(cid),
-                type=99,          # 99 = 所有文件类型
-                cur=0,            # 0 = 遍历整棵子目录树
-                escape=None,      # 不对路径做 POSIX 转义（我们直接用原始名称）
+                type=99,
+                cur=0,
+                escape=None,
                 app=iter_app,
                 cooldown=api_interval,
             ):
-                if not _first_logged2:
-                    logger.debug("【遍历】iter_files_with_path 第一个 item 字段: %s",
-                                 {k: v for k, v in dict(item).items() if k not in ("top_ancestors",)})
-                    _first_logged2 = True
-                # iter_files_with_path 返回的 path 是完整云盘路径（如 /影音/电影/xxx.mkv）
-                item_path = item.get("path") or cloud_path_full + "/" + item.get("name", "")
-                _process_file(dict(item), item_path)
-
-            logger.info("【遍历】iter_files_with_path 完成，扫描 %d 个条目，stats=%s",
-                        scan_count, stats)
-            return stats, fscache_batch, strmfile_batch
-
+                if first:
+                    logger.debug("iwp 首条字段: %s",
+                                 [k for k in dict(item) if k != "top_ancestors"])
+                    first = False
+                ip = item.get("path") or cloud_path_full + "/" + item.get("name", "")
+                _collect_item(dict(item), ip)
+            logger.info("【阶段一】iter_files_with_path 完成，共收集 %d 条目", len(cloud_items))
+            fetched = True
         except Exception as e:
             if _is_405_error(e):
-                cooldown_s = _405_COOLDOWN_BASE
-                logger.warning(
-                    "【遍历】iter_files_with_path 遭遇 405 WAF 屏蔽，"
-                    "冷却 %.0fs 后降级到 iterdir 手动递归: %s", cooldown_s, e,
-                )
-                time.sleep(cooldown_s)
+                logger.warning("iter_files_with_path 遭遇 405，冷却 %.0fs 后降级: %s",
+                               _405_COOLDOWN_BASE, e)
+                time.sleep(_405_COOLDOWN_BASE)
             else:
-                logger.warning("【遍历】iter_files_with_path 失败，降级到 iterdir 手动递归: %s",
-                               e, exc_info=True)
+                logger.warning("iter_files_with_path 失败，降级: %s", e, exc_info=True)
 
-    # ══ 方案三：iterdir 手动递归（最终 fallback）══════════════════════════════
-    reason3 = "web CK 不支持 skim" if not skim_usable else "skim/iwp 失败，降级"
-    if iterdir is None:
-        logger.error("【遍历】iterdir 不可用，无法进行手动递归，返回当前 stats")
-        return stats, fscache_batch, strmfile_batch
-    logger.info(
-        "【遍历】使用 iterdir 手动递归: cid=%s cloud_path=%r (%s) iter_app=%s",
-        cid, cloud_path, reason3, iter_app,
-    )
-
-    # 全局 405 冷却时间戳：当 _cooldown_until > time.time() 时，所有请求都需等待
-    _cooldown_until: float = 0.0
-    _consecutive_405: int = 0       # 连续 405 计数，用于指数退避
-
-    def _wait_cooldown() -> None:
-        """若当前处于全局冷却期，则阻塞等待直到冷却结束"""
-        nonlocal _cooldown_until
-        now = time.time()
-        if _cooldown_until > now:
-            wait = _cooldown_until - now
-            logger.info("【遍历】全局 405 冷却中，等待 %.0fs...", wait)
-            time.sleep(wait)
-
-    def _trigger_cooldown() -> float:
-        """触发全局 405 冷却，返回冷却秒数"""
-        nonlocal _cooldown_until, _consecutive_405
-        _consecutive_405 += 1
-        cooldown = min(
-            _405_COOLDOWN_BASE * (_405_COOLDOWN_FACTOR ** (_consecutive_405 - 1)),
-            _405_COOLDOWN_MAX,
+    # ── 方案三：iterdir 手动递归（最终 fallback）─────────────────────────
+    if not fetched:
+        if _fn_iterdir is None:
+            logger.error("iterdir 不可用，无法拉取云盘树")
+            return stats, fscache_batch, strmfile_batch
+        reason = "web CK 不支持 skim" if not skim_usable else "skim/iwp 均失败"
+        logger.info(
+            "【阶段一】iterdir 手动递归拉取云盘树: cid=%s (%s) iter_app=%s",
+            cid, reason, iter_app,
         )
-        _cooldown_until = time.time() + cooldown
-        return cooldown
 
-    def _reset_cooldown() -> None:
-        """请求成功时重置连续 405 计数"""
-        nonlocal _consecutive_405
-        if _consecutive_405 > 0:
-            _consecutive_405 = 0
+        _cooldown_until: float = 0.0
+        _consecutive_405: int = 0
 
-    def _walk(walk_cid: int, walk_path: str, depth: int = 0) -> None:
-        if depth > 30:
-            logger.warning("【遍历】目录深度超过30层，停止递归: %s", walk_path)
-            return
+        def _wait_cooldown() -> None:
+            nonlocal _cooldown_until
+            now = time.time()
+            if _cooldown_until > now:
+                wait = _cooldown_until - now
+                logger.info("全局 405 冷却中，等待 %.0fs...", wait)
+                time.sleep(wait)
 
-        # ── 缓存命中：overwrite_mode="skip" 且 FsCache 中有该目录的子项 ──
-        cache_key = str(walk_cid)
-        if (
-            fscache_tree
-            and overwrite_mode == "skip"
-            and cache_key in fscache_tree
-        ):
-            cached_children = fscache_tree[cache_key]
-            logger.debug(
-                "【遍历】FsCache 缓存命中(子项%d个) cid=%s path=%s，跳过 API 调用",
-                len(cached_children), cache_key, walk_path,
+        def _trigger_cooldown() -> float:
+            nonlocal _cooldown_until, _consecutive_405
+            _consecutive_405 += 1
+            cd = min(
+                _405_COOLDOWN_BASE * (_405_COOLDOWN_FACTOR ** (_consecutive_405 - 1)),
+                _405_COOLDOWN_MAX,
             )
+            _cooldown_until = time.time() + cd
+            return cd
+
+        def _reset_cooldown() -> None:
+            nonlocal _consecutive_405
+            if _consecutive_405 > 0:
+                _consecutive_405 = 0
+
+        def _walk_collect(walk_cid: int, walk_path: str, depth: int = 0) -> None:
+            if depth > 30:
+                logger.warning("目录深度超过30层，停止递归: %s", walk_path)
+                return
+
+            # FsCache 命中时直接用缓存（跳过 API 调用）
+            cache_key = str(walk_cid)
+            if fscache_tree and cache_key in fscache_tree:
+                cached_children = fscache_tree[cache_key]
+                logger.debug("FsCache 命中(%d子项) cid=%s %s，跳过 API",
+                             len(cached_children), cache_key, walk_path)
+                sub_dirs = []
+                for child in cached_children:
+                    name = child.get("name", "")
+                    if not name:
+                        continue
+                    ip = child.get("local_path") or f"{walk_path}/{name}"
+                    if child.get("is_dir"):
+                        sub_cid = int(child.get("file_id") or 0)
+                        if sub_cid:
+                            sub_dirs.append((sub_cid, ip))
+                    else:
+                        _collect_item({
+                            "name":     name,
+                            "pickcode": child.get("pick_code", ""),
+                            "mtime":    child.get("mtime", ""),
+                            "id":       child.get("file_id", ""),
+                            "pid":      child.get("parent_id", ""),
+                            "sha":      child.get("sha1", ""),
+                            "s":        child.get("file_size", 0),
+                            "t":        child.get("ctime", ""),
+                        }, ip)
+                for sub_cid, sub_path in sub_dirs:
+                    _walk_collect(sub_cid, sub_path, depth + 1)
+                return
+
+            _wait_cooldown()
+            items_raw = None
+            retries_405, retries_norm = 0, 0
+            while True:
+                try:
+                    items_raw = list(_fn_iterdir(  # type: ignore[operator]
+                        client=p115_client, cid=walk_cid,
+                        cooldown=api_interval, app=iter_app,
+                    ))
+                    _reset_cooldown()
+                    break
+                except Exception as e:
+                    if _is_405_error(e):
+                        retries_405 += 1
+                        if retries_405 >= _405_MAX_RETRIES:
+                            logger.error("iterdir 405 重试耗尽(%d次) %s: %s",
+                                         retries_405, walk_path, e)
+                            stats["errors"] += 1
+                            return
+                        cd = _trigger_cooldown()
+                        logger.warning("iterdir 405(第%d次) %s, 冷却%.0fs: %s",
+                                       retries_405, walk_path, cd, e)
+                        time.sleep(cd)
+                    else:
+                        retries_norm += 1
+                        if retries_norm >= _NORMAL_MAX_RETRIES:
+                            logger.error("iterdir 失败(重试耗尽) %s: %s", walk_path, e)
+                            stats["errors"] += 1
+                            return
+                        wait = api_interval * (2 ** (retries_norm - 1))
+                        logger.warning("iterdir 失败(第%d次) %s, 等待%.1fs: %s",
+                                       retries_norm, walk_path, wait, e)
+                        time.sleep(wait)
+
+            if items_raw is None:
+                return
             sub_dirs = []
-            for child in cached_children:
-                name = child.get("name", "")
+            for item in items_raw:
+                name = item.get("name", "")
                 if not name:
                     continue
-                item_path = child.get("local_path") or f"{walk_path}/{name}"
-                if child.get("is_dir"):
-                    sub_cid = int(child.get("file_id") or 0)
+                ip = f"{walk_path}/{name}"
+                if item.get("is_dir"):
+                    sub_cid = int(item.get("id") or item.get("file_id") or 0)
                     if sub_cid:
-                        sub_dirs.append((sub_cid, item_path))
+                        sub_dirs.append((sub_cid, ip))
+                        # 目录节点单独收集进 cloud_items（用于 FsCache）
+                        cloud_items.append({
+                            "_item_path": ip,
+                            "is_dir":  True,
+                            "id":      str(sub_cid),
+                            "pid":     str(walk_cid),
+                            "name":    name,
+                        })
                 else:
-                    # 缓存中的文件条目转为 _process_file 所需格式
-                    cached_item = {
-                        "name":      name,
-                        "pickcode":  child.get("pick_code", ""),
-                        "mtime":     child.get("mtime", ""),
-                        "id":        child.get("file_id", ""),
-                        "pid":       child.get("parent_id", ""),
-                        "sha":       child.get("sha1", ""),
-                        "s":         child.get("file_size", 0),
-                        "t":         child.get("ctime", ""),
-                    }
-                    _process_file(cached_item, item_path)
-            # 递归子目录（同样先查缓存）
-            for sub_cid, sub_path in sub_dirs:
-                _walk(sub_cid, sub_path, depth + 1)
-            return
+                    _collect_item(dict(item), ip)
+            for idx, (sub_cid, sub_path) in enumerate(sub_dirs):
+                if idx > 0:
+                    time.sleep(api_interval)
+                _walk_collect(sub_cid, sub_path, depth + 1)
 
-        # ── 正常 API 调用路径 ─────────────────────────────────────────────
-        # 进入目录前先检查全局冷却
-        _wait_cooldown()
+        _walk_collect(int(cid), cloud_path_full)
+        logger.info("【阶段一】iterdir 手动递归完成，共收集 %d 条目", len(cloud_items))
+        fetched = True
 
-        items = None
-        _405_retries = 0
-        _normal_retries = 0
+    if not cloud_items:
+        logger.info("【阶段一】云盘目录树为空，无需处理")
+        return stats, fscache_batch, strmfile_batch
 
-        while True:
-            try:
-                items = list(iterdir(
-                    client=p115_client,
-                    cid=walk_cid,
-                    cooldown=api_interval,
-                    app=iter_app,
-                ))
-                _reset_cooldown()
-                break
-            except Exception as e:
-                if _is_405_error(e):
-                    _405_retries += 1
-                    if _405_retries >= _405_MAX_RETRIES:
-                        logger.error(
-                            "【遍历】iterdir 405 重试耗尽(%d次) path=%s: %s",
-                            _405_retries, walk_path, e,
-                        )
-                        stats["errors"] += 1
-                        return
-                    cooldown = _trigger_cooldown()
-                    logger.warning(
-                        "【遍历】iterdir 遭遇 405 WAF 屏蔽(第%d次) path=%s, "
-                        "冷却 %.0fs 后重试: %s",
-                        _405_retries, walk_path, cooldown, e,
-                    )
-                    time.sleep(cooldown)
-                else:
-                    _normal_retries += 1
-                    # 记录异常类型，便于诊断误判情况
-                    logger.debug(
-                        "【遍历】iterdir 非405异常: type=%s code=%s",
-                        type(e).__name__,
-                        getattr(e, "code", "N/A"),
-                    )
-                    if _normal_retries >= _NORMAL_MAX_RETRIES:
-                        logger.error(
-                            "【遍历】iterdir 失败(重试耗尽) path=%s: %s",
-                            walk_path, e,
-                        )
-                        stats["errors"] += 1
-                        return
-                    wait = api_interval * (2 ** (_normal_retries - 1))
-                    logger.warning(
-                        "【遍历】iterdir 失败(第%d次) path=%s: %s, 等待%.1fs",
-                        _normal_retries, walk_path, e, wait,
-                    )
-                    time.sleep(wait)
+    # ══════════════════════════════════════════════════════════════════════
+    # 阶段二：本地对比 + 写文件 + 写缓存（零网盘 API 调用）
+    # ══════════════════════════════════════════════════════════════════════
+    logger.info("【阶段二】开始本地对比，云盘文件候选 %d 个", len(cloud_files))
 
-        if items is None:
-            return
+    scan_count = 0
+    for item in cloud_files:
+        name      = item.get("name", "")
+        if not name:
+            continue
+        pick_code = (item.get("pickcode") or item.get("pick_code")
+                     or item.get("pc") or "")
+        item_mtime = int(item.get("mtime") or item.get("utime") or item.get("t") or 0)
+        file_id    = str(item.get("id") or item.get("file_id") or item.get("fid") or "")
+        parent_id  = str(item.get("pid") or item.get("parent_id") or "")
+        sha1       = item.get("sha") or item.get("sha1") or ""
+        file_size  = int(item.get("s") or item.get("size") or item.get("file_size") or 0)
+        ctime_val  = str(item.get("t") or item.get("ctime") or "")
+        item_path  = item.get("_item_path", cloud_path_full + "/" + name)
+        scan_count += 1
 
-        sub_dirs = []
-        for item in items:
-            name = item.get("name", "")
-            if not name:
-                continue
-            item_path = f"{walk_path}/{name}"
-            if item.get("is_dir"):
-                sub_cid = int(item.get("id") or item.get("file_id") or 0)
-                if sub_cid:
-                    sub_dirs.append((sub_cid, item_path))
-                    logger.debug("【遍历】发现子目录: %r cid=%d", item_path, sub_cid)
-                    # 收集目录节点到 FsCache
-                    fscache_batch.append({
-                        "file_id":    str(sub_cid),
-                        "parent_id":  str(walk_cid),
-                        "name":       name,
-                        "local_path": item_path,
-                        "sha1":       "",
-                        "pick_code":  "",
-                        "file_size":  0,
-                        "is_dir":     1,
-                        "mtime":      "",
-                        "ctime":      "",
-                    })
+        # ── 过滤：mtime 时间窗口 ──────────────────────────────────────────
+        if from_time > 0 and item_mtime <= from_time:
+            logger.debug("#%d %s - 跳过(mtime旧 %d <= %d)",
+                         scan_count, name, item_mtime, from_time)
+            stats["skipped"] += 1
+            continue
+
+        # ── 过滤：非视频扩展名 ────────────────────────────────────────────
+        ext = Path(name).suffix.lstrip(".").lower()
+        if ext not in video_exts:
+            logger.debug("#%d %s - 跳过(非视频 .%s)", scan_count, name, ext)
+            stats["skipped"] += 1
+            continue
+
+        # ── 校验 pickcode ─────────────────────────────────────────────────
+        if not pick_code:
+            logger.error("#%d %s - 无 pickcode，跳过", scan_count, name)
+            stats["errors"] += 1
+            continue
+        if not (len(pick_code) == 17 and pick_code.isalnum()):
+            logger.error("#%d %s - pickcode 格式错误 %r，跳过", scan_count, name, pick_code)
+            stats["errors"] += 1
+            continue
+
+        # ── 计算 STRM 路径和 URL（纯本地计算，不调网盘）────────────────────
+        rel      = calc_rel_path(item_path, cloud_path)
+        strm_url = render_strm_url(url_tmpl, link_host, pick_code, name, item_path)
+        strm_name = get_strm_filename(name)
+        strm_file = strm_root / rel / strm_name
+
+        # ── 决策：本地文件是否存在 ────────────────────────────────────────
+        if strm_file.exists():
+            existing = strm_file.read_text(encoding="utf-8").strip()
+            if existing == strm_url.strip():
+                result, result_desc = "skipped", "内容相同跳过"
+            elif overwrite_mode == "skip":
+                result, result_desc = "skipped", "已存在(skip模式)跳过"
             else:
-                _process_file(item, item_path)
+                # overwrite 模式：重写文件
+                try:
+                    strm_file.write_text(strm_url, encoding="utf-8")
+                    result, result_desc = "created", "内容变更覆盖"
+                except Exception as ex:
+                    logger.error("#%d %s - 写入失败: %s", scan_count, name, ex)
+                    stats["errors"] += 1
+                    continue
+        else:
+            # 新建
+            try:
+                strm_file.parent.mkdir(parents=True, exist_ok=True)
+                strm_file.write_text(strm_url, encoding="utf-8")
+                result, result_desc = "created", "新建"
+            except Exception as ex:
+                logger.error("#%d %s - 写入失败: %s", scan_count, name, ex)
+                stats["errors"] += 1
+                continue
 
-        for idx, (sub_cid, sub_path) in enumerate(sub_dirs):
-            if idx > 0:
-                time.sleep(api_interval)
-            _walk(sub_cid, sub_path, depth + 1)
+        # ── 统一日志（一条包含所有步骤）──────────────────────────────────
+        logger.debug("#%d %s - %s - %s - %s",
+                     scan_count, name, item_path, strm_url, result_desc)
 
-    _walk(int(cid), cloud_path_full)
-    logger.info("【遍历】iterdir 手动递归完成，扫描 %d 个条目，stats=%s", scan_count, stats)
+        # ── 写 FsCache（无论 created/skipped 都写，保持目录树缓存完整）────
+        if file_id:
+            fscache_batch.append({
+                "file_id":   file_id,
+                "parent_id": parent_id,
+                "name":      name,
+                "local_path": item_path,
+                "sha1":      sha1,
+                "pick_code": pick_code,
+                "file_size": file_size,
+                "is_dir":    0,
+                "mtime":     str(item_mtime),
+                "ctime":     ctime_val,
+            })
+
+        # ── 写 StrmFile（无论 created/skipped 都写，供文件列表页显示）────
+        strmfile_batch.append({
+            "item_id":      pick_code,
+            "strm_path":    str(strm_file),
+            "strm_content": strm_url,
+            "strm_mode":    "p115",
+            "file_size":    file_size,
+        })
+
+        if result == "created":
+            stats["created"] += 1
+        else:
+            stats["skipped"] += 1
+
+    # ── 目录节点写 FsCache ────────────────────────────────────────────────
+    for item in cloud_items:
+        if item.get("is_dir"):
+            dir_id  = str(item.get("id") or "")
+            dir_pid = str(item.get("pid") or "")
+            dir_name= item.get("name", "")
+            dir_path= item.get("_item_path", "")
+            if dir_id:
+                fscache_batch.append({
+                    "file_id":   dir_id,
+                    "parent_id": dir_pid,
+                    "name":      dir_name,
+                    "local_path": dir_path,
+                    "sha1":      "",
+                    "pick_code": "",
+                    "file_size": 0,
+                    "is_dir":    1,
+                    "mtime":     "",
+                    "ctime":     "",
+                })
+
+    logger.info(
+        "【阶段二】完成: 扫描%d个视频文件 created=%d skipped=%d errors=%d "
+        "FsCache待写=%d StrmFile待写=%d",
+        scan_count, stats["created"], stats["skipped"], stats["errors"],
+        len(fscache_batch), len(strmfile_batch),
+    )
     return stats, fscache_batch, strmfile_batch
 
 
@@ -557,7 +570,7 @@ async def resolve_cloud_cid(manager, cloud_path: str) -> str:
                 cur_cid = 0
                 for seg in segments:
                     logger.debug("【resolve_cid】iterdir 查找 %r (parent_cid=%d)", seg, cur_cid)
-                    dir_items = list(iterdir(client=p115_client, cid=cur_cid, cooldown=1, app=iter_app))
+                    dir_items = list(_fn_iterdir(client=p115_client, cid=cur_cid, cooldown=1, app=iter_app))
                     found = next((i for i in dir_items if i.get("is_dir") and i.get("name") == seg), None)
                     if found is None:
                         raise ValueError(f"路径段未找到: {seg!r} (parent_cid={cur_cid})")

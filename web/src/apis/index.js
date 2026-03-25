@@ -153,6 +153,8 @@ export const tasksApi = {
   running: () => api.get('/tasks/running'),
   // 单任务详情
   get: (id) => api.get(`/tasks/${id}`),
+  // 终止运行中任务
+  cancel: (id) => api.post(`/tasks/${id}/cancel`),
   // 删除单个任务记录
   remove: (id) => api.delete(`/tasks/${id}`),
   // 批量清除已完成/失败任务

@@ -7,12 +7,12 @@
    Statistic, Row, Col,
  } from 'antd'
  import {
-   ReloadOutlined, PlayCircleOutlined, DeleteOutlined,
+   ReloadOutlined, DeleteOutlined, StopOutlined,
    ThunderboltOutlined, ClockCircleOutlined, CheckCircleOutlined,
    CloseCircleOutlined, SyncOutlined, ClearOutlined,
  } from '@ant-design/icons'
  import { useTranslation } from 'react-i18next'
- import { tasksApi, p115StrmApi } from '@/apis/index.js'
+ import { tasksApi } from '@/apis/index.js'
  
  const { Text, Title } = Typography
  
@@ -34,8 +34,9 @@
  }
  
  // ── 运行中任务卡片 ────────────────────────────────────────────────
- function RunningTaskCard({ task }) {
+ function RunningTaskCard({ task, onCancel }) {
    const { t } = useTranslation()
+   const [cancelling, setCancelling] = useState(false)
    const CATEGORY_LABELS = {
      p115_strm: t('tasks.categoryP115Strm'),
      organize:  t('tasks.categoryOrganize'),
@@ -43,6 +44,16 @@
    }
    const stats = task.live_stats || {}
    const total = (stats.created || 0) + (stats.skipped || 0) + (stats.errors || 0)
+
+   const handleCancel = async () => {
+     setCancelling(true)
+     try {
+       await onCancel(task.task_id)
+     } finally {
+       setCancelling(false)
+     }
+   }
+
    return (
      <Card
        size="small"
@@ -53,6 +64,11 @@
            <Text strong>{task.task_name}</Text>
            <Tag color="blue">{CATEGORY_LABELS[task.task_category] || task.task_category}</Tag>
          </Space>
+       }
+       extra={
+         <Popconfirm title="确定要终止该任务吗？" onConfirm={handleCancel} okText="终止" cancelText="取消" okButtonProps={{ danger: true }}>
+           <Button danger size="small" icon={<StopOutlined />} loading={cancelling}>终止任务</Button>
+         </Popconfirm>
        }
      >
        <Row gutter={16}>
@@ -76,7 +92,6 @@
    const [pagination, setPagination] = useState({ current: 1, pageSize: 20, total: 0 })
    const [filterStatus,   setFilterStatus]   = useState('')
    const [filterCategory, setFilterCategory] = useState('')
-   const [triggering, setTriggering] = useState({ full: false, inc: false })
    const pollRef = useRef(null)
  
    const CATEGORY_LABELS = {
@@ -112,18 +127,17 @@
      pollRef.current = setInterval(() => { fetchRunning() }, 5000)
      return () => clearInterval(pollRef.current)
    }, [fetchTasks, fetchRunning])
- 
-   const triggerSync = async (type) => {
-     setTriggering(prev => ({ ...prev, [type]: true }))
+
+   const handleCancel = async (taskId) => {
      try {
-       const fn = type === 'full' ? p115StrmApi.fullSync : p115StrmApi.incSync
-       const { data } = await fn()
-       data?.success ? message.success(data.message) : message.warning(data?.message || t('tasks.startFailed'))
-       setTimeout(() => { fetchRunning(); fetchTasks() }, 1500)
-     } catch { message.error(t('tasks.operateFailed')) }
-     finally { setTriggering(prev => ({ ...prev, [type]: false })) }
+       const { data } = await tasksApi.cancel(taskId)
+       data?.success
+         ? message.success(data.message || '任务已终止')
+         : message.warning(data?.message || '终止失败')
+       setTimeout(() => { fetchRunning(); fetchTasks(pagination.current, pagination.pageSize) }, 800)
+     } catch { message.error('操作失败') }
    }
- 
+
    const handleDelete = async (id) => {
      try {
        const { data } = await tasksApi.remove(id)
@@ -163,11 +177,14 @@
      { title: t('tasks.colError'), dataIndex: 'error_message', key: 'error_message', ellipsis: true,
        render: (v) => v ? <Tooltip title={v}><Text type="danger" ellipsis>{v}</Text></Tooltip> : '-' },
      {
-       title: t('tasks.colAction'), key: 'action', width: 80, fixed: 'right',
-       render: (_, row) => (
+       title: t('tasks.colAction'), key: 'action', width: 100, fixed: 'right',
+       render: (_, row) => row.status === 'running' ? (
+         <Popconfirm title="确定要终止该任务吗？" onConfirm={() => handleCancel(row.id)} okText="终止" cancelText="取消" okButtonProps={{ danger: true }}>
+           <Button type="primary" danger size="small" icon={<StopOutlined />}>终止</Button>
+         </Popconfirm>
+       ) : (
          <Popconfirm title={t('tasks.confirmDelete')} onConfirm={() => handleDelete(row.id)}>
-           <Button type="text" danger icon={<DeleteOutlined />} size="small"
-             disabled={row.status === 'running'} />
+           <Button type="text" danger icon={<DeleteOutlined />} size="small" />
          </Popconfirm>
        ),
      },
@@ -183,21 +200,13 @@
            title={<Space><ThunderboltOutlined style={{ color: '#1677ff' }} /><span>{t('tasks.runningTasks')}</span></Space>}
            style={{ marginBottom: 16 }} size="small"
          >
-           {running.map(task => <RunningTaskCard key={task.task_id} task={task} />)}
+           {running.map(task => <RunningTaskCard key={task.task_id} task={task} onCancel={handleCancel} />)}
          </Card>
        )}
- 
+
        {/* 操作栏 */}
        <Card style={{ marginBottom: 12 }} size="small">
          <Space wrap>
-           <Button type="primary" icon={<PlayCircleOutlined />}
-             loading={triggering.full} onClick={() => triggerSync('full')}>
-             {t('tasks.triggerFullSync')}
-           </Button>
-           <Button icon={<PlayCircleOutlined />}
-             loading={triggering.inc} onClick={() => triggerSync('inc')}>
-             {t('tasks.triggerIncSync')}
-           </Button>
            <Select placeholder={t('tasks.filterStatus')} allowClear style={{ width: 120 }}
              value={filterStatus || undefined} onChange={(v) => setFilterStatus(v || '')}>
              <Select.Option value="running">{t('tasks.statusRunning')}</Select.Option>

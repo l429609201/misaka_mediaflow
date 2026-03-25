@@ -95,6 +95,9 @@ class P115StrmSyncService:
             task_type="full_sync",
             triggered_by="manual",
         )
+        # 注册当前 asyncio.Task 引用，供终止功能使用
+        if self._current_task:
+            tm.register_task(task_id, self._current_task)
 
         try:
             config         = await self.get_config()
@@ -195,6 +198,9 @@ class P115StrmSyncService:
             task_type="inc_sync",
             triggered_by="manual",
         )
+        # 注册当前 asyncio.Task 引用，供终止功能使用
+        if self._current_task:
+            tm.register_task(task_id, self._current_task)
 
         try:
             config         = await self.get_config()

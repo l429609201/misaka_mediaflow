@@ -78,6 +78,33 @@ async def get_task(task_id: int):
     return d
 
 
+# ── 终止运行中任务 ────────────────────────────────────────────────
+
+@router.post("/{task_id}/cancel", dependencies=[Depends(verify_token)])
+async def cancel_task(task_id: int):
+    """终止运行中的任务（发送取消信号，并将任务状态标记为 failed）"""
+    tm = get_task_manager()
+    if not tm.get_live(task_id):
+        return {"success": False, "message": "任务未在运行中"}
+    cancelled = tm.cancel_task(task_id)
+    if cancelled:
+        # 更新 DB：状态标记为 failed，写入终止原因
+        async with get_async_session_local() as db:
+            task = await db.get(StrmTask, task_id)
+            if task:
+                from src.core.timezone import tm as tz
+                task.status        = "failed"
+                task.error_message = "用户手动终止"
+                task.finished_at   = tz.now()
+                await db.commit()
+        # 清理内存快照（asyncio.Task 取消后协程会抛 CancelledError，_live 也会被 complete_task 清理）
+        # 这里提前清理以防 complete_task 因异常路径无法执行
+        tm._live.pop(task_id, None)
+        tm._tasks.pop(task_id, None)
+        return {"success": True, "message": "任务已终止"}
+    return {"success": False, "message": "终止失败，任务可能已结束"}
+
+
 # ── 删除任务记录 ──────────────────────────────────────────────────
 
 @router.delete("/{task_id}", dependencies=[Depends(verify_token)])

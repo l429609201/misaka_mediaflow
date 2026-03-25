@@ -148,16 +148,15 @@ def write_strm(
     filename: str,
     strm_url: str,
     overwrite_mode: str = "skip",
-) -> str:
+) -> tuple[str, str]:
     """
     写 .strm 文件到本地。
     overwrite_mode:
-      "skip"      → 文件已存在时跳过（对齐 p115strmhelper overwrite_mode=never）
-      "overwrite" → 文件已存在时强制覆盖（对齐 p115strmhelper overwrite_mode=always）
-    返回值：
-      "created"  → 新建或覆盖写入
-      "skipped"  → 文件已存在且跳过
-      "error"    → 写入失败
+      "skip"      → 文件已存在时跳过
+      "overwrite" → 文件已存在时强制覆盖
+    返回 (result, desc)：
+      result: "created" / "skipped" / "error"
+      desc:   供调用方合并到单条日志的结果描述（不含日志级别前缀）
     """
     try:
         strm_dir = strm_root / rel
@@ -169,19 +168,16 @@ def write_strm(
         if strm_file.exists():
             existing = strm_file.read_text(encoding="utf-8").strip()
             if existing == strm_content.strip():
-                logger.debug("STRM 文件已存在且内容相同，跳过: %s", strm_file)
-                return "skipped"
+                return "skipped", "内容相同跳过"
             if overwrite_mode == "skip":
-                logger.debug("STRM 文件已存在，覆盖模式 skip，跳过: %s", strm_file)
-                return "skipped"
-            logger.debug("STRM 文件内容变更，覆盖: %s", strm_file)
+                return "skipped", "已存在(skip模式)跳过"
+            desc_action = "内容变更覆盖"
         else:
-            logger.debug("新建 STRM 文件: %s → %s", strm_file, strm_content)
+            desc_action = "新建"
 
         strm_file.write_text(strm_content, encoding="utf-8")
-        logger.info("【STRM写入】生成 STRM 文件成功: %s", str(strm_file))
-        return "created"
+        return "created", desc_action
     except Exception as e:
-        logger.error("【STRM写入】写入 STRM 文件失败: %s  %s", filename, e)
-        return "error"
+        logger.error("写入 STRM 失败: %s  %s", filename, e)
+        return "error", f"写入失败: {e}"
 
