@@ -19,6 +19,27 @@ from src.services.p115.modules.db_ops import lookup_cid_by_path
 
 logger = logging.getLogger(__name__)
 
+# ── 405 WAF 冷却相关常量 ─────────────────────────────────────────────────────
+# 115 API 返回 405 时表示 IP 被 WAF 临时屏蔽，需要较长冷却时间
+_405_COOLDOWN_BASE    = 30.0    # 首次 405 冷却秒数
+_405_COOLDOWN_MAX     = 300.0   # 最大冷却秒数
+_405_COOLDOWN_FACTOR  = 2.0     # 指数退避倍数
+_405_MAX_RETRIES      = 6       # 405 最大重试次数（普通错误仍然 3 次）
+_NORMAL_MAX_RETRIES   = 3       # 普通错误最大重试次数
+
+
+def _is_405_error(exc: Exception) -> bool:
+    """判断异常是否为 HTTP 405（WAF 屏蔽）"""
+    err_str = str(exc)
+    # p115client 通常在异常字符串中包含 code=405 或 405 Method Not Allowed
+    if "405" in err_str:
+        return True
+    # 检查异常属性（某些 p115client 版本会设置 code 属性）
+    code = getattr(exc, "code", None) or getattr(exc, "status", None)
+    if code == 405:
+        return True
+    return False
+
 # ── iOS UA（参考 p115strmhelper get_ios_ua_app，走 proapi.115.com 规避405风控）──
 _IOS_UA = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 18_2_1 like Mac OS X) "
@@ -198,8 +219,16 @@ def iter_and_write_strm(
             return stats, fscache_batch, strmfile_batch
 
         except Exception as e:
-            logger.warning("【遍历】iter_files_with_path_skim 失败，回退到 iterdir 递归: %s",
-                           e, exc_info=True)
+            if _is_405_error(e):
+                cooldown = _405_COOLDOWN_BASE
+                logger.warning(
+                    "【遍历】iter_files_with_path_skim 遭遇 405 WAF 屏蔽，"
+                    "冷却 %.0fs 后回退到 iterdir 递归: %s", cooldown, e,
+                )
+                time.sleep(cooldown)
+            else:
+                logger.warning("【遍历】iter_files_with_path_skim 失败，回退到 iterdir 递归: %s",
+                               e, exc_info=True)
 
     # ── 方案二：iterdir 手动递归 —— 确定 iter_app ────────────────────────────
     # login_app 与 iter_app 必须对齐：web CK 用 "web"，iOS/Android CK 用对应值
@@ -211,13 +240,49 @@ def iter_and_write_strm(
         cid, cloud_path, reason, iter_app,
     )
 
+    # 全局 405 冷却时间戳：当 _cooldown_until > time.time() 时，所有请求都需等待
+    _cooldown_until: float = 0.0
+    _consecutive_405: int = 0       # 连续 405 计数，用于指数退避
+
+    def _wait_cooldown() -> None:
+        """若当前处于全局冷却期，则阻塞等待直到冷却结束"""
+        nonlocal _cooldown_until
+        now = time.time()
+        if _cooldown_until > now:
+            wait = _cooldown_until - now
+            logger.info("【遍历】全局 405 冷却中，等待 %.0fs...", wait)
+            time.sleep(wait)
+
+    def _trigger_cooldown() -> float:
+        """触发全局 405 冷却，返回冷却秒数"""
+        nonlocal _cooldown_until, _consecutive_405
+        _consecutive_405 += 1
+        cooldown = min(
+            _405_COOLDOWN_BASE * (_405_COOLDOWN_FACTOR ** (_consecutive_405 - 1)),
+            _405_COOLDOWN_MAX,
+        )
+        _cooldown_until = time.time() + cooldown
+        return cooldown
+
+    def _reset_cooldown() -> None:
+        """请求成功时重置连续 405 计数"""
+        nonlocal _consecutive_405
+        if _consecutive_405 > 0:
+            _consecutive_405 = 0
+
     def _walk(walk_cid: int, walk_path: str, depth: int = 0) -> None:
         if depth > 30:
             logger.warning("【遍历】目录深度超过30层，停止递归: %s", walk_path)
             return
 
+        # 进入目录前先检查全局冷却
+        _wait_cooldown()
+
         items = None
-        for attempt in range(3):
+        _405_retries = 0
+        _normal_retries = 0
+
+        while True:
             try:
                 items = list(iterdir(
                     client=p115_client,
@@ -225,18 +290,40 @@ def iter_and_write_strm(
                     cooldown=api_interval,
                     app=iter_app,
                 ))
+                _reset_cooldown()
                 break
             except Exception as e:
-                err_str = str(e)
-                wait = api_interval * (2 ** attempt)
-                if attempt < 2:
-                    logger.warning("【遍历】iterdir 失败(第%d次) path=%s: %s, 等待%.1fs",
-                                   attempt + 1, walk_path, err_str, wait)
-                    time.sleep(wait)
+                if _is_405_error(e):
+                    _405_retries += 1
+                    if _405_retries >= _405_MAX_RETRIES:
+                        logger.error(
+                            "【遍历】iterdir 405 重试耗尽(%d次) path=%s: %s",
+                            _405_retries, walk_path, e,
+                        )
+                        stats["errors"] += 1
+                        return
+                    cooldown = _trigger_cooldown()
+                    logger.warning(
+                        "【遍历】iterdir 遭遇 405 WAF 屏蔽(第%d次) path=%s, "
+                        "冷却 %.0fs 后重试: %s",
+                        _405_retries, walk_path, cooldown, e,
+                    )
+                    time.sleep(cooldown)
                 else:
-                    logger.error("【遍历】iterdir 失败(重试耗尽) path=%s: %s", walk_path, err_str)
-                    stats["errors"] += 1
-                    return
+                    _normal_retries += 1
+                    if _normal_retries >= _NORMAL_MAX_RETRIES:
+                        logger.error(
+                            "【遍历】iterdir 失败(重试耗尽) path=%s: %s",
+                            walk_path, e,
+                        )
+                        stats["errors"] += 1
+                        return
+                    wait = api_interval * (2 ** (_normal_retries - 1))
+                    logger.warning(
+                        "【遍历】iterdir 失败(第%d次) path=%s: %s, 等待%.1fs",
+                        _normal_retries, walk_path, e, wait,
+                    )
+                    time.sleep(wait)
 
         if items is None:
             return

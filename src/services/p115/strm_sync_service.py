@@ -104,10 +104,11 @@ class P115StrmSyncService:
                 return
 
             video_exts     = get_video_exts(config)
-            link_host      = get_link_host(config)
             url_tmpl       = await get_url_template()
             sync_pairs     = resolve_sync_pairs(config, "full")
             p115_settings  = await load_p115_settings()
+            # strm_link_host 保存在 p115_settings 中，需要从 p115_settings 读取
+            link_host      = get_link_host(p115_settings)
             api_interval   = float(p115_settings.get("api_interval", 1.0))
             api_concurrent = int(p115_settings.get("api_concurrent", 3))
             overwrite_mode = config.get("full_overwrite_mode", "skip")
@@ -199,10 +200,11 @@ class P115StrmSyncService:
                 return
 
             video_exts    = get_video_exts(config)
-            link_host     = get_link_host(config)
             url_tmpl      = await get_url_template()
             sync_pairs    = resolve_sync_pairs(config, "inc")
             p115_settings = await load_p115_settings()
+            # strm_link_host 保存在 p115_settings 中，需要从 p115_settings 读取
+            link_host     = get_link_host(p115_settings)
             api_interval  = float(p115_settings.get("api_interval", 1.0))
             self._api_interval = api_interval
 

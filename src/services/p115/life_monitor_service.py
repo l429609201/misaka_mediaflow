@@ -20,6 +20,7 @@ from src.services.p115.modules import (
     get_url_template, render_strm_url, write_strm, calc_rel_path,
     save_fscache_and_strmfile,
 )
+from src.services.p115.modules.db_ops import load_p115_settings
 
 logger = logging.getLogger(__name__)
 
@@ -345,7 +346,9 @@ class P115LifeMonitorService:
         strm_config = await strm_svc.get_config()
         sync_pairs  = strm_config.get("sync_pairs", [])
         video_exts  = get_video_exts(strm_config)
-        link_host   = get_link_host(strm_config)
+        # strm_link_host 保存在 p115_settings 中，需要从 p115_settings 读取
+        p115_settings = await load_p115_settings()
+        link_host   = get_link_host(p115_settings)
         url_tmpl    = await get_url_template()
 
         need_inc_sync = False
