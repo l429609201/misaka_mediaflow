@@ -1,5 +1,8 @@
 # app/adapters/storage/p115/p115_auth.py
 # 115 认证管理 — Cookie / OpenAPI Token / 扫码登录
+#
+#   使用 p115client.P115Client 的静态方法代替手动拼 URL，
+#   确保 login_qrcode_scan_result 的 URL 路径中 app 类型正确动态拼接。
 
 import logging
 from typing import Optional
@@ -8,10 +11,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# 115 API 端点
-_115_QRCODE_TOKEN_URL = "https://qrcodeapi.115.com/api/1.0/web/1.0/token"
-_115_QRCODE_STATUS_URL = "https://qrcodeapi.115.com/get/status/"
-_115_QRCODE_LOGIN_URL = "https://passportapi.115.com/app/1.0/web/1.0/login/qrcode"
+# 115 API 端点（仅 OpenAPI 仍用手动请求）
 _115_OPENAPI_TOKEN_URL = "https://open.115.com/auth/token"
 
 
@@ -196,58 +196,61 @@ class P115AuthService:
 
     async def qrcode_login_step1(self, app: str = "web") -> Optional[dict]:
         """
-        扫码登录第1步 — 获取二维码 Token 和图片
+        扫码登录第1步 — 获取二维码 Token 和图片。
+        使用 P115Client 静态方法。
+
         :param app: 客户端类型, 默认 web
-        :return: {uid, time, sign, qrcode_url, app}
+        :return: {uid, time, sign, qrcode_content, app}
         """
         if app not in self.ALLOWED_APP_TYPES:
             app = "web"
         try:
-            client = await self._ensure_client()
-            resp = await client.get(_115_QRCODE_TOKEN_URL, params={"app": app})
-            data = resp.json()
-            if data.get("state"):
-                qr_data = data.get("data", {})
-                uid = qr_data.get("uid", "")
-                # 115 API 返回的 qrcode 字段就是二维码内容字符串，前端用 QRCode 组件渲染
-                qrcode_content = qr_data.get("qrcode", "")
-                logger.info("获取 115 二维码成功, uid=%s, app=%s", uid, app)
-                return {
-                    "uid": uid,
-                    "time": str(qr_data.get("time", "")),
-                    "sign": str(qr_data.get("sign", "")),
-                    "qrcode_content": qrcode_content,
-                    "app": app,
-                }
-            logger.error("获取二维码 Token 失败: %s", data)
-            return None
+            from p115client import P115Client, check_response
+            from base64 import b64encode
+
+            # 1. 获取二维码 Token（uid, time, sign）
+            resp = P115Client.login_qrcode_token()
+            check_response(resp)
+            qr_data = resp.get("data", {})
+            uid = str(qr_data.get("uid", ""))
+            _time = str(qr_data.get("time", ""))
+            _sign = str(qr_data.get("sign", ""))
+
+            # 2. 获取二维码图片并转 base64（对齐 DDSRem 返回格式）
+            qr_bytes = P115Client.login_qrcode(uid)
+            qrcode_base64 = b64encode(qr_bytes).decode("utf-8")
+
+            logger.info("获取 115 二维码成功 (P115Client), uid=%s, app=%s", uid, app)
+            return {
+                "uid": uid,
+                "time": _time,
+                "sign": _sign,
+                # 返回 base64 图片，前端可直接作为 <img src> 展示
+                "qrcode_content": f"data:image/png;base64,{qrcode_base64}",
+                "app": app,
+            }
         except Exception as e:
-            logger.error("获取二维码异常: %s", e)
+            logger.error("获取二维码异常 (P115Client): %s", e, exc_info=True)
             return None
 
     async def qrcode_login_step2(
         self, uid: str, time_val: str, sign: str, app: str = "web"
     ) -> dict:
         """
-        扫码登录第2步 — 轮询状态
-        :return: {status: "waiting"|"scanned"|"success"|"expired"|"canceled", cookie?: str}
+        扫码登录第2步 — 轮询状态。
+        使用 P115Client.login_qrcode_scan_status()。
 
-        说明：115 二维码状态接口响应通常在 1s 内完成。
-        使用较短的 timeout=8s，避免每次轮询阻塞太久（全局 client timeout=30s 不适合轮询场景）。
-        超时视为 waiting 返回，让前端继续轮询；
-        前端需自行设置最大轮询次数兜底（防止二维码过期后永远轮询）。
+        :return: {status: "waiting"|"scanned"|"success"|"expired"|"canceled", cookie?: str}
         """
         if app not in self.ALLOWED_APP_TYPES:
             app = "web"
         try:
-            client = await self._ensure_client()
-            resp = await client.get(
-                _115_QRCODE_STATUS_URL,
-                params={"uid": uid, "time": time_val, "sign": sign},
-                timeout=8,  # 状态接口应快速响应，短 timeout 避免长时间阻塞
-            )
-            data = resp.json()
-            status_code = data.get("data", {}).get("status", -1)
+            from p115client import P115Client, check_response
+
+            payload = {"uid": uid, "time": time_val, "sign": sign}
+            resp = P115Client.login_qrcode_scan_status(payload)
+            check_response(resp)
+            status_code = resp.get("data", {}).get("status")
 
             if status_code == 0:
                 return {"status": "waiting"}
@@ -258,47 +261,65 @@ class P115AuthService:
                 if cookie:
                     return {"status": "success", "cookie": cookie}
                 return {"status": "error", "error": "换取 Cookie 失败"}
-            elif status_code == -1:
+            elif status_code == -1 or (
+                status_code is None and resp.get("message") == "key invalid"
+            ):
                 return {"status": "expired"}
             elif status_code == -2:
                 return {"status": "canceled"}
             else:
                 return {"status": "waiting"}
-        except httpx.TimeoutException:
-            # 轮询超时：等待用户扫码期间偶发正常，静默返回 waiting
-            # 前端有最大轮询次数兜底（约5分钟），超出后自动标记 expired
-            logger.debug("二维码状态轮询超时 uid=%s", uid)
-            return {"status": "waiting"}
         except Exception as e:
+            err_str = str(e).lower()
+            if "timeout" in err_str or "timed out" in err_str:
+                logger.debug("二维码状态轮询超时 uid=%s", uid)
+                return {"status": "waiting"}
             logger.warning("二维码状态查询异常: %s(%s)", type(e).__name__, e or "no detail")
             return {"status": "error", "error": f"{type(e).__name__}: {e}"}
 
     async def _exchange_cookie(self, uid: str, app: str = "web") -> Optional[str]:
-        """用扫码 UID 换取 Cookie（根据 app 类型获取不同端的 Cookie）"""
+        """
+        用扫码 UID 换取 Cookie。
+        使用 P115Client.login_qrcode_scan_result(uid, app=app)。
+
+        关键修复：
+          之前硬编码 URL = passportapi.115.com/app/1.0/web/1.0/login/qrcode
+          P115Client 会动态拼接 → passportapi.115.com/app/1.0/{app}/1.0/login/qrcode/
+          确保 alipaymini/android 等 app 类型换取到正确 SSOENT 的 Cookie。
+        """
         try:
-            client = await self._ensure_client()
-            resp = await client.post(
-                _115_QRCODE_LOGIN_URL,
-                data={"account": uid, "app": app},
-            )
-            data = resp.json()
-            if data.get("state"):
-                cookie_data = data.get("data", {}).get("cookie", {})
-                cookie_parts = [f"{k}={v}" for k, v in cookie_data.items() if k and v]
-                cookie_str = "; ".join(cookie_parts)
-                self.set_cookie(cookie_str)
-                # 不在此覆写 _login_app：set_cookie() 已通过 SSOENT 识别出真实 login_app。
-                # 例如 alipaymini 扫码后 115 服务端返回的是 web 类型 CK（SSOENT=A1），
-                # 若此处强制写回 alipaymini，生活事件监控会用错 API 路径导致"请重新登录"。
-                logger.info(
-                    "115 扫码登录成功, scan_app=%s, effective_login_app=%s, cookie_len=%d",
-                    app, self._login_app, len(cookie_str),
-                )
-                return cookie_str
-            logger.error("换取 Cookie 失败: %s", data)
-            return None
+            from p115client import P115Client, check_response
+
+            resp = P115Client.login_qrcode_scan_result(uid, app=app)
+            check_response(resp)
+
+            if resp.get("state") and resp.get("data"):
+                cookie_data = resp.get("data", {})
+                cookie_string = ""
+                if "cookie" in cookie_data and isinstance(cookie_data["cookie"], dict):
+                    cookie_string = "; ".join(
+                        f"{name}={value}"
+                        for name, value in cookie_data["cookie"].items()
+                        if name and value
+                    )
+
+                if cookie_string:
+                    self.set_cookie(cookie_string)
+                    # 不在此覆写 _login_app：set_cookie() 已通过 SSOENT 识别出真实 login_app。
+                    logger.info(
+                        "115 扫码登录成功 (P115Client), scan_app=%s, effective_login_app=%s, cookie_len=%d",
+                        app, self._login_app, len(cookie_string),
+                    )
+                    return cookie_string
+
+                logger.error("换取 Cookie 成功但解析为空: %s", cookie_data)
+                return None
+            else:
+                specific_error = resp.get("message", resp.get("error", "未知错误"))
+                logger.error("换取 Cookie 失败: %s", specific_error)
+                return None
         except Exception as e:
-            logger.error("换取 Cookie 异常: %s", e)
+            logger.error("换取 Cookie 异常 (P115Client): %s", e, exc_info=True)
             return None
 
     # ==================== 验证 ====================

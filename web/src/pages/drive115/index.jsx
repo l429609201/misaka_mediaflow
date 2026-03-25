@@ -7,7 +7,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import {
   Card, Descriptions, Tag, Button, Input, InputNumber, Modal, message,
-  Space, Alert, Row, Col, Spin, Typography, Form, Select, QRCode,
+  Space, Alert, Row, Col, Spin, Typography, Form, Select,
   Avatar, Progress, Divider, Switch, Badge, Tooltip, theme,
 } from 'antd'
 import {
@@ -977,7 +977,7 @@ export const Drive115 = () => {
         </div>
         <div style={{ textAlign: 'center', padding: '16px 0' }}>
           {qrStatus === 'loading' && <Spin tip={t('p115.qrLoading')} />}
-          {qrStatus === 'waiting' && qrData?.qrcode_content && <QRCode value={qrData.qrcode_content} size={200} />}
+          {qrStatus === 'waiting' && qrData?.qrcode_content && <img src={qrData.qrcode_content} alt="QR Code" style={{ width: 200, height: 200 }} />}
           {qrStatus === 'scanned' && <Alert type="info"    message={t('p115.qrScanned')} showIcon />}
           {qrStatus === 'success' && <Alert type="success" message={t('p115.qrSuccess')} showIcon />}
           {qrStatus === 'expired' && <Space direction="vertical"><Alert type="warning" message={t('p115.qrExpired')} showIcon /><Button onClick={handleOpenQr}>{t('p115.qrRetry')}</Button></Space>}
