@@ -3,8 +3,10 @@
 # 负责 115 网盘目录树遍历和 STRM 文件生成的核心逻辑。
 # 所有函数为普通同步函数（在 asyncio.to_thread 中执行），或 async 函数（调用 DB）。
 #
-#   - 优先使用 iter_files_with_path_skim（单次流式遍历整棵树）
-#   - fallback 到 iterdir 手动递归
+#   优先级（三档降级）：
+#   1. iter_files_with_path_skim（非 web CK 专用，一次 API 拉取整棵树，最快）
+#   2. iter_files_with_path    （所有 CK 通用，库封装递归+内置冷却，中速）
+#   3. iterdir 手动递归        （最终 fallback，逐目录 API，最慢）
 #   - 边遍历边写 STRM，收集 fscache_batch / strmfile_batch
 
 import asyncio
@@ -29,15 +31,44 @@ _NORMAL_MAX_RETRIES   = 3       # 普通错误最大重试次数
 
 
 def _is_405_error(exc: Exception) -> bool:
-    """判断异常是否为 HTTP 405（WAF 屏蔽）"""
+    """
+    判断异常是否为 HTTP 405（115 WAF 屏蔽）。
+    多层检测保证兼容不同版本的 p115client 异常包装。
+    """
+    # 1. 检查 code 属性（p115client 自定义异常通常有 code 字段）
+    #    注意：code 可能是 int 也可能是 str
+    code = getattr(exc, "code", None)
+    if code is not None:
+        try:
+            if int(code) == 405:
+                return True
+        except (TypeError, ValueError):
+            pass
+
+    # 2. 检查 response 对象的 status_code（httpx / requests 风格）
+    response = getattr(exc, "response", None)
+    if response is not None:
+        status = getattr(response, "status_code", None)
+        if status is None:
+            # ResponseWrapper 有时叫 .status
+            status = getattr(response, "status", None)
+        try:
+            if int(status) == 405:
+                return True
+        except (TypeError, ValueError):
+            pass
+
+    # 3. 检查 str(exc) 是否包含 405 / Method Not Allowed
     err_str = str(exc)
-    # p115client 通常在异常字符串中包含 code=405 或 405 Method Not Allowed
-    if "405" in err_str:
+    if "405" in err_str or "Method Not Allowed" in err_str:
         return True
-    # 检查异常属性（某些 p115client 版本会设置 code 属性）
-    code = getattr(exc, "code", None) or getattr(exc, "status", None)
-    if code == 405:
-        return True
+
+    # 4. 递归检查异常链（__cause__ / __context__）
+    for chained in (getattr(exc, "__cause__", None), getattr(exc, "__context__", None)):
+        if chained is not None and chained is not exc:
+            if _is_405_error(chained):
+                return True
+
     return False
 
 # ── iOS UA（参考 p115strmhelper get_ios_ua_app，走 proapi.115.com 规避405风控）──
@@ -62,6 +93,7 @@ def iter_and_write_strm(
     from_time: int = 0,
     overwrite_mode: str = "skip",
     api_interval: float = 1.0,
+    fscache_tree: dict | None = None,
 ) -> tuple[dict, list[dict], list[dict]]:
     """
     遍历 115 目录树，对每个视频文件写 .strm。
@@ -92,17 +124,44 @@ def iter_and_write_strm(
     )
 
     # ── 尝试导入 p115client 遍历工具（必须在 skim_usable 判断之前）────────────
+    # 优先级：skim > iter_files_with_path > iterdir 手动递归
+    iter_files_with_path_skim  = None
+    iter_files_with_path       = None
+    iterdir                    = None
+    has_skim = False
+    has_iwp  = False     # iter_files_with_path 是否可用
     try:
-        from p115client.tool.iterdir import iter_files_with_path_skim, iterdir
+        from p115client.tool.iterdir import (  # type: ignore[import]
+            iter_files_with_path_skim as _skim,
+            iter_files_with_path      as _iwp,
+            iterdir                   as _iterdir,
+        )
+        iter_files_with_path_skim = _skim
+        iter_files_with_path      = _iwp
+        iterdir                   = _iterdir
         has_skim = True
+        has_iwp  = True
     except ImportError:
         try:
-            from p115client.tool.iterdir import iterdir
+            from p115client.tool.iterdir import (  # type: ignore[import]
+                iter_files_with_path as _iwp,
+                iterdir              as _iterdir,
+            )
+            iter_files_with_path = _iwp
+            iterdir              = _iterdir
             has_skim = False
-            logger.debug("【遍历】iter_files_with_path_skim 不可用，降级到 iterdir 递归")
+            has_iwp  = True
+            logger.debug("【遍历】iter_files_with_path_skim 不可用，将使用 iter_files_with_path")
         except ImportError:
-            logger.error("【遍历】p115client.tool.iterdir 不可用")
-            return stats, fscache_batch, strmfile_batch
+            try:
+                from p115client.tool.iterdir import iterdir as _iterdir  # type: ignore[import]
+                iterdir  = _iterdir
+                has_skim = False
+                has_iwp  = False
+                logger.debug("【遍历】仅 iterdir 可用，将使用手动递归")
+            except ImportError:
+                logger.error("【遍历】p115client.tool.iterdir 不可用")
+                return stats, fscache_batch, strmfile_batch
 
     # ── 读取 login_app，决定 skim 参数 ──────────────────────────────────────
     login_app_raw = getattr(getattr(manager.adapter, "_auth", None), "login_app", "") or ""
@@ -223,21 +282,69 @@ def iter_and_write_strm(
                 cooldown = _405_COOLDOWN_BASE
                 logger.warning(
                     "【遍历】iter_files_with_path_skim 遭遇 405 WAF 屏蔽，"
-                    "冷却 %.0fs 后回退到 iterdir 递归: %s", cooldown, e,
+                    "冷却 %.0fs 后降级到 iter_files_with_path: %s", cooldown, e,
                 )
                 time.sleep(cooldown)
             else:
-                logger.warning("【遍历】iter_files_with_path_skim 失败，回退到 iterdir 递归: %s",
+                logger.warning("【遍历】iter_files_with_path_skim 失败，降级到 iter_files_with_path: %s",
                                e, exc_info=True)
 
-    # ── 方案二：iterdir 手动递归 —— 确定 iter_app ────────────────────────────
-    # login_app 与 iter_app 必须对齐：web CK 用 "web"，iOS/Android CK 用对应值
+    # ── 确定 iter_app（web CK 用 "web"，iOS/Android CK 用对应值）─────────────
     login_app_raw2 = getattr(getattr(manager.adapter, "_auth", None), "login_app", "") or ""
     iter_app = "web" if login_app_raw2 in _WEB_APPS_SET else login_app_raw2
-    reason = "web CK 不支持 skim" if not skim_usable else "skim 失败，降级"
+
+    # ══ 方案二：iter_files_with_path（支持所有 CK，库封装递归，内置冷却）═══════
+    # 相比手动 _walk：同样是分页递归，但由库封装并发和重试，比手动更优雅
+    # 返回的 item 含标准化字段（pickcode、id、parent_id、path、sha1、size、mtime）
+    if has_iwp and iter_files_with_path is not None:
+        reason2 = "web CK 不支持 skim" if not skim_usable else "skim 失败，降级"
+        logger.info(
+            "【遍历】使用 iter_files_with_path: cid=%s cloud_path=%r (%s) iter_app=%s cooldown=%.1f",
+            cid, cloud_path, reason2, iter_app, api_interval,
+        )
+        try:
+            _first_logged2 = False
+            for item in iter_files_with_path(
+                p115_client,
+                cid=int(cid),
+                type=99,          # 99 = 所有文件类型
+                cur=0,            # 0 = 遍历整棵子目录树
+                escape=None,      # 不对路径做 POSIX 转义（我们直接用原始名称）
+                app=iter_app,
+                cooldown=api_interval,
+            ):
+                if not _first_logged2:
+                    logger.debug("【遍历】iter_files_with_path 第一个 item 字段: %s",
+                                 {k: v for k, v in dict(item).items() if k not in ("top_ancestors",)})
+                    _first_logged2 = True
+                # iter_files_with_path 返回的 path 是完整云盘路径（如 /影音/电影/xxx.mkv）
+                item_path = item.get("path") or cloud_path_full + "/" + item.get("name", "")
+                _process_file(dict(item), item_path)
+
+            logger.info("【遍历】iter_files_with_path 完成，扫描 %d 个条目，stats=%s",
+                        scan_count, stats)
+            return stats, fscache_batch, strmfile_batch
+
+        except Exception as e:
+            if _is_405_error(e):
+                cooldown_s = _405_COOLDOWN_BASE
+                logger.warning(
+                    "【遍历】iter_files_with_path 遭遇 405 WAF 屏蔽，"
+                    "冷却 %.0fs 后降级到 iterdir 手动递归: %s", cooldown_s, e,
+                )
+                time.sleep(cooldown_s)
+            else:
+                logger.warning("【遍历】iter_files_with_path 失败，降级到 iterdir 手动递归: %s",
+                               e, exc_info=True)
+
+    # ══ 方案三：iterdir 手动递归（最终 fallback）══════════════════════════════
+    reason3 = "web CK 不支持 skim" if not skim_usable else "skim/iwp 失败，降级"
+    if iterdir is None:
+        logger.error("【遍历】iterdir 不可用，无法进行手动递归，返回当前 stats")
+        return stats, fscache_batch, strmfile_batch
     logger.info(
-        "【遍历】使用 iterdir 递归: cid=%s cloud_path=%r (%s) iter_app=%s",
-        cid, cloud_path, reason, iter_app,
+        "【遍历】使用 iterdir 手动递归: cid=%s cloud_path=%r (%s) iter_app=%s",
+        cid, cloud_path, reason3, iter_app,
     )
 
     # 全局 405 冷却时间戳：当 _cooldown_until > time.time() 时，所有请求都需等待
@@ -275,6 +382,47 @@ def iter_and_write_strm(
             logger.warning("【遍历】目录深度超过30层，停止递归: %s", walk_path)
             return
 
+        # ── 缓存命中：overwrite_mode="skip" 且 FsCache 中有该目录的子项 ──
+        cache_key = str(walk_cid)
+        if (
+            fscache_tree
+            and overwrite_mode == "skip"
+            and cache_key in fscache_tree
+        ):
+            cached_children = fscache_tree[cache_key]
+            logger.debug(
+                "【遍历】FsCache 缓存命中(子项%d个) cid=%s path=%s，跳过 API 调用",
+                len(cached_children), cache_key, walk_path,
+            )
+            sub_dirs = []
+            for child in cached_children:
+                name = child.get("name", "")
+                if not name:
+                    continue
+                item_path = child.get("local_path") or f"{walk_path}/{name}"
+                if child.get("is_dir"):
+                    sub_cid = int(child.get("file_id") or 0)
+                    if sub_cid:
+                        sub_dirs.append((sub_cid, item_path))
+                else:
+                    # 缓存中的文件条目转为 _process_file 所需格式
+                    cached_item = {
+                        "name":      name,
+                        "pickcode":  child.get("pick_code", ""),
+                        "mtime":     child.get("mtime", ""),
+                        "id":        child.get("file_id", ""),
+                        "pid":       child.get("parent_id", ""),
+                        "sha":       child.get("sha1", ""),
+                        "s":         child.get("file_size", 0),
+                        "t":         child.get("ctime", ""),
+                    }
+                    _process_file(cached_item, item_path)
+            # 递归子目录（同样先查缓存）
+            for sub_cid, sub_path in sub_dirs:
+                _walk(sub_cid, sub_path, depth + 1)
+            return
+
+        # ── 正常 API 调用路径 ─────────────────────────────────────────────
         # 进入目录前先检查全局冷却
         _wait_cooldown()
 
@@ -311,6 +459,12 @@ def iter_and_write_strm(
                     time.sleep(cooldown)
                 else:
                     _normal_retries += 1
+                    # 记录异常类型，便于诊断误判情况
+                    logger.debug(
+                        "【遍历】iterdir 非405异常: type=%s code=%s",
+                        type(e).__name__,
+                        getattr(e, "code", "N/A"),
+                    )
                     if _normal_retries >= _NORMAL_MAX_RETRIES:
                         logger.error(
                             "【遍历】iterdir 失败(重试耗尽) path=%s: %s",
@@ -361,7 +515,7 @@ def iter_and_write_strm(
             _walk(sub_cid, sub_path, depth + 1)
 
     _walk(int(cid), cloud_path_full)
-    logger.info("【遍历】iterdir 递归完成，扫描 %d 个条目，stats=%s", scan_count, stats)
+    logger.info("【遍历】iterdir 手动递归完成，扫描 %d 个条目，stats=%s", scan_count, stats)
     return stats, fscache_batch, strmfile_batch
 
 

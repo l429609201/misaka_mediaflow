@@ -5,6 +5,7 @@
 
 import json
 import logging
+from datetime import timedelta
 
 from sqlalchemy import select
 
@@ -284,3 +285,69 @@ async def lookup_pickcode_by_path(local_path: str) -> str | None:
         logger.debug("【FsCache】lookup_pickcode_by_path 失败: %s", e)
         return None
 
+
+
+async def load_fscache_tree(root_path: str, max_age_hours: float = 24.0) -> dict[str, list[dict]]:
+    """
+    预加载 P115FsCache 中以 root_path 为前缀的有效缓存记录，按 parent_id 分组返回。
+    用于 iter_and_write_strm 中 iterdir 递归的缓存加速。
+
+    参数：
+      root_path     — 云盘路径前缀，如 /影音
+      max_age_hours — 缓存最大有效时长（小时），默认 24h。
+                      超过此时间的记录视为过期，不纳入缓存树，对应目录会重新调 API。
+                      设为 0 则完全禁用缓存（始终返回空树）。
+
+    返回：
+      {parent_id: [{file_id, parent_id, name, local_path, sha1, pick_code, ...}, ...]}
+      只包含 updated_at 在有效期内的记录；过期目录不在其中，_walk 会对其调 iterdir API。
+    """
+    if max_age_hours <= 0:
+        logger.info("【FsCache】缓存已禁用(max_age_hours=0)，直接返回空树")
+        return {}
+
+    # 计算截止时间字符串（YYYY-MM-DD HH:MM:SS 字典序 = 时间序，可直接比较）
+    cutoff_dt = tm.now_datetime() - timedelta(hours=max_age_hours)
+    cutoff_str = tm.format(cutoff_dt)
+
+    tree: dict[str, list[dict]] = {}
+    total = 0
+    expired = 0
+    try:
+        async with get_async_session_local() as db:
+            result = await db.execute(
+                select(P115FsCache).where(
+                    P115FsCache.local_path.like(f"{root_path}%")
+                )
+            )
+            rows = result.scalars().all()
+            for row in rows:
+                total += 1
+                # 过期过滤：updated_at 为空或早于截止时间，跳过
+                updated_at = row.updated_at or ""
+                if updated_at < cutoff_str:
+                    expired += 1
+                    continue
+                pid = str(row.parent_id)
+                child = {
+                    "file_id":    str(row.file_id),
+                    "parent_id":  pid,
+                    "name":       row.name or "",
+                    "local_path": row.local_path or "",
+                    "sha1":       row.sha1 or "",
+                    "pick_code":  row.pick_code or "",
+                    "file_size":  row.file_size or 0,
+                    "is_dir":     int(row.is_dir or 0),
+                    "mtime":      row.mtime or "",
+                    "ctime":      row.ctime or "",
+                }
+                tree.setdefault(pid, []).append(child)
+        fresh = total - expired
+        logger.info(
+            "【FsCache】预加载缓存树: root=%s TTL=%.0fh "
+            "总记录=%d 有效=%d 已过期=%d 覆盖目录=%d",
+            root_path, max_age_hours, total, fresh, expired, len(tree),
+        )
+    except Exception as e:
+        logger.warning("【FsCache】预加载缓存树失败: %s", e)
+    return tree

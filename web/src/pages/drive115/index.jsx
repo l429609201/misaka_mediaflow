@@ -491,7 +491,7 @@ export const Drive115 = () => {
                     <Descriptions.Item label={t('p115.cacheSize')}>{status.cache_size ?? 0}</Descriptions.Item>
                   </Descriptions>
                   <Form form={settingsForm} layout="vertical" size="small"
-                    initialValues={{ api_interval: 1, api_concurrent: 3, file_extensions: 'mp4,mkv,avi,ts,iso,mov,m2ts' }}
+                    initialValues={{ api_interval: 1, api_concurrent: 3, file_extensions: 'mp4,mkv,avi,ts,iso,mov,m2ts', fscache_ttl_hours: 24 }}
                   >
                     <Row gutter={16}>
                       <Col span={12}>
@@ -514,6 +514,13 @@ export const Drive115 = () => {
                       tooltip="STRM URL 模板中 {{ base_url }} 变量对应的值，通常为本服务的外部访问地址，如 http://192.168.1.10:9906"
                     >
                       <Input placeholder="http://192.168.1.10:9906" allowClear />
+                    </Form.Item>
+                    <Form.Item
+                      name="fscache_ttl_hours"
+                      label="目录树缓存有效期"
+                      tooltip="全量同步(skip模式)时，本地目录树缓存的有效时长。缓存命中的目录跳过 API 调用直接从数据库读取，加快重复同步速度。0 = 禁用缓存（每次都调 API）；建议设为 24 小时，与增量同步配合使用。"
+                    >
+                      <InputNumber min={0} max={168} step={1} style={{ width: '100%' }} addonAfter="小时" />
                     </Form.Item>
                   </Form>
                 </Card>

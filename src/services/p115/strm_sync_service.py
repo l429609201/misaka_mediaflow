@@ -17,6 +17,7 @@ from src.services.p115.modules import (
     iter_and_write_strm, resolve_cloud_cid,
     save_fscache_and_strmfile,
 )
+from src.services.p115.modules.db_ops import load_fscache_tree
 from src.services.task_manager import get_task_manager
 
 logger = logging.getLogger(__name__)
@@ -111,11 +112,13 @@ class P115StrmSyncService:
             link_host      = get_link_host(p115_settings)
             api_interval   = float(p115_settings.get("api_interval", 1.0))
             api_concurrent = int(p115_settings.get("api_concurrent", 3))
+            # 目录树缓存 TTL：0 = 禁用，默认 24 小时
+            fscache_ttl    = float(p115_settings.get("fscache_ttl_hours", 24.0))
             overwrite_mode = config.get("full_overwrite_mode", "skip")
             self._api_interval = api_interval
 
-            logger.info("【全量STRM生成】配置: interval=%.1fs concurrent=%d overwrite=%s pairs=%d",
-                        api_interval, api_concurrent, overwrite_mode, len(sync_pairs))
+            logger.info("【全量STRM生成】配置: interval=%.1fs concurrent=%d overwrite=%s pairs=%d fscache_ttl=%.0fh",
+                        api_interval, api_concurrent, overwrite_mode, len(sync_pairs), fscache_ttl)
 
             if not sync_pairs:
                 logger.warning("【全量STRM生成】未配置同步路径对")
@@ -136,6 +139,12 @@ class P115StrmSyncService:
                 logger.info("【全量STRM生成】%s (cid=%s) → %s overwrite=%s",
                             cloud_path, start_cid, strm_root, overwrite_mode)
 
+                # skip 模式下预加载 FsCache 缓存树，减少 API 调用
+                fc_tree = None
+                if overwrite_mode == "skip":
+                    cloud_path_full = "/" + cloud_path.strip("/")
+                    fc_tree = await load_fscache_tree(cloud_path_full, max_age_hours=fscache_ttl)
+
                 pair_stats, fc_batch, sf_batch = await asyncio.to_thread(
                     iter_and_write_strm,
                     manager, start_cid, cloud_path,
@@ -143,6 +152,7 @@ class P115StrmSyncService:
                     from_time=0,
                     overwrite_mode=overwrite_mode,
                     api_interval=api_interval,
+                    fscache_tree=fc_tree,
                 )
                 for k in stats:
                     stats[k] += pair_stats.get(k, 0)
