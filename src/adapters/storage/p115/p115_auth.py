@@ -94,8 +94,9 @@ class P115AuthService:
 
         所有 Cookie 设置路径（手动粘贴、启动加载、扫码登录）都走这里，
         统一在此自动识别 CK 类型，无需用户手动指定。
-        扫码登录成功后 _exchange_cookie 会在调用本方法后再覆写 _login_app，
-        两者结果应当一致，覆写无害。
+        注意：_exchange_cookie 不应在 set_cookie 之后再覆写 _login_app，
+        因为 115 服务端可能为某些 app（如 alipaymini）返回 web 类型 CK（SSOENT=A1），
+        SSOENT 识别结果才是真正决定 API 路径的依据。
         """
         self._cookie = cookie.strip()
         detected = self._detect_login_app(self._cookie)
@@ -286,8 +287,13 @@ class P115AuthService:
                 cookie_parts = [f"{k}={v}" for k, v in cookie_data.items() if k and v]
                 cookie_str = "; ".join(cookie_parts)
                 self.set_cookie(cookie_str)
-                self._login_app = app   # 记录本次登录的 app 类型，供生活事件监控等使用
-                logger.info("115 扫码登录成功, app=%s, cookie_len=%d", app, len(cookie_str))
+                # 不在此覆写 _login_app：set_cookie() 已通过 SSOENT 识别出真实 login_app。
+                # 例如 alipaymini 扫码后 115 服务端返回的是 web 类型 CK（SSOENT=A1），
+                # 若此处强制写回 alipaymini，生活事件监控会用错 API 路径导致"请重新登录"。
+                logger.info(
+                    "115 扫码登录成功, scan_app=%s, effective_login_app=%s, cookie_len=%d",
+                    app, self._login_app, len(cookie_str),
+                )
                 return cookie_str
             logger.error("换取 Cookie 失败: %s", data)
             return None
