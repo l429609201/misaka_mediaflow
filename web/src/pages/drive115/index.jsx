@@ -222,6 +222,7 @@ export const Drive115 = () => {
   }, [])
 
   const handleOpenQr = async () => {
+    stopPolling()
     setQrModal(true); setQrStatus('loading'); setQrData(null)
     try {
       const { data } = await p115Api.qrcodeStart(qrApp)
@@ -231,16 +232,27 @@ export const Drive115 = () => {
           const { data: poll } = await p115Api.qrcodePoll({
             uid: data.uid, time: data.time, sign: data.sign, app: qrApp,
           })
-          if (poll.status === 'scanned') setQrStatus('scanned')
-          else if (poll.status === 'success') {
-            setQrStatus('success'); stopPolling()
+          const s = poll.status
+          if (s === 'scanned') {
+            setQrStatus('scanned')
+          } else if (s === 'success') {
+            stopPolling()
+            setQrStatus('success')
             message.success(t('p115.qrSuccess'))
-            setTimeout(() => { setQrModal(false); fetchStatus(); fetchAccount() }, 1000)
-          } else if (poll.status === 'expired') { setQrStatus('expired'); stopPolling() }
-          else if (poll.status === 'canceled')  { setQrStatus('failed');  stopPolling() }
-        } catch { /* ignore */ }
+            setTimeout(() => { setQrModal(false); fetchStatus(); fetchAccount() }, 1500)
+          } else if (s === 'expired') {
+            stopPolling(); setQrStatus('expired')
+          } else if (s === 'canceled' || s === 'failed' || s === 'error') {
+            stopPolling(); setQrStatus('failed')
+          }
+          // waiting → 继续轮询，不处理
+        } catch (err) {
+          console.warn('[qr poll error]', err)
+        }
       }, 2000)
-    } catch { setQrStatus('failed') }
+    } catch {
+      setQrStatus('failed')
+    }
   }
   const handleCloseQr = () => { stopPolling(); setQrModal(false) }
 

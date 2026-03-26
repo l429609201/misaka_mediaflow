@@ -245,11 +245,12 @@ class P115AuthService:
         if app not in self.ALLOWED_APP_TYPES:
             app = "web"
         try:
-            from p115client import P115Client, check_response
+            from p115client import P115Client
 
             payload = {"uid": uid, "time": time_val, "sign": sign}
             resp = P115Client.login_qrcode_scan_status(payload)
-            check_response(resp)
+            # 注意：不调用 check_response()，因为 status=1(已扫码) 时
+            # 115 返回的 state 字段为 False，check_response 会误判为失败并抛异常。
             status_code = resp.get("data", {}).get("status")
 
             if status_code == 0:
