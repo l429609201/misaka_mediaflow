@@ -447,20 +447,22 @@ def iter_and_write_strm(
 
         # ── 决策：本地文件是否存在 ────────────────────────────────────────
         if strm_file.exists():
-            existing = strm_file.read_text(encoding="utf-8").strip()
-            if existing == strm_url.strip():
-                result, result_desc = "skipped", "内容相同跳过"
-            elif overwrite_mode == "skip":
+            if overwrite_mode == "skip":
+                # skip 模式：内容相同则跳过，否则也跳过（不改已有文件）
                 result, result_desc = "skipped", "已存在(skip模式)跳过"
             else:
-                # overwrite 模式：重写文件
-                try:
-                    strm_file.write_text(strm_url, encoding="utf-8")
-                    result, result_desc = "created", "内容变更覆盖"
-                except Exception as ex:
-                    logger.error("#%d %s - 写入失败: %s", scan_count, name, ex)
-                    stats["errors"] += 1
-                    continue
+                # overwrite 模式：内容相同也重写（用户明确要求覆盖）
+                existing = strm_file.read_text(encoding="utf-8").strip()
+                if existing == strm_url.strip():
+                    result, result_desc = "skipped", "内容相同跳过(overwrite)"
+                else:
+                    try:
+                        strm_file.write_text(strm_url, encoding="utf-8")
+                        result, result_desc = "created", "内容变更覆盖"
+                    except Exception as ex:
+                        logger.error("#%d %s - 写入失败: %s", scan_count, name, ex)
+                        stats["errors"] += 1
+                        continue
         else:
             # 新建
             try:
