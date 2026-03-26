@@ -105,7 +105,15 @@ async def cancel_task(task_id: int):
     return {"success": False, "message": "终止失败，任务可能已结束"}
 
 
-# ── 删除任务记录 ──────────────────────────────────────────────────
+# ── 强制删除任务（终止 + 删记录，运行中也可删）───────────────────────
+
+@router.post("/{task_id}/force-delete", dependencies=[Depends(verify_token)])
+async def force_delete_task(task_id: int):
+    """强制删除任务：cancel 协程 → 更新 DB 状态 → 清内存 → 删 DB 记录"""
+    mgr = get_task_manager()
+    return await mgr.force_delete_task(task_id)
+
+
 
 @router.delete("/{task_id}", dependencies=[Depends(verify_token)])
 async def delete_task(task_id: int):

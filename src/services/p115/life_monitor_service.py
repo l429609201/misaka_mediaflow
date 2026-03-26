@@ -1,9 +1,9 @@
 # src/services/p115/life_monitor_service.py
 # 115 生活事件监控服务
 #
-# 接口选择（根据扫码时 login_app）：
-#   web/desktop/harmony CK → life_list(app="web")  → life.115.com ✅
-#   android/ios/alipaymini → iter_life_behavior_once(app=login_app) ✅
+# 接口选择（对齐 DDSRem MonitorLife.once_pull）：
+#   统一使用 iter_life_behavior_once(app="ios") + iOS UA，不依赖 CK 的 SSOENT 类型。
+#   life_list（旧 web 接口）仅在库版本过低 import 失败时作为 fallback。
 #
 # 流控：
 #   cooldown=4s；失败重试 3 次，间隔 2s；无新事件等 20s；出错等 30s
@@ -17,12 +17,18 @@ from typing import Optional
 from src.services.p115.modules import (
     load_monitor_config, save_monitor_config,
     get_video_exts, get_link_host,
-    get_url_template, render_strm_url, write_strm, calc_rel_path,
-    save_fscache_and_strmfile,
+    get_url_template, render_strm_url, write_strm,
 )
 from src.services.p115.modules.db_ops import load_p115_settings
 
 logger = logging.getLogger(__name__)
+
+# iOS UA —— 对齐 DDSRem get_ios_ua_app()，走 proapi.115.com 规避 WAF 风控
+_IOS_UA = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_2_1 like Mac OS X) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 "
+    "MicroMessenger/8.0.53(0x18003531) NetType/WIFI Language/zh_CN"
+)
 
 # 需要触发 STRM 操作的事件类型（对齐 p115strmhelper _SYNC_TRIGGER_TYPES）
 _SYNC_TRIGGER_TYPES = {1, 2, 5, 6, 14, 17, 18, 22}
@@ -103,72 +109,80 @@ def _parse_event_fields(raw: dict, raw_count: int) -> Optional[dict]:
     }
 
 
-def _fetch_via_life_list(p115_client, from_time: int, from_id: int, _time) -> Optional[list]:
-    """web CK 专用：POST /behavior/list 拉取生活事件"""
-    events = []
+def _fetch_via_life_list(p115_client, from_time: int) -> Optional[list]:
+    """iter_life_behavior_once 不可用时的 fallback：POST /behavior/list 拉取生活事件"""
+    import time as _t
+    events    = []
     raw_count = 0
     try:
-        import time as _t
         payload = {
-            "start":        0,
-            "limit":        100,
-            "type":         0,
-            "show_note_cal": 0,
-            "show_note_todo": 0,
-            "show_note_done": 0,
-            "start_time":   from_time,
-            "end_time":     int(_t.time()),
+            "start": 0, "limit": 100, "type": 0,
+            "show_note_cal": 0, "show_note_todo": 0, "show_note_done": 0,
+            "start_time": from_time,
+            "end_time":   int(_t.time()),
         }
         resp = p115_client.life_list(payload)
-        logger.debug("【监控生活事件】life_list 响应: state=%s count=%s",
+        logger.debug("【监控生活事件】life_list fallback 响应: state=%s count=%s",
                      resp.get("state"), resp.get("count"))
         if not resp.get("state"):
             logger.warning("【监控生活事件】life_list 返回失败: %s", resp)
             return None
-
-        items = resp.get("data", {}).get("list", [])
-        for item in items:
+        for item in resp.get("data", {}).get("list", []):
             raw_count += 1
             parsed = _parse_event_fields(item, raw_count)
             if parsed is not None:
                 events.append(parsed)
-        logger.debug("【监控生活事件】life_list 完毕: 原始%d条 触发%d条", raw_count, len(events))
+        logger.debug("【监控生活事件】life_list fallback 完毕: 原始%d条 触发%d条", raw_count, len(events))
         return events
     except Exception as e:
         logger.warning("【监控生活事件】life_list 异常: %s", e, exc_info=True)
         return None
 
 
-def _fetch_via_behavior_once(p115_client, from_time: int, from_id: int,
-                              login_app: str, _time) -> Optional[list]:
-    """非 web CK 专用：iter_life_behavior_once(app=login_app)"""
+def _sync_fetch_life_events(p115_client, from_time: int, from_id: int, login_app: str) -> Optional[list]:
+    """
+    拉取生活事件。
+
+    对齐 DDSRem MonitorLife.once_pull()：
+      统一使用 iter_life_behavior_once(app="ios") + iOS UA，不管 CK 的 SSOENT 类型。
+      life_list（旧 web 接口）仅在 iter_life_behavior_once 不可用时作为 fallback。
+
+    原因：
+      life_list 接口（life.115.com/behavior/list）稳定性差，频繁返回空数据；
+      iter_life_behavior_once 底层走独立端点，配合 app=ios 可靠性更高。
+    """
     try:
         from p115client.tool.life import iter_life_behavior_once
     except ImportError:
-        return _fetch_via_life_list(p115_client, from_time, from_id, _time)
-    events = []
+        # 库版本过旧，fallback 到 life_list
+        logger.warning("【监控生活事件】iter_life_behavior_once 不可用，回退到 life_list")
+        return _fetch_via_life_list(p115_client, from_time)
+
+    events    = []
     raw_count = 0
     try:
         for event in iter_life_behavior_once(
-            client=p115_client, from_time=from_time,
-            from_id=from_id, cooldown=4, app=login_app,
+            client    = p115_client,
+            from_time = from_time,
+            from_id   = from_id,
+            cooldown  = 4,
+            app       = "ios",                          # 固定 ios，对齐 DDSRem get_ios_ua_app()
+            headers   = {"user-agent": _IOS_UA},        # iOS UA
         ):
             raw_count += 1
             parsed = _parse_event_fields(event, raw_count)
             if parsed is not None:
                 events.append(parsed)
+        logger.debug(
+            "【监控生活事件】iter_life_behavior_once 完毕: 原始%d条 触发%d条 (login_app=%s)",
+            raw_count, len(events), login_app,
+        )
         return events
     except Exception as e:
-        logger.warning("【监控生活事件】behavior_once(app=%s) 异常: %s", login_app, e, exc_info=True)
+        logger.warning(
+            "【监控生活事件】iter_life_behavior_once 异常(app=ios): %s", e, exc_info=True
+        )
         return None
-
-
-def _sync_fetch_life_events(p115_client, from_time: int, from_id: int, login_app: str) -> Optional[list]:
-    import time as _t
-    _WEB_APPS = {"", "web", "desktop", "harmony"}
-    if login_app in _WEB_APPS:
-        return _fetch_via_life_list(p115_client, from_time, from_id, _t)
-    return _fetch_via_behavior_once(p115_client, from_time, from_id, login_app, _t)
 
 
 def _sync_get_parent_path(p115_client, parent_id: str) -> str:

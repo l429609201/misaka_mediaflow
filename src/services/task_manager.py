@@ -115,6 +115,40 @@ class TaskManager:
         logger.warning("TaskManager: 取消失败(任务不存在或已结束) id=%d", task_id)
         return False
 
+    async def force_delete_task(self, task_id: int) -> dict:
+        """强制删除任务：cancel 协程 → 更新 DB 状态 → 清内存 → 删 DB 记录
+
+        不论任务处于什么状态都会删除。
+        """
+        from sqlalchemy import delete as sa_delete
+
+        # 1) 若运行中，先发 cancel 信号
+        atask = self._tasks.get(task_id)
+        if atask and not atask.done():
+            atask.cancel()
+            logger.info("TaskManager: force_delete 已发出取消信号 id=%d", task_id)
+
+        # 2) 强制把 DB 状态置为 failed（防止协程在 CancelledError 路径中漏掉更新）
+        async with get_async_session_local() as db:
+            task_row = await db.get(StrmTask, task_id)
+            if task_row and task_row.status == "running":
+                task_row.status        = "failed"
+                task_row.error_message = "用户强制删除"
+                task_row.finished_at   = tm.now()
+                await db.commit()
+
+        # 3) 清理内存
+        self._live.pop(task_id, None)
+        self._tasks.pop(task_id, None)
+
+        # 4) 删除 DB 记录
+        async with get_async_session_local() as db:
+            await db.execute(sa_delete(StrmTask).where(StrmTask.id == task_id))
+            await db.commit()
+
+        logger.info("TaskManager: 任务已强制删除 id=%d", task_id)
+        return {"success": True, "message": "任务已强制删除"}
+
     # ── 查询 ────────────────────────────────────────────────────
 
     def get_running(self) -> list[dict]:

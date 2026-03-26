@@ -155,8 +155,10 @@ export const tasksApi = {
   get: (id) => api.get(`/tasks/${id}`),
   // 终止运行中任务
   cancel: (id) => api.post(`/tasks/${id}/cancel`),
-  // 删除单个任务记录
+  // 删除单个任务记录（仅限非运行中）
   remove: (id) => api.delete(`/tasks/${id}`),
+  // 强制删除（终止 + 删记录，运行中也可删）
+  forceDelete: (id) => api.post(`/tasks/${id}/force-delete`),
   // 批量清除已完成/失败任务
   clear: (params) => api.delete('/tasks', { params }),
 }

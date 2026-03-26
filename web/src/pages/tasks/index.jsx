@@ -9,7 +9,7 @@
  import {
    ReloadOutlined, DeleteOutlined, StopOutlined,
    ThunderboltOutlined, ClockCircleOutlined, CheckCircleOutlined,
-   CloseCircleOutlined, SyncOutlined, ClearOutlined,
+   CloseCircleOutlined, SyncOutlined, ClearOutlined, ScissorOutlined,
  } from '@ant-design/icons'
  import { useTranslation } from 'react-i18next'
  import { tasksApi } from '@/apis/index.js'
@@ -147,7 +147,17 @@
        fetchTasks(pagination.current, pagination.pageSize)
      } catch { message.error(t('tasks.deleteFailed')) }
    }
- 
+
+   const handleForceDelete = async (id) => {
+     try {
+       const { data } = await tasksApi.forceDelete(id)
+       data?.success
+         ? message.success(t('tasks.forceDeleteSuccess'))
+         : message.warning(data?.message || t('tasks.deleteFailed'))
+       setTimeout(() => { fetchRunning(); fetchTasks(pagination.current, pagination.pageSize) }, 600)
+     } catch { message.error(t('tasks.deleteFailed')) }
+   }
+
    const handleClear = async () => {
      try {
        const { data } = await tasksApi.clear({ status: 'all' })
@@ -177,11 +187,23 @@
      { title: t('tasks.colError'), dataIndex: 'error_message', key: 'error_message', ellipsis: true,
        render: (v) => v ? <Tooltip title={v}><Text type="danger" ellipsis>{v}</Text></Tooltip> : '-' },
      {
-       title: t('tasks.colAction'), key: 'action', width: 100, fixed: 'right',
+       title: t('tasks.colAction'), key: 'action', width: 130, fixed: 'right',
        render: (_, row) => row.status === 'running' ? (
-         <Popconfirm title="确定要终止该任务吗？" onConfirm={() => handleCancel(row.id)} okText="终止" cancelText="取消" okButtonProps={{ danger: true }}>
-           <Button type="primary" danger size="small" icon={<StopOutlined />}>终止</Button>
-         </Popconfirm>
+         <Space size={4}>
+           <Popconfirm title={t('tasks.confirmCancel')} onConfirm={() => handleCancel(row.id)} okText={t('tasks.confirmCancelOk')} cancelText={t('common.cancel')} okButtonProps={{ danger: true }}>
+             <Button type="primary" danger size="small" icon={<StopOutlined />}>{t('tasks.cancelBtn')}</Button>
+           </Popconfirm>
+           <Popconfirm
+             title={t('tasks.confirmForceDelete')}
+             description={t('tasks.confirmForceDeleteDesc')}
+             onConfirm={() => handleForceDelete(row.id)}
+             okText={t('tasks.confirmForceDeleteOk')}
+             cancelText={t('common.cancel')}
+             okButtonProps={{ danger: true }}
+           >
+             <Button type="text" danger size="small" icon={<ScissorOutlined />} title={t('tasks.forceDeleteBtn')} />
+           </Popconfirm>
+         </Space>
        ) : (
          <Popconfirm title={t('tasks.confirmDelete')} onConfirm={() => handleDelete(row.id)}>
            <Button type="text" danger icon={<DeleteOutlined />} size="small" />
