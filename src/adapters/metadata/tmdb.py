@@ -291,6 +291,48 @@ class TMDBProvider(MetadataProvider):
     #  剧集专属：季 / 集 / 剧集组
     # ──────────────────────────────────────────────────────────────────
 
+    # ──────────────────────────────────────────────────────────────────
+    #  刮削专用：直接查询型接口（供 scraper 模块调用）
+    # ──────────────────────────────────────────────────────────────────
+
+    async def get_movie(self, tmdb_id: int) -> dict:
+        """获取电影详情（完整字段：genres/runtime/release_date/credits 等）"""
+        return await self._get_with_fallback(
+            f"/movie/{tmdb_id}",
+            params={"append_to_response": "credits,external_ids"},
+        )
+
+    async def get_tv(self, tmdb_id: int) -> dict:
+        """获取剧集详情（完整字段：seasons/networks/episode_groups 等）"""
+        return await self._get_with_fallback(
+            f"/tv/{tmdb_id}",
+            params={"append_to_response": "credits,external_ids,content_ratings"},
+        )
+
+    async def search_movie(self, query: str, year: int = 0) -> list[dict]:
+        """搜索电影，返回原始 results 列表（刮削模块自行解析）"""
+        params: dict = {"query": query}
+        if year:
+            params["primary_release_year"] = year
+        data = await self._get_with_fallback("/search/movie", params=params)
+        return data.get("results", [])
+
+    async def search_tv(self, query: str, year: int = 0) -> list[dict]:
+        """搜索剧集，返回原始 results 列表（刮削模块自行解析）"""
+        params: dict = {"query": query}
+        if year:
+            params["first_air_date_year"] = year
+        data = await self._get_with_fallback("/search/tv", params=params)
+        return data.get("results", [])
+
+    async def get_movie_images(self, tmdb_id: int) -> dict:
+        """获取电影图片（poster/backdrop 列表，不带 language 以获取多语言版本）"""
+        return await self._get(f"/movie/{tmdb_id}/images", params={"include_image_language": "zh,en,null"})
+
+    async def get_tv_images(self, tmdb_id: int) -> dict:
+        """获取剧集图片（poster/backdrop 列表，不带 language 以获取多语言版本）"""
+        return await self._get(f"/tv/{tmdb_id}/images", params={"include_image_language": "zh,en,null"})
+
     async def get_tv_season(self, tmdb_id: int, season_number: int) -> dict:
         """获取剧集某季详情（含集列表）"""
         return await self._get(f"/tv/{tmdb_id}/season/{season_number}")

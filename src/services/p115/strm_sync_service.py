@@ -42,13 +42,17 @@ class P115StrmSyncService:
     async def get_config(self) -> dict:
         """获取同步配置（默认值 + 数据库持久化值合并）"""
         defaults = {
-            "sync_pairs":       [],
-            "file_extensions":  "mp4,mkv,avi,ts,iso,mov,m2ts",
-            "strm_link_host":   "",
-            "clean_invalid":    True,
-            "full_sync_cfg":    {"use_custom": False, "cloud_path": "", "strm_path": ""},
-            "inc_sync_cfg":     {"use_custom": False, "cloud_path": "", "strm_path": ""},
+            "sync_pairs":          [],
+            "file_extensions":     "mp4,mkv,avi,ts,iso,mov,m2ts",
+            "strm_link_host":      "",
+            "clean_invalid":       True,
+            "full_sync_cfg":       {"use_custom": False, "cloud_path": "", "strm_path": ""},
+            "inc_sync_cfg":        {"use_custom": False, "cloud_path": "", "strm_path": ""},
             "full_overwrite_mode": "skip",
+            # 刮削配置
+            "enable_scrape":         False,   # 同步完成后自动刮削
+            "scrape_download_image": True,    # 是否下载 poster/backdrop 图片
+            "episode_group_id":      "",      # TMDB 剧集组 ID（留空=不用剧集组）
         }
         saved = await load_strm_config()
         return {**defaults, **saved}
@@ -172,6 +176,9 @@ class P115StrmSyncService:
             await tm.complete_task(task_id, stats, error_message=str(e))
         else:
             await tm.complete_task(task_id, stats)
+            # 同步成功且启用了刮削 → 逐路径对批量刮削
+            if config.get("enable_scrape"):
+                await _run_scrape(config, sync_pairs)
         finally:
             elapsed = round(time.time() - start_time, 1)
             await save_strm_status({
@@ -268,6 +275,9 @@ class P115StrmSyncService:
             await tm.complete_task(task_id, stats, error_message=str(e))
         else:
             await tm.complete_task(task_id, stats)
+            # 同步成功且启用了刮削 → 逐路径对批量刮削
+            if config.get("enable_scrape"):
+                await _run_scrape(config, sync_pairs)
         finally:
             elapsed = round(time.time() - start_time, 1)
             await save_strm_status({
@@ -280,3 +290,32 @@ class P115StrmSyncService:
             logger.info("【增量STRM生成】完成: 生成%d个 耗时%.1fs stats=%s",
                         stats.get("created", 0), elapsed, stats)
 
+
+async def _run_scrape(config: dict, sync_pairs: list) -> None:
+    """
+    同步完成后触发刮削。
+    每个 sync_pair 的 strm_path 作为刮削根目录，
+    由 Scraper.scrape_dir() 递归处理所有 .strm 文件。
+    """
+    from src.services.metadata_service import metadata_service
+    from src.services.p115.modules.scraper import Scraper
+
+    tmdb = await metadata_service.get_provider("tmdb")
+    if not tmdb:
+        logger.warning("[Scraper] TMDB 未配置，跳过刮削")
+        return
+
+    episode_group_id   = config.get("episode_group_id", "")
+    download_images    = config.get("scrape_download_image", True)
+    scraper = Scraper(tmdb, episode_group_id=episode_group_id, download_images=download_images)
+
+    for pair in sync_pairs:
+        strm_root = pair.get("strm_path", "").strip()
+        if not strm_root:
+            continue
+        logger.info("[Scraper] 开始刮削: %s", strm_root)
+        try:
+            result = await scraper.scrape_dir(Path(strm_root))
+            logger.info("[Scraper] 刮削完成: %s → %s", strm_root, result)
+        except Exception as e:
+            logger.error("[Scraper] 刮削异常 %s: %s", strm_root, e, exc_info=True)

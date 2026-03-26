@@ -92,6 +92,11 @@ export const Drive115 = () => {
   // 全量同步覆盖模式：skip=跳过已存在, overwrite=覆盖已存在
   const [fullOverwriteMode, setFullOverwriteMode] = useState('skip')
 
+  // 刮削配置
+  const [scrapeEnabled,      setScrapeEnabled]      = useState(false)
+  const [scrapeDownloadImg,  setScrapeDownloadImg]  = useState(true)
+  const [episodeGroupId,     setEpisodeGroupId]     = useState('')
+
   // 全量/增量 目录选择器：field = 'cloud_path' | 'strm_path', scope = 'full' | 'inc'
   const [syncPickerState, setSyncPickerState] = useState({ open: false, scope: null, field: null, type: 'cloud' })
 
@@ -152,6 +157,10 @@ export const Drive115 = () => {
       if (cfg.full_sync_cfg) setFullSyncCfg(c => ({ ...c, ...cfg.full_sync_cfg }))
       if (cfg.inc_sync_cfg)  setIncSyncCfg(c  => ({ ...c, ...cfg.inc_sync_cfg  }))
       if (cfg.full_overwrite_mode) setFullOverwriteMode(cfg.full_overwrite_mode)
+      // 恢复刮削配置
+      if (cfg.enable_scrape         !== undefined) setScrapeEnabled(cfg.enable_scrape)
+      if (cfg.scrape_download_image !== undefined) setScrapeDownloadImg(cfg.scrape_download_image)
+      if (cfg.episode_group_id      !== undefined) setEpisodeGroupId(cfg.episode_group_id)
     } catch { /* ignore */ }
   }, [mappingForm])
 
@@ -334,7 +343,10 @@ export const Drive115 = () => {
       await p115StrmApi.saveSyncConfig({
         full_sync_cfg: fullSyncCfg,
         inc_sync_cfg:  incSyncCfg,
-        full_overwrite_mode: fullOverwriteMode,
+        full_overwrite_mode:   fullOverwriteMode,
+        enable_scrape:         scrapeEnabled,
+        scrape_download_image: scrapeDownloadImg,
+        episode_group_id:      episodeGroupId,
       })
       // 2. 保存 URL 模板
       await strmApi.saveUrlTemplate(urlTemplate)
@@ -829,6 +841,48 @@ export const Drive115 = () => {
                 />
               </Form.Item>
             </Form>
+            {/* 刮削配置 */}
+            <Divider orientation="left" orientationMargin={0} style={{ margin: '4px 0 10px', fontSize: 13, fontWeight: 600 }}>
+              <Space size={6}><NodeIndexOutlined />刮削（TMDB）</Space>
+            </Divider>
+            <div style={{
+              background: '#f6ffed', border: '1px solid #b7eb8f',
+              borderRadius: 8, padding: '10px 14px', marginBottom: 10,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: scrapeEnabled ? 10 : 0 }}>
+                <div>
+                  <Text strong style={{ fontSize: 12 }}>同步后自动刮削</Text>
+                  <div style={{ fontSize: 11, color: '#888' }}>全量/增量同步完成后，调用 TMDB 自动生成 .nfo 元数据文件</div>
+                </div>
+                <Switch checked={scrapeEnabled} onChange={setScrapeEnabled} size="small" />
+              </div>
+              {scrapeEnabled && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div>
+                      <Text style={{ fontSize: 12 }}>下载封面/背景图</Text>
+                      <div style={{ fontSize: 11, color: '#888' }}>同时下载 poster.jpg / backdrop.jpg 到 STRM 目录</div>
+                    </div>
+                    <Switch checked={scrapeDownloadImg} onChange={setScrapeDownloadImg} size="small" />
+                  </div>
+                  <div>
+                    <Text style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
+                      剧集组 ID
+                      <Tooltip title="TMDB 剧集组 ID（如 Absolute 排序等）。留空则使用标准 SxxExx 集数顺序。可在 TMDB 剧集页 → Episode Groups 中获取 ID。">
+                        <span style={{ marginLeft: 4, color: '#999', cursor: 'help' }}>(?)</span>
+                      </Tooltip>
+                    </Text>
+                    <Input
+                      size="small" placeholder="留空=标准集数顺序，填入则启用剧集组"
+                      value={episodeGroupId}
+                      onChange={e => setEpisodeGroupId(e.target.value)}
+                      allowClear
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* 全量同步 — 覆盖模式选择（对齐 p115strmhelper full_sync_overwrite_mode） */}
             <div style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
