@@ -197,27 +197,27 @@ class P115AuthService:
     async def qrcode_login_step1(self, app: str = "web") -> Optional[dict]:
         """
         扫码登录第1步 — 获取二维码 Token 和图片。
-        使用 P115Client 静态方法。
-
-        :param app: 客户端类型, 默认 web
-        :return: {uid, time, sign, qrcode_content, app}
+        P115Client 的静态方法是同步阻塞 IO，必须用 asyncio.to_thread 包裹，
+        否则会阻塞 FastAPI 事件循环导致整个服务卡死。
         """
+        import asyncio
+        from base64 import b64encode
+
         if app not in self.ALLOWED_APP_TYPES:
             app = "web"
         try:
             from p115client import P115Client, check_response
-            from base64 import b64encode
 
-            # 1. 获取二维码 Token（uid, time, sign）
-            resp = P115Client.login_qrcode_token()
+            # 1. 获取二维码 Token（uid, time, sign）—— 同步网络 IO，放进线程池
+            resp = await asyncio.to_thread(P115Client.login_qrcode_token)
             check_response(resp)
             qr_data = resp.get("data", {})
-            uid = str(qr_data.get("uid", ""))
+            uid   = str(qr_data.get("uid",  ""))
             _time = str(qr_data.get("time", ""))
             _sign = str(qr_data.get("sign", ""))
 
-            # 2. 获取二维码图片并转 base64（对齐 DDSRem 返回格式）
-            qr_bytes = P115Client.login_qrcode(uid)
+            # 2. 获取二维码图片 bytes —— 同样是同步 IO
+            qr_bytes = await asyncio.to_thread(P115Client.login_qrcode, uid)
             qrcode_base64 = b64encode(qr_bytes).decode("utf-8")
 
             logger.info("获取 115 二维码成功 (P115Client), uid=%s, app=%s", uid, app)
@@ -225,7 +225,6 @@ class P115AuthService:
                 "uid": uid,
                 "time": _time,
                 "sign": _sign,
-                # 返回 base64 图片，前端可直接作为 <img src> 展示
                 "qrcode_content": f"data:image/png;base64,{qrcode_base64}",
                 "app": app,
             }
@@ -238,17 +237,19 @@ class P115AuthService:
     ) -> dict:
         """
         扫码登录第2步 — 轮询状态。
-        使用 P115Client.login_qrcode_scan_status()。
+        P115Client.login_qrcode_scan_status 是同步阻塞 IO，用 asyncio.to_thread 包裹。
 
         :return: {status: "waiting"|"scanned"|"success"|"expired"|"canceled", cookie?: str}
         """
         if app not in self.ALLOWED_APP_TYPES:
             app = "web"
         try:
+            import asyncio
             from p115client import P115Client
 
             payload = {"uid": uid, "time": time_val, "sign": sign}
-            resp = P115Client.login_qrcode_scan_status(payload)
+            # 同步网络 IO → 放进线程池，不阻塞事件循环
+            resp = await asyncio.to_thread(P115Client.login_qrcode_scan_status, payload)
             # 注意：不调用 check_response()，因为 status=1(已扫码) 时
             # 115 返回的 state 字段为 False，check_response 会误判为失败并抛异常。
             status_code = resp.get("data", {}).get("status")
@@ -289,9 +290,11 @@ class P115AuthService:
           确保 alipaymini/android 等 app 类型换取到正确 SSOENT 的 Cookie。
         """
         try:
+            import asyncio
             from p115client import P115Client, check_response
 
-            resp = P115Client.login_qrcode_scan_result(uid, app=app)
+            # 同步网络 IO → 放进线程池，不阻塞事件循环
+            resp = await asyncio.to_thread(P115Client.login_qrcode_scan_result, uid, app)
             check_response(resp)
 
             if resp.get("state") and resp.get("data"):
