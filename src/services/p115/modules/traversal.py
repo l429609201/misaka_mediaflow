@@ -82,9 +82,6 @@ _IOS_UA = (
     "MicroMessenger/8.0.53(0x18003531) NetType/WIFI Language/zh_CN"
 )
 
-# web 类型 CK 不支持 skim（走 /os_windows 接口，web CK 返回 errno=99）
-_WEB_APPS_SET = {"", "web", "desktop", "harmony"}
-
 
 def iter_and_write_strm(
     manager,
@@ -160,7 +157,7 @@ def iter_and_write_strm(
             logger.debug("iter_files_with_path_skim 不可用，将使用 iter_files_with_path")
         except ImportError:
             try:
-                from p115client.tool.iterdir import iterdir as _iterdir_fn  # type: ignore[import] as _iterdir  # type: ignore[import]
+                from p115client.tool.iterdir import iterdir as _iterdir  # type: ignore[import]
                 _fn_iterdir = _iterdir
                 logger.debug("仅 iterdir 可用，将使用手动递归")
             except ImportError:
@@ -168,11 +165,14 @@ def iter_and_write_strm(
                 return stats, fscache_batch, strmfile_batch
 
     # ── 判断 CK 类型 ──────────────────────────────────────────────────────
+    #   skim/iwp 固定用 app="ios" + iOS UA（不管 CK 是 web/alipaymini/android 哪种）
+    #   115 服务端只认 UA + app 参数，不认 Cookie 的 SSOENT 来决定接口权限。
+    #   之前错误地用 SSOENT 判断 skim_usable，导致 alipaymini 扫码拿到 web CK 后
+    #   skim_usable=False，白白降级到最慢的 iterdir 手动递归。
     login_app_raw = getattr(getattr(manager.adapter, "_auth", None), "login_app", "") or ""
-    iter_app_for_skim = "web" if login_app_raw in _WEB_APPS_SET else login_app_raw
-    skim_usable = has_skim and (login_app_raw not in _WEB_APPS_SET)
-    iter_app    = "web" if login_app_raw in _WEB_APPS_SET else login_app_raw
-    logger.debug("CK类型: login_app=%r skim_usable=%s", login_app_raw, skim_usable)
+    skim_usable   = has_skim   # ← 只要库有 skim，就可用（固定 app=ios 调用）
+    iter_app      = "ios"      # ← 固定 ios，对齐 DDSRem get_ios_ua_app()
+    logger.debug("CK类型: login_app=%r skim_usable=%s iter_app=%s", login_app_raw, skim_usable, iter_app)
 
     # cloud_items: 收集所有原始条目（含目录，用于 FsCache）
     # cloud_files: 只含视频文件候选（供阶段二对比）
@@ -189,16 +189,19 @@ def iter_and_write_strm(
 
     fetched = False   # 是否已成功拉取到数据
 
-    # ── 方案一：iter_files_with_path_skim（非 web CK，一次请求）──────────
+    # ── 方案一：iter_files_with_path_skim（固定 app=ios + iOS UA，一次请求）──
     if has_skim and skim_usable and _fn_skim is not None:
         logger.info(
             "【阶段一】skim 拉取云盘树: cid=%s cloud_path=%r app=%s",
-            cid, cloud_path, iter_app_for_skim,
+            cid, cloud_path, iter_app,
         )
         try:
-            iter_kwargs: dict = {"cid": int(cid), "app": iter_app_for_skim}
-            if iter_app_for_skim not in _WEB_APPS_SET:
-                iter_kwargs["headers"] = {"user-agent": _IOS_UA}
+            # 固定 app="ios" + iOS UA，对齐 DDSRem get_ios_ua_app()
+            iter_kwargs: dict = {
+                "cid": int(cid),
+                "app": iter_app,
+                "headers": {"user-agent": _IOS_UA},
+            }
             first = True
             for item in _fn_skim(p115_client, **iter_kwargs):  # type: ignore[operator]
                 if first:
@@ -215,10 +218,8 @@ def iter_and_write_strm(
             else:
                 logger.warning("skim 失败，降级: %s", e, exc_info=True)
 
-    # ── 方案二：iter_files_with_path（非 web CK，库封装递归）────────────
-    # 注意：iter_files_with_path 内部同样会调用 /os_windows 接口，
-    # web CK 使用该接口会返回 errno=99，因此 web CK 也必须跳过方案二，直接走方案三。
-    if not fetched and has_iwp and _fn_iwp is not None and skim_usable:
+    # ── 方案二：iter_files_with_path（固定 app=ios + iOS UA，库封装递归）───
+    if not fetched and has_iwp and _fn_iwp is not None:
         reason = "skim 失败"
         logger.info(
             "【阶段一】iter_files_with_path 拉取云盘树: cid=%s (%s) iter_app=%s cooldown=%.1f",
@@ -256,7 +257,7 @@ def iter_and_write_strm(
         if _fn_iterdir is None:
             logger.error("iterdir 不可用，无法拉取云盘树")
             return stats, fscache_batch, strmfile_batch
-        reason = "web CK 不支持 skim" if not skim_usable else "skim/iwp 均失败"
+        reason = "skim/iwp 均失败或不可用"
         logger.info(
             "【阶段一】iterdir 手动递归拉取云盘树: cid=%s (%s) iter_app=%s",
             cid, reason, iter_app,
@@ -555,8 +556,9 @@ async def resolve_cloud_cid(manager, cloud_path: str) -> str:
         return str(cached_cid)
 
     # ── 确定 iter_app ─────────────────────────────────────────────────────────
+    # 对齐 DDSRem：固定用 ios，不依赖 CK 的 SSOENT 类型
     login_app = getattr(getattr(manager.adapter, "_auth", None), "login_app", "web") or "web"
-    iter_app  = "web" if login_app in _WEB_APPS_SET else login_app
+    iter_app  = "ios"
 
     logger.debug(
         "【resolve_cid】cloud_path=%r login_app=%r iter_app=%r",
