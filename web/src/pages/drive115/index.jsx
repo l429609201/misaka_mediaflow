@@ -977,8 +977,36 @@ export const Drive115 = () => {
         </div>
         <div style={{ textAlign: 'center', padding: '16px 0' }}>
           {qrStatus === 'loading' && <Spin tip={t('p115.qrLoading')} />}
-          {qrStatus === 'waiting' && qrData?.qrcode_content && <img src={qrData.qrcode_content} alt="QR Code" style={{ width: 200, height: 200 }} />}
-          {qrStatus === 'scanned' && <Alert type="info"    message={t('p115.qrScanned')} showIcon />}
+
+          {/* 二维码图片：waiting 和 scanned 状态都保持显示 */}
+          {(qrStatus === 'waiting' || qrStatus === 'scanned') && qrData?.qrcode_content && (
+            <div style={{ position: 'relative', display: 'inline-block' }}>
+              <img
+                src={qrData.qrcode_content}
+                alt="QR Code"
+                style={{
+                  width: 200, height: 200,
+                  filter: qrStatus === 'scanned' ? 'brightness(0.45)' : 'none',
+                  borderRadius: 8,
+                  display: 'block',
+                }}
+              />
+              {qrStatus === 'scanned' && (
+                <div style={{
+                  position: 'absolute', inset: 0,
+                  display: 'flex', flexDirection: 'column',
+                  alignItems: 'center', justifyContent: 'center',
+                  gap: 8,
+                }}>
+                  <CheckCircleOutlined style={{ fontSize: 48, color: '#52c41a' }} />
+                  <span style={{ color: '#fff', fontWeight: 600, fontSize: 13 }}>
+                    {t('p115.qrScanned')}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
           {qrStatus === 'success' && <Alert type="success" message={t('p115.qrSuccess')} showIcon />}
           {qrStatus === 'expired' && <Space direction="vertical"><Alert type="warning" message={t('p115.qrExpired')} showIcon /><Button onClick={handleOpenQr}>{t('p115.qrRetry')}</Button></Space>}
           {qrStatus === 'failed'  && <Space direction="vertical"><Alert type="error"   message={t('p115.qrFailed')}  showIcon /><Button onClick={handleOpenQr}>{t('p115.qrRetry')}</Button></Space>}
