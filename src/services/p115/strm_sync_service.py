@@ -200,24 +200,26 @@ class P115StrmSyncService:
             logger.error("【全量STRM生成】失败: %s", e, exc_info=True)
             stats["errors"] += 1
             await tm.complete_task(task_id, stats, error_message=str(e))
-           # 通知：任务失败
-           try:
-               from src.services.notify_service import send as _notify
-               await _notify("全量STRM同步失败", f"错误：{e}\n生成：{stats.get('created',0)} 个")
-           except Exception: pass
+            # 通知：任务失败
+            try:
+                from src.services.notify_service import send as _notify
+                await _notify("全量STRM同步失败", f"错误：{e}\n生成：{stats.get('created',0)} 个")
+            except Exception:
+                pass
         else:
             await tm.complete_task(task_id, stats)
             # 同步成功且启用了刮削 → 逐路径对批量刮削
             if config.get("enable_scrape"):
                 await _run_scrape(config, sync_pairs)
-           # 通知：任务成功
-           try:
-               from src.services.notify_service import send as _notify
-               await _notify(
-                   "全量STRM同步完成",
-                   f"生成：{stats.get('created',0)} 个  跳过：{stats.get('skipped',0)} 个  失败：{stats.get('errors',0)} 个",
-               )
-           except Exception: pass
+            # 通知：任务成功
+            try:
+                from src.services.notify_service import send as _notify
+                await _notify(
+                    "全量STRM同步完成",
+                    f"生成：{stats.get('created',0)} 个  跳过：{stats.get('skipped',0)} 个  失败：{stats.get('errors',0)} 个",
+                )
+            except Exception:
+                pass
         finally:
             elapsed = round(time.time() - start_time, 1)
             await save_strm_status({
