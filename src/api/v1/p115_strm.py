@@ -38,20 +38,31 @@ class StrmSyncConfigPayload(BaseModel):
     # 全量 / 增量 各自的自定义路径配置
     full_sync_cfg: SyncDirCfg = SyncDirCfg()
     inc_sync_cfg:  SyncDirCfg = SyncDirCfg()
-    # 全量同步覆盖模式（对齐 p115strmhelper full_sync_overwrite_mode）
-    # "skip"=跳过已存在文件, "overwrite"=强制覆盖已存在文件
+    # 全量同步覆盖模式
     full_overwrite_mode: str = "skip"
+    # 刮削配置
+    enable_scrape:         bool = False
+    scrape_download_image: bool = True
+    episode_group_id:      str  = ""
+    # Cron 定时全量同步（5段 cron 表达式，空字符串=不启用）
+    full_sync_cron: str = ""
 
 
 class MonitorConfigPayload(BaseModel):
-    enabled: bool = False
+    # 兼容旧字段
+    enabled: bool = True
     poll_interval: int = 30
     monitor_paths: List[str] = []
     auto_inc_sync: bool = True
-    # 自定义目录配置（use_custom_dir=False 时后端忽略 monitor_dir/strm_dir）
     use_custom_dir: bool = False
     monitor_dir: Optional[str] = ""
     strm_dir: Optional[str] = ""
+    # 新增：双通道配置
+    life_poll_enabled: bool = True
+    webhook_enabled:   bool = False
+    webhook_token:     str  = ""
+    trigger_types:     List[int] = []
+    debounce_seconds:  int  = 5
 
 
 class OrganizeRunPayload(BaseModel):

@@ -108,6 +108,20 @@ async def lifespan(app: FastAPI):
     # 5. 启动定时调度器
     start_scheduler()
 
+    # 5.2 恢复 STRM Cron 定时全量同步配置
+    async def _restore_strm_cron():
+        try:
+            from src.services.p115.strm_sync_service import P115StrmSyncService
+            svc = P115StrmSyncService()
+            cfg = await svc.get_config()
+            cron_expr = cfg.get("full_sync_cron", "")
+            if cron_expr:
+                svc._apply_cron(cron_expr)
+                logger.info("已恢复 STRM 定时全量同步: %s", cron_expr)
+        except Exception as _e:
+            logger.warning("恢复 STRM Cron 失败: %s", _e)
+    asyncio.create_task(_restore_strm_cron())
+
     # 5.5 字体目录初始扫描（异步后台，不阻塞启动）
     async def _bg_font_scan():
         try:

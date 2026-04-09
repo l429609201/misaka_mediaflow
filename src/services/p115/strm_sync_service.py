@@ -50,17 +50,43 @@ class P115StrmSyncService:
             "inc_sync_cfg":        {"use_custom": False, "cloud_path": "", "strm_path": ""},
             "full_overwrite_mode": "skip",
             # 刮削配置
-            "enable_scrape":         False,   # 同步完成后自动刮削
-            "scrape_download_image": True,    # 是否下载 poster/backdrop 图片
-            "episode_group_id":      "",      # TMDB 剧集组 ID（留空=不用剧集组）
+            "enable_scrape":         False,
+            "scrape_download_image": True,
+            "episode_group_id":      "",
+            # Cron 定时全量同步（5段表达式，空=不启用）
+            "full_sync_cron":        "",
         }
         saved = await load_strm_config()
         return {**defaults, **saved}
 
     async def save_config(self, config: dict) -> bool:
-        """保存同步配置"""
+        """保存同步配置，并同步更新 APScheduler cron job"""
         await save_strm_config(config)
+        # 保存后立即更新调度器
+        self._apply_cron(config.get("full_sync_cron", ""))
         return True
+
+    def _apply_cron(self, cron_expr: str) -> None:
+        """注册或移除全量同步定时任务"""
+        from src.core.scheduler import add_cron_job, scheduler
+        JOB_ID = "p115_full_sync_cron"
+        if not cron_expr or not cron_expr.strip():
+            if scheduler.get_job(JOB_ID):
+                scheduler.remove_job(JOB_ID)
+                logger.info("[STRM Cron] 已移除定时全量同步")
+            return
+        import asyncio as _aio
+
+        async def _cron_full_sync():
+            logger.info("[STRM Cron] 定时触发全量同步")
+            await self.trigger_full_sync()
+
+        def _run():
+            loop = _aio.get_event_loop()
+            loop.create_task(_cron_full_sync())
+
+        add_cron_job(_run, cron_expr.strip(), JOB_ID)
+        logger.info("[STRM Cron] 已注册定时全量同步: %s", cron_expr)
 
     async def get_status(self) -> dict:
         """获取同步状态"""
@@ -174,11 +200,24 @@ class P115StrmSyncService:
             logger.error("【全量STRM生成】失败: %s", e, exc_info=True)
             stats["errors"] += 1
             await tm.complete_task(task_id, stats, error_message=str(e))
+           # 通知：任务失败
+           try:
+               from src.services.notify_service import send as _notify
+               await _notify("全量STRM同步失败", f"错误：{e}\n生成：{stats.get('created',0)} 个")
+           except Exception: pass
         else:
             await tm.complete_task(task_id, stats)
             # 同步成功且启用了刮削 → 逐路径对批量刮削
             if config.get("enable_scrape"):
                 await _run_scrape(config, sync_pairs)
+           # 通知：任务成功
+           try:
+               from src.services.notify_service import send as _notify
+               await _notify(
+                   "全量STRM同步完成",
+                   f"生成：{stats.get('created',0)} 个  跳过：{stats.get('skipped',0)} 个  失败：{stats.get('errors',0)} 个",
+               )
+           except Exception: pass
         finally:
             elapsed = round(time.time() - start_time, 1)
             await save_strm_status({

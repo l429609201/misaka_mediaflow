@@ -75,8 +75,29 @@
        if (cfg.episode_group_id      !== undefined) setEpisodeGroupId(cfg.episode_group_id)
      } catch { /* ignore */ }
    }, [])
+  const [fullSyncCron, setFullSyncCron] = useState('')
+
+  // 在 fetchAll 中恢复 cron
+  const fetchAllWithCron = useCallback(async () => {
+    try {
+      const [cfgRes, stRes, tmplRes] = await Promise.all([
+        p115StrmApi.getSyncConfig(),
+        p115StrmApi.getSyncStatus(),
+        strmApi.getUrlTemplate(),
+      ])
+      setStrmStatus(stRes.data || {})
+      setUrlTemplate(tmplRes.data?.template || DEFAULT_TEMPLATE)
+      const cfg = cfgRes.data || {}
+      if (cfg.full_sync_cfg)         setFullSyncCfg(c => ({ ...c, ...cfg.full_sync_cfg }))
+      if (cfg.full_overwrite_mode)   setFullOverwriteMode(cfg.full_overwrite_mode)
+      if (cfg.enable_scrape         !== undefined) setScrapeEnabled(cfg.enable_scrape)
+      if (cfg.scrape_download_image !== undefined) setScrapeDownloadImg(cfg.scrape_download_image)
+      if (cfg.episode_group_id      !== undefined) setEpisodeGroupId(cfg.episode_group_id)
+      if (cfg.full_sync_cron        !== undefined) setFullSyncCron(cfg.full_sync_cron || '')
+    } catch { /* ignore */ }
+  }, [])
  
-   useEffect(() => { fetchAll() }, [fetchAll])
+  useEffect(() => { fetchAllWithCron() }, [fetchAllWithCron])
  
    // ── 全量同步 ───────────────────────────────────────────────────────────
    const handleFullSync = async () => {
@@ -89,7 +110,7 @@
        r.data?.success
          ? message.success(t('p115.syncStarted'))
          : message.warning(r.data?.message || t('p115.syncStartFailed'))
-       setTimeout(fetchAll, 1500)
+      setTimeout(fetchAllWithCron, 1500)
      } catch { message.error(t('common.failed')) }
      finally { setStrmSyncing(false) }
    }
@@ -102,7 +123,7 @@
        r.data?.success
          ? message.success(t('p115.syncStarted'))
          : message.warning(r.data?.message || t('p115.syncStartFailed'))
-       setTimeout(fetchAll, 1500)
+      setTimeout(fetchAllWithCron, 1500)
      } catch { message.error(t('common.failed')) }
      finally { setStrmSyncing(false) }
    }
@@ -117,6 +138,7 @@
          enable_scrape:         scrapeEnabled,
          scrape_download_image: scrapeDownloadImg,
          episode_group_id:      episodeGroupId,
+        full_sync_cron:        fullSyncCron.trim(),
        })
        await strmApi.saveUrlTemplate(urlTemplate)
        message.success(t('p115.configSaved'))
@@ -255,18 +277,35 @@
              {/* 覆盖模式 */}
              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#f9f0ff', border: '1px solid #d3adf7', borderRadius: 8, padding: '7px 12px', marginBottom: 12 }}>
                <div>
-                 <Text strong style={{ fontSize: 12 }}>{t('p115.strmMode')}</Text>
+                <Text strong style={{ fontSize: 12 }}>{t('p115.overwriteModeLabel')}</Text>
                  <div style={{ fontSize: 11, color: '#888' }}>
-                   {fullOverwriteMode === 'skip' ? t('p115.statSkipped') : t('p115.scrapeEnabled')}
+                  {fullOverwriteMode === 'skip' ? t('p115.overwriteModeSkipHint') : t('p115.overwriteModeOverwriteHint')}
                  </div>
                </div>
                <Select size="small" value={fullOverwriteMode} onChange={setFullOverwriteMode} style={{ width: 90 }}
                  options={[
-                   { value: 'skip',      label: t('p115.statSkipped') },
-                   { value: 'overwrite', label: t('p115.scrapeEnabled') },
+                  { value: 'skip',      label: t('p115.overwriteModeSkip') },
+                  { value: 'overwrite', label: t('p115.overwriteModeOverwrite') },
                  ]}
                />
              </div>
+            {/* Cron 定时全量同步 */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#e6f4ff', border: '1px solid #91caff', borderRadius: 8, padding: '7px 12px', marginBottom: 12 }}>
+              <div style={{ flex: 1, marginRight: 8 }}>
+                <Text strong style={{ fontSize: 12 }}>{t('p115.cronLabel')}</Text>
+                <div style={{ fontSize: 11, color: '#888' }}>
+                  {fullSyncCron ? `${t('p115.cronEnabled')}: ${fullSyncCron}` : t('p115.cronDisabled')}
+                </div>
+                <Input
+                  size="small" style={{ marginTop: 4 }}
+                  value={fullSyncCron}
+                  onChange={e => setFullSyncCron(e.target.value)}
+                  placeholder={t('p115.cronPlaceholder')}
+                  allowClear
+                />
+                <div style={{ fontSize: 10, color: '#aaa', marginTop: 2 }}>{t('p115.cronHint')}</div>
+              </div>
+            </div>
              {strmStatus.running && (
                <Alert style={{ marginBottom: 8 }} type="info" showIcon
                  message={t('p115.syncInProgress', { count: strmProgress.created || 0 })} />

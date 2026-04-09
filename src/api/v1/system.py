@@ -721,3 +721,58 @@ async def sync_media_items(library_id: str = ""):
         logger.error("媒体库同步失败: %s", e)
         return {"success": False, "error": str(e), "synced": 0}
 
+
+
+# ==================== 通知渠道配置 ====================
+
+class NotifyConfigPayload(BaseModel):
+    telegram:   dict = {}
+    serverchan: dict = {}
+    webhook:    dict = {}
+
+
+@router.get("/notify/config", dependencies=[Depends(verify_token)])
+async def get_notify_config():
+    """获取通知渠道配置"""
+    from src.services import notify_service
+    cfg = await notify_service._load_config()
+    # 脱敏：token/key 返回时打码
+    def _mask(s: str) -> str:
+        return s[:4] + "****" + s[-4:] if s and len(s) > 8 else ("****" if s else "")
+    safe = {}
+    tg = cfg.get("telegram", {})
+    safe["telegram"] = {**tg, "token": _mask(tg.get("token", ""))}
+    sc = cfg.get("serverchan", {})
+    safe["serverchan"] = {**sc, "key": _mask(sc.get("key", ""))}
+    safe["webhook"] = cfg.get("webhook", {})
+    return safe
+
+
+@router.post("/notify/config", dependencies=[Depends(verify_token)])
+async def save_notify_config(payload: NotifyConfigPayload):
+    """保存通知渠道配置"""
+    from src.services import notify_service
+    # 如果传入的 token/key 是掩码（含****），则保留旧值
+    old = await notify_service._load_config()
+
+    def _merge_secret(new_val: str, old_val: str) -> str:
+        return old_val if "****" in (new_val or "") else (new_val or "")
+
+    cfg = payload.model_dump()
+    if "token" in cfg.get("telegram", {}):
+        cfg["telegram"]["token"] = _merge_secret(
+            cfg["telegram"]["token"], old.get("telegram", {}).get("token", ""))
+    if "key" in cfg.get("serverchan", {}):
+        cfg["serverchan"]["key"] = _merge_secret(
+            cfg["serverchan"]["key"], old.get("serverchan", {}).get("key", ""))
+
+    ok = await notify_service.save_config(cfg)
+    return {"success": ok}
+
+
+@router.post("/notify/test", dependencies=[Depends(verify_token)])
+async def test_notify():
+    """发送测试通知"""
+    from src.services.notify_service import send
+    results = await send("Misaka MediaFlow 通知测试", "如果您收到此消息，说明通知渠道配置正确。")
+    return {"success": bool(results), "results": results}

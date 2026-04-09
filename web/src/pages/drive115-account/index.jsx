@@ -280,9 +280,9 @@
                    tooltip={t('p115.strmLinkHostHint')}>
                    <Input placeholder="http://192.168.1.10:9906" allowClear />
                  </Form.Item>
-                 <Form.Item name="fscache_ttl_hours" label={t('p115.advancedSettings')}
-                   tooltip="全量同步(skip模式)目录树缓存有效期，0=禁用">
-                   <InputNumber min={0} max={168} step={1} style={{ width: '100%' }} addonAfter="h" />
+                 <Form.Item name="fscache_ttl_hours" label={t('p115.fscacheTtlLabel')}
+                   tooltip={t('p115.fscacheTtlHint')}>
+                   <InputNumber min={0} max={168} step={1} style={{ width: '100%' }} addonAfter={t('p115.fscacheTtlUnit')} />
                  </Form.Item>
                </Form>
              </Card>
