@@ -25,6 +25,8 @@ import {
   SearchOutlined,
   FontSizeOutlined,
   FolderAddOutlined,
+  SyncOutlined,
+  RadarChartOutlined,
 } from '@ant-design/icons'
 import { useTranslation } from 'react-i18next'
 import LanguageSwitch from '@/components/LanguageSwitch'
@@ -53,7 +55,16 @@ export const Layout = () => {
     { key: RoutePaths.HOME,              icon: <DashboardOutlined />,    label: t('menu.dashboard') },
     { key: RoutePaths.STORAGE,           icon: <DatabaseOutlined />,     label: t('menu.storage') },
     { key: RoutePaths.STRM,              icon: <FileTextOutlined />,     label: t('menu.strm') },
-    { key: RoutePaths.DRIVE115,          icon: <CloudOutlined />,        label: t('menu.drive115') },
+    {
+      key: 'menu-115',
+      icon: <CloudOutlined />,
+      label: t('menu.drive115'),
+      children: [
+        { key: RoutePaths.DRIVE115_ACCOUNT, icon: <UserOutlined />,       label: t('menu.drive115Account') },
+        { key: RoutePaths.DRIVE115_STRM,    icon: <SyncOutlined />,       label: t('menu.drive115Strm') },
+        { key: RoutePaths.DRIVE115_MONITOR, icon: <RadarChartOutlined />, label: t('menu.drive115Monitor') },
+      ],
+    },
     { key: RoutePaths.CLASSIFY,          icon: <FolderAddOutlined />,    label: t('menu.classify') },
     { key: RoutePaths.MEDIA_PROXY,       icon: <CloudServerOutlined />,  label: t('menu.mediaProxy') },
     { key: RoutePaths.REALTIME_SUBTITLE, icon: <FontSizeOutlined />,     label: t('menu.realtimeSubtitle') },
@@ -61,6 +72,9 @@ export const Layout = () => {
     { key: RoutePaths.TASKS,             icon: <UnorderedListOutlined />, label: t('menu.tasks') },
     { key: RoutePaths.SETTING,           icon: <SettingOutlined />,      label: t('menu.settings') },
   ]
+
+  // 计算当前展开的父菜单 key
+  const openKeys = location.pathname.startsWith('/115') ? ['menu-115'] : []
 
   const handleLogout = () => {
     Modal.confirm({
@@ -128,6 +142,7 @@ export const Layout = () => {
         </div>
         <Menu
           mode="inline" selectedKeys={[location.pathname]}
+          defaultOpenKeys={openKeys}
           items={menuItems} onClick={({ key }) => navigate(key)}
           style={{ borderRight: 'none', marginTop: 8 }}
         />

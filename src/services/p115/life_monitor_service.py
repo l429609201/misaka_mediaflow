@@ -237,21 +237,40 @@ def _sync_write_single_strm(
 
 
 class P115LifeMonitorService:
-    """115 生活事件监控服务"""
+    """115 生活事件监控服务（双来源：生活事件轮询 + Webhook 接收）"""
 
     def __init__(self):
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._last_event_time: int = int(time.time())
         self._last_event_id:   int = 0
+        # 统一事件日志（最多保留 200 条，含来源标记）
         self._event_log: list = []
+        # 去重缓存：key = (action, path) → timestamp，5s 内同一事件去重
+        self._dedup_cache: dict = {}
+        self._DEDUP_TTL = 5
+        # 防抖：收到 webhook 事件后延迟 N 秒触发（合并连续变化）
+        self._debounce_task: Optional[asyncio.Task] = None
+        # Webhook 统计
+        self._webhook_stats = {"cd2": 0, "generic": 0, "last_time": 0}
 
     @property
     def is_running(self) -> bool:
         return self._running and self._task is not None and not self._task.done()
 
     async def get_config(self) -> dict:
-        defaults = {"enabled": False, "poll_interval": 30, "auto_inc_sync": True}
+        defaults = {
+            "life_poll_enabled":  True,    # 115 生活事件轮询开关
+            "poll_interval":      30,      # 轮询间隔（秒）
+            "webhook_enabled":    False,   # Webhook 接收开关
+            "webhook_token":      "",      # Webhook 验证 Token（空=不验证）
+            "auto_inc_sync":      True,    # 触发增量同步
+            "debounce_seconds":   5,       # 防抖延迟（秒）
+            # 触发事件类型过滤（对应 _SYNC_TRIGGER_TYPES）
+            "trigger_types":      list(_SYNC_TRIGGER_TYPES),
+            # 兼容旧字段
+            "enabled":            True,
+        }
         saved = await load_monitor_config()
         return {**defaults, **saved}
 
@@ -261,10 +280,11 @@ class P115LifeMonitorService:
 
     def get_status(self) -> dict:
         return {
-            "running":         self.is_running,
-            "last_event_time": self._last_event_time,
-            "last_event_id":   self._last_event_id,
-            "recent_events":   self._event_log[-20:],
+            "running":          self.is_running,
+            "last_event_time":  self._last_event_time,
+            "last_event_id":    self._last_event_id,
+            "recent_events":    self._event_log[-50:],
+            "webhook_stats":    dict(self._webhook_stats),
         }
 
     async def start(self) -> dict:
@@ -283,6 +303,68 @@ class P115LifeMonitorService:
         self._running = False
         return {"success": True, "message": "生活事件监控已停止"}
 
+    # ── Webhook 接收入口（由 webhook API 路由调用）────────────────────────
+    async def receive_webhook_events(self, events: list[dict]) -> None:
+        """
+        接收来自外部 Webhook（CD2/OpenList/通用）的事件列表。
+        统一去重、写日志，然后触发防抖延迟后执行增量同步。
+        """
+        config = await self.get_config()
+        if not config.get("webhook_enabled", False):
+            logger.debug("[Monitor] Webhook 已关闭，忽略推送事件 %d 条", len(events))
+            return
+
+        now = time.time()
+        accepted = 0
+        for ev in events:
+            source = ev.get("source", "webhook")
+            action = ev.get("action", "")
+            path   = ev.get("path", "")
+
+            dedup_key = f"{action}:{path}"
+            last_seen = self._dedup_cache.get(dedup_key, 0)
+            if now - last_seen < self._DEDUP_TTL:
+                logger.debug("[Monitor] 去重跳过: %s %s", action, path)
+                self._add_event_log({
+                    "source": source, "action": action, "path": path,
+                    "time": ev.get("time", int(now)), "dedup": True,
+                })
+                continue
+
+            self._dedup_cache[dedup_key] = now
+            self._add_event_log({
+                "source": source, "action": action, "path": path,
+                "time": ev.get("time", int(now)), "dedup": False,
+            })
+            accepted += 1
+            src_key = source if source in ("cd2", "generic") else "generic"
+            self._webhook_stats[src_key] = self._webhook_stats.get(src_key, 0) + 1
+            self._webhook_stats["last_time"] = int(now)
+
+        self._dedup_cache = {k: v for k, v in self._dedup_cache.items()
+                             if now - v < self._DEDUP_TTL * 10}
+        if accepted == 0:
+            return
+
+        logger.info("[Monitor] Webhook 接受 %d 条事件，触发防抖定时器", accepted)
+        debounce = max(1, config.get("debounce_seconds", 5))
+        await self._schedule_debounce(debounce, config)
+
+    async def _schedule_debounce(self, delay: float, config: dict) -> None:
+        if self._debounce_task and not self._debounce_task.done():
+            self._debounce_task.cancel()
+        self._debounce_task = asyncio.create_task(self._debounce_trigger(delay, config))
+
+    async def _debounce_trigger(self, delay: float, config: dict) -> None:
+        try:
+            await asyncio.sleep(delay)
+            if config.get("auto_inc_sync", True):
+                from src.services.p115.strm_sync_service import P115StrmSyncService
+                result = await P115StrmSyncService().trigger_inc_sync()
+                logger.info("[Monitor] 防抖触发增量同步: %s", result)
+        except asyncio.CancelledError:
+            logger.debug("[Monitor] 防抖定时器被取消（有新事件重置）")
+
     async def _monitor_loop(self):
         self._running = True
         logger.info("【监控生活事件】启动 from_time=%d from_id=%d",
@@ -293,7 +375,10 @@ class P115LifeMonitorService:
                 try:
                     config        = await self.get_config()
                     poll_interval = max(10, config.get("poll_interval", 30))
-                    new_events    = await self._poll_once()
+                    if not config.get("life_poll_enabled", True):
+                        await asyncio.sleep(poll_interval)
+                        continue
+                    new_events = await self._poll_once()
                     if new_events:
                         logger.info("【监控生活事件】收到 %d 条新事件", len(new_events))
                         await self._handle_events(new_events, config)
@@ -416,9 +501,14 @@ class P115LifeMonitorService:
             logger.info("【监控生活事件】触发兜底增量同步: %s", result)
 
     def _add_event_log(self, event: dict):
-        self._event_log.append(event)
-        if len(self._event_log) > 100:
-            self._event_log = self._event_log[-100:]
+        """统一事件日志，兼容生活事件（type字段）和 Webhook 事件（action字段）"""
+        entry = dict(event)
+        # 统一补充 source 字段
+        if "source" not in entry:
+            entry["source"] = "life"
+        self._event_log.append(entry)
+        if len(self._event_log) > 200:
+            self._event_log = self._event_log[-200:]
 
 
 # 全局单例

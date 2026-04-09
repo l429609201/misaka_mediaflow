@@ -14,6 +14,7 @@ from src.api.v1.search_source import router as search_source_router
 from src.api.v1.subtitle import router as subtitle_router
 from src.api.v1.classify import router as classify_router   # 通用分类引擎
 from src.api.v1.tasks import router as tasks_router         # 任务中心
+from src.api.v1.webhook import router as webhook_router     # Webhook 接收
 from src.api.redirect_url import router as redirect_url_router
 
 v1_router = APIRouter(prefix="/api/v1")
@@ -28,8 +29,9 @@ v1_router.include_router(search_source_router)
 v1_router.include_router(subtitle_router)
 v1_router.include_router(classify_router)   # 通用分类引擎
 v1_router.include_router(tasks_router)      # 任务中心
+v1_router.include_router(webhook_router)    # Webhook 接收
 
-# ⭐ 统一 redirect_url 挂在 /api/v1 下，对齐 P115StrmHelper 协议风格
+
 v1_router.include_router(redirect_url_router)
 
 __all__ = ["v1_router"]

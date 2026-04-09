@@ -12,6 +12,9 @@ import Login from '@/pages/login/index.jsx'
 import Storage from '@/pages/storage/index.jsx'
 import Strm from '@/pages/strm/index.jsx'
 import Drive115 from '@/pages/drive115/index.jsx'
+import Drive115Account from '@/pages/drive115-account/index.jsx'
+import Drive115Strm from '@/pages/drive115-strm/index.jsx'
+import Drive115Monitor from '@/pages/drive115-monitor/index.jsx'
 import Classify from '@/pages/classify/index.jsx'
 import { RealtimeSubtitle } from '@/pages/realtime-subtitle/index.jsx'
 import P115 from '@/pages/media-proxy/index.jsx'
@@ -70,7 +73,12 @@ export const router = createBrowserRouter(
         { index: true,                          element: <Home /> },
         { path: RoutePaths.STORAGE.slice(1),     element: <Storage /> },
         { path: RoutePaths.STRM.slice(1),              element: <Strm /> },
+        // 旧 /115 整体页面，兼容保留（重定向到账号页）
         { path: RoutePaths.DRIVE115.slice(1),          element: <Drive115 /> },
+        // 115 子页面
+        { path: RoutePaths.DRIVE115_ACCOUNT.slice(1),  element: <Drive115Account /> },
+        { path: RoutePaths.DRIVE115_STRM.slice(1),     element: <Drive115Strm /> },
+        { path: RoutePaths.DRIVE115_MONITOR.slice(1),  element: <Drive115Monitor /> },
         { path: RoutePaths.CLASSIFY.slice(1),          element: <Classify /> },
         { path: 'p115', loader: () => redirect(RoutePaths.MEDIA_PROXY) },
         { path: RoutePaths.MEDIA_PROXY.slice(1),       element: <P115 /> },
