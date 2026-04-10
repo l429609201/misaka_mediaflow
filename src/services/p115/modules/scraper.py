@@ -234,19 +234,28 @@ class Scraper:
     STRM 刮削器。
 
     使用方式：
-        scraper = Scraper(tmdb_provider, episode_group_id="xxxx")
+        scraper = Scraper(tmdb_provider, episode_group_id="xxxx",
+                         movie_format="{title} ({year})", tv_format="{title} S{season:02d}E{episode:02d}")
         await scraper.scrape_file(Path("/data/strm/影音/电影/盗梦空间 (2010).strm"))
         await scraper.scrape_dir(Path("/data/strm/影音"))  # 批量刮削整个目录
 
     episode_group_id：
         若指定，剧集将以剧集组的 season/episode 顺序写 NFO（用于绝对集数等场景）。
         可在前端配置，留空则走标准 SxxExx 路径。
+
+    movie_format / tv_format：
+        重命名模板，复用"整理分类刮削"中的配置。
+        支持参数：{title}, {year}, {season}, {episode}, {season_episode}, {episode_title} 等。
+        留空则不进行重命名，仅生成 NFO 和图片。
     """
 
-    def __init__(self, tmdb, episode_group_id: str = "", download_images: bool = True):
+    def __init__(self, tmdb, episode_group_id: str = "", download_images: bool = True,
+                 movie_format: str = "", tv_format: str = ""):
         self._tmdb              = tmdb            # TMDBProvider 实例
         self._episode_group_id  = episode_group_id
         self._download_images   = download_images
+        self._movie_format      = movie_format    # 电影重命名模板
+        self._tv_format         = tv_format       # 电视剧重命名模板
         self._tv_cache: dict[int, dict]  = {}    # tmdb_id → tv detail（避免重复请求）
         self._eg_cache: Optional[dict]   = None  # 剧集组详情缓存
 

@@ -106,6 +106,26 @@ async def trigger_inc_sync():
     return await _strm_sync_svc.trigger_inc_sync()
 
 
+@router.get("/sync/scan", dependencies=[Depends(verify_token)])
+async def scan_local_strm(strm_root: str = None):
+    """扫描本地 STRM 文件，统计数量和状态"""
+    return await _strm_sync_svc.scan_local_strm(strm_root)
+
+
+class CleanStrmPayload(BaseModel):
+    strm_root: Optional[str] = None
+    dry_run: bool = True
+
+
+@router.post("/sync/clean", dependencies=[Depends(verify_token)])
+async def clean_invalid_strm(payload: CleanStrmPayload):
+    """清理无效的 STRM 文件及其关联的 NFO/图片"""
+    return await _strm_sync_svc.clean_invalid_strm(
+        strm_root=payload.strm_root,
+        dry_run=payload.dry_run
+    )
+
+
 # ─────────────────────── 生活事件监控 ───────────────────────
 
 @router.get("/monitor/config", dependencies=[Depends(verify_token)])

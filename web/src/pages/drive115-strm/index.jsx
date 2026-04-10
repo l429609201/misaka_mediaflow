@@ -5,16 +5,18 @@
  import { useCallback, useEffect, useRef, useState } from 'react'
  import {
    Alert, Button, Card, Col, Divider, Form, Input, Row,
-   Select, Space, Switch, Tag, Tooltip, Typography, message, theme,
+   Select, Space, Switch, Tag, Tooltip, Typography, message, theme, Statistic,
  } from 'antd'
  import {
    CodeOutlined, FolderOpenOutlined, NodeIndexOutlined,
-   SaveOutlined, SyncOutlined,
+   SaveOutlined, SyncOutlined, ScanOutlined, DeleteOutlined,
+   UnorderedListOutlined,
  } from '@ant-design/icons'
  import { useTranslation } from 'react-i18next'
  import { p115StrmApi, strmApi } from '@/apis'
  import DirPickerModal from '@/components/DirPickerModal'
  import LocalDirPickerModal from '@/components/LocalDirPickerModal'
+ import { useNavigate } from 'react-router-dom'
  
  const { Text, Title } = Typography
  
@@ -41,10 +43,14 @@
  export const Drive115Strm = () => {
    const { t } = useTranslation()
    const { token } = theme.useToken()
- 
+   const navigate = useNavigate()
+
    const [strmStatus,    setStrmStatus]    = useState({})
    const [strmSyncing,   setStrmSyncing]   = useState(false)
    const [strmCfgSaving, setStrmCfgSaving] = useState(false)
+   const [localScanLoading, setLocalScanLoading] = useState(false)
+   const [localCleanLoading, setLocalCleanLoading] = useState(false)
+   const [localStrmStats, setLocalStrmStats] = useState(null)
  
    const SYNC_DEFAULTS = { use_custom: false, cloud_path: '', strm_path: '' }
    const [fullSyncCfg,     setFullSyncCfg]     = useState({ ...SYNC_DEFAULTS })
@@ -127,7 +133,50 @@
      } catch { message.error(t('common.failed')) }
      finally { setStrmSyncing(false) }
    }
- 
+
+   // ── 扫描本地 STRM ──────────────────────────────────────────────────────
+   const handleScanLocalStrm = async () => {
+     setLocalScanLoading(true)
+     try {
+       const r = await p115StrmApi.scanLocalStrm()
+       if (r.data?.error) {
+         message.error(r.data.error)
+       } else {
+         setLocalStrmStats(r.data)
+         message.success(t('p115.scanFinished'))
+       }
+     } catch (e) {
+       message.error(t('common.failed'))
+     } finally {
+       setLocalScanLoading(false)
+     }
+   }
+
+   // ── 清理无效 STRM ──────────────────────────────────────────────────────
+   const handleCleanInvalidStrm = async (dryRun = true) => {
+     setLocalCleanLoading(true)
+     try {
+       const r = await p115StrmApi.cleanInvalidStrm({ dry_run: dryRun })
+       if (r.data?.error) {
+         message.error(r.data.error)
+       } else {
+         const stats = r.data
+         const msg = dryRun
+           ? `${t('p115.dryRunClean')}：将删除 ${stats.deleted_strm} 个 STRM、${stats.deleted_nfo} 个 NFO、${stats.deleted_images} 个图片`
+           : `${t('p115.cleanFinished')}：已删除 ${stats.deleted_strm} 个 STRM、${stats.deleted_nfo} 个 NFO、${stats.deleted_images} 个图片`
+         message.success(msg)
+         // 清理后重新扫描
+         if (!dryRun) {
+           setTimeout(handleScanLocalStrm, 1000)
+         }
+       }
+     } catch (e) {
+       message.error(t('common.failed'))
+     } finally {
+       setLocalCleanLoading(false)
+     }
+   }
+
    // ── 保存配置 ─────────────────────────────────────────────────────────
    const handleSaveConfig = async () => {
      setStrmCfgSaving(true)
@@ -337,40 +386,90 @@
            </Card>
          </Col>
  
-         {/* 右列：STRM URL 模板 */}
+         {/* 右列：URL 模板 + 本地 STRM 管理 */}
          <Col xs={24} lg={12}>
-           <Card title={<Space><CodeOutlined />STRM URL {t('p115.strmMode')}</Space>}>
-             <Alert type="info" showIcon style={{ marginBottom: 12 }}
-               message={t('p115.strmPreviewHint')} />
-             <div style={{ marginBottom: 10 }}>
-               <Text type="secondary" style={{ display: 'block', marginBottom: 6, fontSize: 12 }}>
-                 {t('p115.strmPreviewLabel')}
-               </Text>
-               <Space wrap size={[6, 6]}>
-                 {TEMPLATE_PARAMS.map(p => (
-                   <Tooltip key={p.label} title={p.label}>
-                     <Button size="small" onClick={() => insertAtCursor(p.insert)}>{p.label}</Button>
-                   </Tooltip>
-                 ))}
+           <Space direction="vertical" size={24} style={{ width: '100%' }}>
+             <Card title={<Space><CodeOutlined />STRM URL {t('p115.strmMode')}</Space>}>
+               <Alert type="info" showIcon style={{ marginBottom: 12 }}
+                 message={t('p115.strmPreviewHint')} />
+               <div style={{ marginBottom: 10 }}>
+                 <Text type="secondary" style={{ display: 'block', marginBottom: 6, fontSize: 12 }}>
+                   {t('p115.strmPreviewLabel')}
+                 </Text>
+                 <Space wrap size={[6, 6]}>
+                   {TEMPLATE_PARAMS.map(p => (
+                     <Tooltip key={p.label} title={p.label}>
+                       <Button size="small" onClick={() => insertAtCursor(p.insert)}>{p.label}</Button>
+                     </Tooltip>
+                   ))}
+                 </Space>
+               </div>
+               <textarea
+                 ref={templateRef}
+                 value={urlTemplate}
+                 onChange={e => setUrlTemplate(e.target.value)}
+                 rows={5}
+                 spellCheck={false}
+                 style={{
+                   width: '100%', padding: '8px 12px', fontFamily: 'monospace', fontSize: 12,
+                   border: `1px solid ${token.colorBorder}`, borderRadius: token.borderRadius,
+                   resize: 'vertical', outline: 'none', lineHeight: 1.6, boxSizing: 'border-box',
+                   background: token.colorBgContainer, color: token.colorText,
+                 }}
+               />
+               <Space style={{ marginTop: 10 }}>
+                 <Button onClick={() => setUrlTemplate(DEFAULT_TEMPLATE)}>{t('common.reset')}</Button>
                </Space>
-             </div>
-             <textarea
-               ref={templateRef}
-               value={urlTemplate}
-               onChange={e => setUrlTemplate(e.target.value)}
-               rows={5}
-               spellCheck={false}
-               style={{
-                 width: '100%', padding: '8px 12px', fontFamily: 'monospace', fontSize: 12,
-                 border: `1px solid ${token.colorBorder}`, borderRadius: token.borderRadius,
-                 resize: 'vertical', outline: 'none', lineHeight: 1.6, boxSizing: 'border-box',
-                 background: token.colorBgContainer, color: token.colorText,
-               }}
-             />
-             <Space style={{ marginTop: 10 }}>
-               <Button onClick={() => setUrlTemplate(DEFAULT_TEMPLATE)}>{t('common.reset')}</Button>
-             </Space>
-           </Card>
+             </Card>
+
+             <Card title={<Space><ScanOutlined />{t('p115.localStrmTools')}</Space>}
+               extra={<Button size="small" icon={<UnorderedListOutlined />} onClick={() => navigate('/tasks')}>
+                 {t('p115.goTaskCenter')}
+               </Button>}>
+               <Alert type="info" showIcon style={{ marginBottom: 12 }}
+                 message={t('p115.localStrmToolsHint')}
+                 description={t('p115.goTaskCenterHint')}
+               />
+
+               <Space wrap style={{ marginBottom: 12 }}>
+                 <Button icon={<ScanOutlined />} loading={localScanLoading} onClick={handleScanLocalStrm}>
+                   {t('p115.scanLocalStrm')}
+                 </Button>
+                 <Button icon={<DeleteOutlined />} loading={localCleanLoading} onClick={() => handleCleanInvalidStrm(true)}>
+                   {t('p115.dryRunClean')}
+                 </Button>
+                 <Button danger icon={<DeleteOutlined />} loading={localCleanLoading} onClick={() => handleCleanInvalidStrm(false)}>
+                   {t('p115.cleanInvalidStrm')}
+                 </Button>
+               </Space>
+
+               {localStrmStats && (
+                 <>
+                   <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
+                     <Col xs={12} sm={6}><Statistic title={t('p115.localStrmTotal')} value={localStrmStats.total || 0} /></Col>
+                     <Col xs={12} sm={6}><Statistic title={t('p115.localStrmValid')} value={localStrmStats.valid || 0} /></Col>
+                     <Col xs={12} sm={6}><Statistic title={t('p115.localStrmInvalid')} value={localStrmStats.invalid || 0} valueStyle={{ color: '#cf1322' }} /></Col>
+                     <Col xs={12} sm={6}><Statistic title={t('p115.localStrmMissingNfo')} value={localStrmStats.missing_nfo || 0} valueStyle={{ color: '#d48806' }} /></Col>
+                   </Row>
+
+                   <Alert
+                     type="warning"
+                     showIcon
+                     style={{ marginBottom: 12 }}
+                     message={t('p115.scanLocalStrmHint')}
+                     description={
+                       <div>
+                         <div>{t('p115.localStrmScannedPaths')}：</div>
+                         <div style={{ marginTop: 6, fontFamily: 'monospace', fontSize: 12 }}>
+                           {(localStrmStats.paths || []).map(p => <div key={p}>{p}</div>)}
+                         </div>
+                       </div>
+                     }
+                   />
+                 </>
+               )}
+             </Card>
+           </Space>
          </Col>
  
        </Row>

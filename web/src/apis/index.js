@@ -137,6 +137,9 @@ export const p115StrmApi = {
   getSyncStatus:   ()        => api.get('/p115-strm/sync/status'),
   fullSync:        ()        => api.post('/p115-strm/sync/full'),
   incSync:         ()        => api.post('/p115-strm/sync/inc'),
+  // STRM 本地管理
+  scanLocalStrm:   (strmRoot) => api.get('/p115-strm/sync/scan', { params: { strm_root: strmRoot } }),
+  cleanInvalidStrm: (payload) => api.post('/p115-strm/sync/clean', payload),
   // 生活事件监控
   getMonitorConfig:  ()        => api.get('/p115-strm/monitor/config'),
   saveMonitorConfig: (payload) => api.post('/p115-strm/monitor/config', payload),

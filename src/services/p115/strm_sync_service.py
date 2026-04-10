@@ -95,6 +95,146 @@ class P115StrmSyncService:
         status["progress"] = self._progress
         return status
 
+    # ── 本地 STRM 扫描与管理 ──────────────────────────────────────────────────
+
+    async def scan_local_strm(self, strm_root: str = None) -> dict:
+        """
+        扫描本地 STRM 文件，统计数量和状态。
+
+        Args:
+            strm_root: 指定扫描目录，为空则扫描所有配置的 sync_pairs
+
+        Returns:
+            {
+                "total": 总文件数,
+                "valid": 有效文件数,
+                "invalid": 无效文件数（对应网盘文件已删除）,
+                "missing_nfo": 缺失 NFO 的文件数,
+                "paths": [扫描的路径列表]
+            }
+        """
+        from src.services.p115.modules import resolve_sync_pairs
+
+        config = await self.get_config()
+
+        # 确定扫描路径
+        if strm_root:
+            scan_paths = [Path(strm_root)]
+        else:
+            sync_pairs = await resolve_sync_pairs(config)
+            scan_paths = [Path(pair["strm_path"]) for pair in sync_pairs if pair.get("strm_path")]
+
+        if not scan_paths:
+            return {"error": "未配置 STRM 路径"}
+
+        stats = {
+            "total": 0,
+            "valid": 0,
+            "invalid": 0,
+            "missing_nfo": 0,
+            "paths": [str(p) for p in scan_paths]
+        }
+
+        for strm_path in scan_paths:
+            if not strm_path.exists():
+                logger.warning("[STRM扫描] 路径不存在: %s", strm_path)
+                continue
+
+            for strm_file in strm_path.rglob("*.strm"):
+                stats["total"] += 1
+
+                # 检查 NFO 是否存在
+                nfo_file = strm_file.with_suffix(".nfo")
+                if not nfo_file.exists():
+                    stats["missing_nfo"] += 1
+
+                # 读取 STRM 内容，检查是否有效
+                try:
+                    content = strm_file.read_text(encoding="utf-8").strip()
+                    if content and ("pickcode=" in content or "http" in content):
+                        stats["valid"] += 1
+                    else:
+                        stats["invalid"] += 1
+                except Exception as e:
+                    logger.warning("[STRM扫描] 读取失败 %s: %s", strm_file, e)
+                    stats["invalid"] += 1
+
+        logger.info("[STRM扫描] 完成: %s", stats)
+        return stats
+
+    async def clean_invalid_strm(self, strm_root: str = None, dry_run: bool = True) -> dict:
+        """
+        清理无效的 STRM 文件及其关联的 NFO/图片。
+
+        Args:
+            strm_root: 指定清理目录，为空则清理所有配置的 sync_pairs
+            dry_run: 试运行模式，只统计不实际删除
+
+        Returns:
+            {
+                "deleted_strm": 删除的 STRM 文件数,
+                "deleted_nfo": 删除的 NFO 文件数,
+                "deleted_images": 删除的图片文件数,
+                "dry_run": 是否为试运行
+            }
+        """
+        from src.services.p115.modules import resolve_sync_pairs
+
+        config = await self.get_config()
+
+        # 确定清理路径
+        if strm_root:
+            scan_paths = [Path(strm_root)]
+        else:
+            sync_pairs = await resolve_sync_pairs(config)
+            scan_paths = [Path(pair["strm_path"]) for pair in sync_pairs if pair.get("strm_path")]
+
+        if not scan_paths:
+            return {"error": "未配置 STRM 路径"}
+
+        stats = {
+            "deleted_strm": 0,
+            "deleted_nfo": 0,
+            "deleted_images": 0,
+            "dry_run": dry_run
+        }
+
+        for strm_path in scan_paths:
+            if not strm_path.exists():
+                continue
+
+            for strm_file in strm_path.rglob("*.strm"):
+                # 检查 STRM 是否有效
+                try:
+                    content = strm_file.read_text(encoding="utf-8").strip()
+                    is_valid = content and ("pickcode=" in content or "http" in content)
+                except Exception:
+                    is_valid = False
+
+                if not is_valid:
+                    # 删除 STRM 文件
+                    if not dry_run:
+                        strm_file.unlink(missing_ok=True)
+                    stats["deleted_strm"] += 1
+
+                    # 删除关联的 NFO
+                    nfo_file = strm_file.with_suffix(".nfo")
+                    if nfo_file.exists():
+                        if not dry_run:
+                            nfo_file.unlink(missing_ok=True)
+                        stats["deleted_nfo"] += 1
+
+                    # 删除关联的图片（poster.jpg, fanart.jpg 等）
+                    for img_name in ["poster.jpg", "fanart.jpg", "backdrop.jpg"]:
+                        img_file = strm_file.parent / img_name
+                        if img_file.exists():
+                            if not dry_run:
+                                img_file.unlink(missing_ok=True)
+                            stats["deleted_images"] += 1
+
+        logger.info("[STRM清理] 完成: %s", stats)
+        return stats
+
     # ── 触发接口 ──────────────────────────────────────────────────────────────
 
     async def trigger_full_sync(self) -> dict:
@@ -337,24 +477,55 @@ async def _run_scrape(config: dict, sync_pairs: list) -> None:
     同步完成后触发刮削。
     每个 sync_pair 的 strm_path 作为刮削根目录，
     由 Scraper.scrape_dir() 递归处理所有 .strm 文件。
+
+    注意：刮削配置（重命名模板）复用"整理分类刮削"中的配置，
+    从 p115_scrape_config 读取 movie_format 和 tv_format。
     """
     from src.services.metadata_service import metadata_service
     from src.services.p115.modules.scraper import Scraper
+    from src.db.database import get_async_session_local
+    from src.db.models import SystemConfig
+    from sqlalchemy import select
+    import json as _json
 
     tmdb = await metadata_service.get_provider("tmdb")
     if not tmdb:
         logger.warning("[Scraper] TMDB 未配置，跳过刮削")
         return
 
+    # 从"整理分类刮削"配置中读取重命名模板
+    scrape_config = {}
+    try:
+        async with get_async_session_local() as db:
+            result = await db.execute(
+                select(SystemConfig).where(SystemConfig.key == "p115_scrape_config")
+            )
+            cfg = result.scalars().first()
+            if cfg and cfg.value:
+                scrape_config = _json.loads(cfg.value)
+    except Exception as e:
+        logger.warning("[Scraper] 读取刮削配置失败: %s", e)
+
+    # 使用整理分类刮削的模板配置
+    movie_format = scrape_config.get("movie_format", "{title} ({year})/{title} ({year})")
+    tv_format = scrape_config.get("tv_format", "{title} ({year})/Season {season:02d}/{title} - {season_episode} - {episode_title}")
+
     episode_group_id   = config.get("episode_group_id", "")
     download_images    = config.get("scrape_download_image", True)
-    scraper = Scraper(tmdb, episode_group_id=episode_group_id, download_images=download_images)
+
+    scraper = Scraper(
+        tmdb,
+        episode_group_id=episode_group_id,
+        download_images=download_images,
+        movie_format=movie_format,
+        tv_format=tv_format
+    )
 
     for pair in sync_pairs:
         strm_root = pair.get("strm_path", "").strip()
         if not strm_root:
             continue
-        logger.info("[Scraper] 开始刮削: %s", strm_root)
+        logger.info("[Scraper] 开始刮削: %s (使用整理分类刮削模板)", strm_root)
         try:
             result = await scraper.scrape_dir(Path(strm_root))
             logger.info("[Scraper] 刮削完成: %s → %s", strm_root, result)
