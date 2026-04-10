@@ -1,274 +1,285 @@
-﻿// src/pages/strm/index.jsx
-// STRM 管理 - 本地 STRM 文件扫描、清理和维护工具
-
-import { useState, useEffect } from 'react'
-import {
-  Card, Button, Space, Alert, Row, Col, Statistic, Typography, message, Divider, Table, Tabs
-} from 'antd'
-import {
-  ScanOutlined, DeleteOutlined, UnorderedListOutlined,
-  FileTextOutlined, CheckCircleOutlined, CloseCircleOutlined,
-  WarningOutlined, ReloadOutlined
-} from '@ant-design/icons'
-import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router-dom'
-import { p115StrmApi, strmApi } from '@/apis'
-
-const { Title, Text } = Typography
-
-// ─── 页面主体 ────────────────────────────────────────────────
-export const Strm = () => {
-  const { t } = useTranslation()
-  const navigate = useNavigate()
-
-  const [localScanLoading, setLocalScanLoading] = useState(false)
-  const [localCleanLoading, setLocalCleanLoading] = useState(false)
-  const [rescrapeLoading, setRescrapeLoading] = useState(false)
-  const [localStrmStats, setLocalStrmStats] = useState(null)
-  const [files, setFiles] = useState([])
-  const [fileLoading, setFileLoading] = useState(false)
-  const [filePagination, setFilePagination] = useState({ current: 1, pageSize: 20, total: 0 })
-
-  // ── 获取文件列表 ──────────────────────────────────────────────────────
-  const fetchFiles = async (page = 1, size = 20) => {
-    setFileLoading(true)
-    try {
-      const { data } = await strmApi.listFiles({ page, size })
-      setFiles(data.items || [])
-      setFilePagination({ current: data.page, pageSize: data.size, total: data.total })
-    } catch (e) {
-      message.error(t('common.failed'))
-    } finally {
-      setFileLoading(false)
-    }
-  }
-
-  // ── 扫描本地 STRM ──────────────────────────────────────────────────────
-  const handleScanLocalStrm = async () => {
-    setLocalScanLoading(true)
-    try {
-      const r = await p115StrmApi.scanLocalStrm()
-      if (r.data?.error) {
-        message.error(r.data.error)
-      } else {
-        setLocalStrmStats(r.data)
-        message.success(t('p115.scanFinished'))
-      }
-    } catch (e) {
-      message.error(t('common.failed'))
-    } finally {
-      setLocalScanLoading(false)
-    }
-  }
-
-  // ── 清理无效 STRM ──────────────────────────────────────────────────────
-  const handleCleanInvalidStrm = async (dryRun = true) => {
-    setLocalCleanLoading(true)
-    try {
-      const r = await p115StrmApi.cleanInvalidStrm({ dry_run: dryRun })
-      if (r.data?.error) {
-        message.error(r.data.error)
-      } else {
-        const stats = r.data
-        const msg = dryRun
-          ? `${t('p115.dryRunClean')}：将删除 ${stats.deleted_strm} 个 STRM、${stats.deleted_nfo} 个 NFO、${stats.deleted_images} 个图片`
-          : `${t('p115.cleanFinished')}：已删除 ${stats.deleted_strm} 个 STRM、${stats.deleted_nfo} 个 NFO、${stats.deleted_images} 个图片`
-        message.success(msg)
-        // 清理后重新扫描
-        if (!dryRun) {
-          setTimeout(handleScanLocalStrm, 1000)
-        }
-      }
-    } catch (e) {
-      message.error(t('common.failed'))
-    } finally {
-      setLocalCleanLoading(false)
-    }
-  }
-
-  // ── 补刮削缺失 NFO ─────────────────────────────────────────────────────
-  const handleRescrapeNfo = async () => {
-    setRescrapeLoading(true)
-    try {
-      const r = await p115StrmApi.rescrapeNfo()
-      if (r.data?.error) {
-        message.error(r.data.error)
-      } else {
-        const stats = r.data
-        message.success(`${t('p115.rescrapeFinished')}：缺失 ${stats.missing_nfo}，成功 ${stats.scraped}，失败 ${stats.failed}`)
-        setTimeout(handleScanLocalStrm, 1000)
-      }
-    } catch (e) {
-      message.error(t('common.failed'))
-    } finally {
-      setRescrapeLoading(false)
-    }
-  }
-
-  return (
-    <div style={{ padding: 24 }}>
-      <Title level={4} style={{ marginBottom: 16 }}>
-        <Space><FileTextOutlined />{t('menu.strm')}</Space>
-      </Title>
-
-      {/* 顶部说明 */}
-      <Alert
-        type="info"
-        showIcon
-        style={{ marginBottom: 24 }}
-        message={t('p115.localStrmToolsHint')}
-        description={
-          <div>
-            <div>{t('p115.goTaskCenterHint')}</div>
-            <Button
-              size="small"
-              icon={<UnorderedListOutlined />}
-              onClick={() => navigate('/tasks')}
-              style={{ marginTop: 8 }}
-            >
-              {t('p115.goTaskCenter')}
-            </Button>
-          </div>
-        }
-      />
-
-      {/* 主操作区 */}
-      <Card
-        title={<Space><ScanOutlined />本地 STRM 工具</Space>}
-        style={{ marginBottom: 24 }}
-      >
-        <Space wrap size="middle" style={{ marginBottom: 16 }}>
-          <Button
-            type="primary"
-            icon={<ScanOutlined />}
-            loading={localScanLoading}
-            onClick={handleScanLocalStrm}
-            size="large"
-          >
-            {t('p115.scanLocalStrm')}
-          </Button>
-          <Button
-            icon={<DeleteOutlined />}
-            loading={localCleanLoading}
-            onClick={() => handleCleanInvalidStrm(true)}
-            size="large"
-          >
-            {t('p115.dryRunClean')}
-          </Button>
-          <Button
-            danger
-            icon={<DeleteOutlined />}
-            loading={localCleanLoading}
-            onClick={() => handleCleanInvalidStrm(false)}
-            size="large"
-          >
-            {t('p115.cleanInvalidStrm')}
-          </Button>
-          <Button
-            icon={<CheckCircleOutlined />}
-            loading={rescrapeLoading}
-            onClick={handleRescrapeNfo}
-            size="large"
-          >
-            {t('p115.rescrapeNfo')}
-          </Button>
-        </Space>
-
-        <Alert
-          type="warning"
-          showIcon
-          message="操作说明"
-          description={
-            <ul style={{ margin: 0, paddingLeft: 20 }}>
-              <li><strong>扫描本地 STRM</strong>：统计当前配置路径下的所有 STRM 文件状态</li>
-              <li><strong>试运行清理</strong>：预览将要删除的文件，不实际执行删除</li>
-              <li><strong>清理无效 STRM</strong>：删除内容为空或明显异常的 STRM 文件及关联的 NFO/图片</li>
-              <li><strong>补刮削 NFO</strong>：扫描缺失 NFO 的 STRM 文件并自动补全元数据和图片</li>
-            </ul>
-          }
-        />
-      </Card>
-
-      {/* 扫描结果展示 */}
-      {localStrmStats && (
-        <Card title={<Space><CheckCircleOutlined />扫描结果</Space>} style={{ marginBottom: 24 }}>
-          <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-            <Col xs={12} sm={6}>
-              <Statistic
-                title={t('p115.localStrmTotal')}
-                value={localStrmStats.total || 0}
-                prefix={<FileTextOutlined />}
-              />
-            </Col>
-            <Col xs={12} sm={6}>
-              <Statistic
-                title={t('p115.localStrmValid')}
-                value={localStrmStats.valid || 0}
-                valueStyle={{ color: '#3f8600' }}
-                prefix={<CheckCircleOutlined />}
-              />
-            </Col>
-            <Col xs={12} sm={6}>
-              <Statistic
-                title={t('p115.localStrmInvalid')}
-                value={localStrmStats.invalid || 0}
-                valueStyle={{ color: '#cf1322' }}
-                prefix={<CloseCircleOutlined />}
-              />
-            </Col>
-            <Col xs={12} sm={6}>
-              <Statistic
-                title={t('p115.localStrmMissingNfo')}
-                value={localStrmStats.missing_nfo || 0}
-                valueStyle={{ color: '#d48806' }}
-                prefix={<WarningOutlined />}
-              />
-            </Col>
-          </Row>
-
-          <Divider />
-
-          <div>
-            <Text strong>{t('p115.localStrmScannedPaths')}：</Text>
-            <div style={{ marginTop: 12, fontFamily: 'monospace', fontSize: 12, background: '#f5f5f5', padding: 12, borderRadius: 4 }}>
-              {(localStrmStats.paths || []).map(p => (
-                <div key={p} style={{ padding: '4px 0' }}>📁 {p}</div>
-              ))}
-            </div>
-          </div>
-        </Card>
-      )}
-
-      {/* STRM 文件列表 */}
-      <Card
-        title={<Space><FileTextOutlined />STRM 文件列表</Space>}
-        extra={
-          <Button icon={<ReloadOutlined />} onClick={() => fetchFiles()}>
-            {t('common.refresh')}
-          </Button>
-        }
-      >
-        <Table
-          rowKey="id"
-          columns={[
-            { title: 'ID', dataIndex: 'id', width: 60 },
-            { title: t('strm.strmPath'), dataIndex: 'strm_path', ellipsis: true },
-            { title: t('strm.strmContent'), dataIndex: 'strm_content', ellipsis: true },
-            { title: t('strm.strmMode'), dataIndex: 'strm_mode', width: 100 },
-            { title: t('common.time'), dataIndex: 'created_at', width: 160 },
-          ]}
-          dataSource={files}
-          loading={fileLoading}
-          scroll={{ x: 800 }}
-          pagination={{
-            ...filePagination,
-            onChange: (p, s) => fetchFiles(p, s),
-            showTotal: (total) => `共 ${total} 条`
-          }}
-        />
-      </Card>
-    </div>
-  )
-}
-
-export default Strm
+﻿ // src/pages/strm/index.jsx
+ // STRM 管理
+ 
+ import { useState, useEffect, useCallback } from 'react'
+ import {
+   Card, Button, Space, Row, Col, Statistic, Typography, message,
+   Table, Tabs, Tag, Tooltip, Progress, Popconfirm, Empty, Badge
+ } from 'antd'
+ import {
+   ScanOutlined, DeleteOutlined, FileTextOutlined,
+   CheckCircleOutlined, CloseCircleOutlined, WarningOutlined,
+   ReloadOutlined, ExperimentOutlined, FolderOpenOutlined,
+   SafetyCertificateOutlined, ClearOutlined,
+ } from '@ant-design/icons'
+ import { useTranslation } from 'react-i18next'
+ import { p115StrmApi, strmApi } from '@/apis'
+ 
+ const { Text, Title } = Typography
+ 
+ // ── 统计卡片组件 ─────────────────────────────────────────────
+ function StatCard({ title, value, total, icon, color, desc }) {
+   const pct = total > 0 ? Math.round((value / total) * 100) : 0
+   return (
+     <Card size="small" style={{ borderTop: `3px solid ${color}`, height: '100%' }}>
+       <Statistic
+         title={<Space size={4}><span style={{ color }}>{icon}</span>{title}</Space>}
+         value={value}
+         valueStyle={{ color, fontSize: 28 }}
+       />
+       {total > 0 && (
+         <Progress
+           percent={pct} size="small" showInfo={false}
+           strokeColor={color} trailColor="#f0f0f0"
+           style={{ marginTop: 8, marginBottom: 0 }}
+         />
+       )}
+       {desc && <Text type="secondary" style={{ fontSize: 11 }}>{desc}</Text>}
+     </Card>
+   )
+ }
+ 
+ // ── 操作卡片组件 ─────────────────────────────────────────────
+ function ActionCard({ icon, title, desc, danger, loading, disabled, onClick, confirmTitle }) {
+   const btn = (
+     <Button
+       block
+       size="large"
+       type={danger ? 'primary' : 'default'}
+       danger={danger}
+       icon={icon}
+       loading={loading}
+       disabled={disabled}
+       onClick={!confirmTitle ? onClick : undefined}
+       style={{ height: 'auto', paddingTop: 12, paddingBottom: 12 }}
+     >
+       <div style={{ lineHeight: 1.3 }}>
+         <div style={{ fontWeight: 600, fontSize: 14 }}>{title}</div>
+         <div style={{ fontSize: 11, fontWeight: 400, opacity: 0.75, marginTop: 2 }}>{desc}</div>
+       </div>
+     </Button>
+   )
+   if (confirmTitle) {
+     return (
+       <Popconfirm title={confirmTitle} onConfirm={onClick} okText="确定" cancelText="取消" okButtonProps={{ danger }}>
+         {btn}
+       </Popconfirm>
+     )
+   }
+   return btn
+ }
+ 
+ // ─── 页面主体 ────────────────────────────────────────────────
+ export const Strm = () => {
+   const { t } = useTranslation()
+ 
+   const [scanLoading,  setScanLoading]  = useState(false)
+   const [cleanLoading, setCleanLoading] = useState(false)
+   const [scrapeLoading,setScrapeLoading]= useState(false)
+   const [stats, setStats] = useState(null)
+ 
+   const [files,      setFiles]      = useState([])
+   const [fileLoading,setFileLoading] = useState(false)
+   const [filePagination, setFilePagination] = useState({ current: 1, pageSize: 20, total: 0 })
+ 
+   const fetchFiles = useCallback(async (page = 1, size = 20) => {
+     setFileLoading(true)
+     try {
+       const { data } = await strmApi.listFiles({ page, size })
+       setFiles(data.items || [])
+       setFilePagination({ current: data.page || page, pageSize: data.size || size, total: data.total || 0 })
+     } catch {
+       message.error(t('common.failed'))
+     } finally {
+       setFileLoading(false)
+     }
+   }, [t])
+ 
+   useEffect(() => { fetchFiles() }, [fetchFiles])
+ 
+   const handleScan = async () => {
+     setScanLoading(true)
+     try {
+       const r = await p115StrmApi.scanLocalStrm()
+       if (r.data?.error) { message.error(r.data.error); return }
+       setStats(r.data)
+       message.success('扫描完成')
+     } catch { message.error(t('common.failed')) }
+     finally { setScanLoading(false) }
+   }
+ 
+   const handleClean = async (dryRun = true) => {
+     setCleanLoading(true)
+     try {
+       const r = await p115StrmApi.cleanInvalidStrm({ dry_run: dryRun })
+       if (r.data?.error) { message.error(r.data.error); return }
+       const s = r.data
+       const action = dryRun ? '预计清理' : '已清理'
+       message.success(`${action}：${s.deleted_strm} 个 STRM、${s.deleted_nfo} 个 NFO、${s.deleted_images} 张图片`)
+       if (!dryRun) setTimeout(handleScan, 800)
+     } catch { message.error(t('common.failed')) }
+     finally { setCleanLoading(false) }
+   }
+ 
+   const handleRescrape = async () => {
+     setScrapeLoading(true)
+     try {
+       const r = await p115StrmApi.rescrapeNfo()
+       if (r.data?.error) { message.error(r.data.error); return }
+       const s = r.data
+       message.success(`刮削完成：成功 ${s.scraped} 个，失败 ${s.failed} 个`)
+       setTimeout(handleScan, 800)
+     } catch { message.error(t('common.failed')) }
+     finally { setScrapeLoading(false) }
+   }
+ 
+   const fileColumns = [
+     { title: 'ID', dataIndex: 'id', width: 60 },
+     { title: 'STRM 路径', dataIndex: 'strm_path', ellipsis: true,
+       render: (v) => <Tooltip title={v}><Text style={{ fontSize: 12 }}>{v}</Text></Tooltip> },
+     { title: '内容', dataIndex: 'strm_content', ellipsis: true,
+       render: (v) => <Text type="secondary" style={{ fontSize: 12 }}>{v}</Text> },
+     { title: '模式', dataIndex: 'strm_mode', width: 80,
+       render: (v) => <Tag>{v || '-'}</Tag> },
+     { title: '创建时间', dataIndex: 'created_at', width: 150,
+       render: (v) => <Text type="secondary" style={{ fontSize: 12 }}>{v || '-'}</Text> },
+   ]
+ 
+   const tabItems = [
+     {
+       key: 'tools',
+       label: <Space><ScanOutlined />本地工具</Space>,
+       children: (
+         <div style={{ padding: '16px 0' }}>
+           {/* 操作按钮区 */}
+           <Row gutter={[12, 12]} style={{ marginBottom: 24 }}>
+             <Col xs={24} sm={12} md={6}>
+               <ActionCard
+                 icon={<ScanOutlined />}
+                 title="扫描 STRM"
+                 desc="统计本地 STRM 文件状态"
+                 loading={scanLoading}
+                 onClick={handleScan}
+               />
+             </Col>
+             <Col xs={24} sm={12} md={6}>
+               <ActionCard
+                 icon={<ExperimentOutlined />}
+                 title="试运行清理"
+                 desc="预览将删除的文件，不实际执行"
+                 loading={cleanLoading}
+                 disabled={!stats}
+                 onClick={() => handleClean(true)}
+               />
+             </Col>
+             <Col xs={24} sm={12} md={6}>
+               <ActionCard
+                 icon={<ClearOutlined />}
+                 title="清理无效 STRM"
+                 desc="删除异常 STRM 及关联 NFO/图片"
+                 danger
+                 loading={cleanLoading}
+                 disabled={!stats}
+                 confirmTitle="确定要清理无效 STRM 文件吗？此操作不可撤销"
+                 onClick={() => handleClean(false)}
+               />
+             </Col>
+             <Col xs={24} sm={12} md={6}>
+               <ActionCard
+                 icon={<SafetyCertificateOutlined />}
+                 title="补刮削 NFO"
+                 desc="自动补全缺失的元数据和图片"
+                 loading={scrapeLoading}
+                 disabled={!stats}
+                 onClick={handleRescrape}
+               />
+             </Col>
+           </Row>
+ 
+           {/* 统计结果 */}
+           {stats ? (
+             <>
+               <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
+                 <Col xs={12} sm={6}>
+                   <StatCard title="总文件数" value={stats.total || 0} total={stats.total}
+                     icon={<FileTextOutlined />} color="#6366f1" desc="已扫描" />
+                 </Col>
+                 <Col xs={12} sm={6}>
+                   <StatCard title="有效" value={stats.valid || 0} total={stats.total}
+                     icon={<CheckCircleOutlined />} color="#10b981"
+                     desc={`占比 ${stats.total ? Math.round((stats.valid/stats.total)*100) : 0}%`} />
+                 </Col>
+                 <Col xs={12} sm={6}>
+                   <StatCard title="无效" value={stats.invalid || 0} total={stats.total}
+                     icon={<CloseCircleOutlined />} color="#ef4444"
+                     desc="内容空或异常" />
+                 </Col>
+                 <Col xs={12} sm={6}>
+                   <StatCard title="缺失 NFO" value={stats.missing_nfo || 0} total={stats.total}
+                     icon={<WarningOutlined />} color="#f59e0b"
+                     desc="可补刮削" />
+                 </Col>
+               </Row>
+               <Card size="small" style={{ background: '#fafafa' }}>
+                 <Text type="secondary" style={{ fontSize: 12, marginBottom: 6, display: 'block' }}>
+                   <FolderOpenOutlined style={{ marginRight: 4 }} />扫描路径
+                 </Text>
+                 <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                   {(stats.paths || []).map(p => (
+                     <Text key={p} code style={{ fontSize: 11 }}>{p}</Text>
+                   ))}
+                 </Space>
+               </Card>
+             </>
+           ) : (
+             <Empty
+               image={<ScanOutlined style={{ fontSize: 48, color: '#d9d9d9' }} />}
+               imageStyle={{ height: 60 }}
+               description={<Text type="secondary">点击「扫描 STRM」获取本地文件状态</Text>}
+             />
+           )}
+         </div>
+       ),
+     },
+     {
+       key: 'files',
+       label: <Space><FileTextOutlined />文件列表<Badge count={filePagination.total} overflowCount={99999} style={{ backgroundColor: '#6366f1' }} /></Space>,
+       children: (
+         <div style={{ paddingTop: 16 }}>
+           <Table
+             rowKey="id"
+             columns={fileColumns}
+             dataSource={files}
+             loading={fileLoading}
+             size="small"
+             scroll={{ x: 800 }}
+             pagination={{
+               ...filePagination,
+               onChange: (p, s) => fetchFiles(p, s),
+               showTotal: (total) => `共 ${total} 条`,
+               showSizeChanger: true,
+             }}
+           />
+         </div>
+       ),
+     },
+   ]
+ 
+   return (
+     <div style={{ padding: 24 }}>
+       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+         <Title level={4} style={{ margin: 0 }}>
+           <Space><FileTextOutlined />STRM 管理</Space>
+         </Title>
+         <Button icon={<ReloadOutlined />} onClick={() => { handleScan(); fetchFiles() }}>
+           刷新
+         </Button>
+       </div>
+       <Card bodyStyle={{ paddingTop: 0 }}>
+         <Tabs items={tabItems} defaultActiveKey="tools" />
+       </Card>
+     </div>
+   )
+ }
+ 
+ export default Strm
