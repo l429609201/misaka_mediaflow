@@ -148,6 +148,13 @@ class ActorService:
                     cn_name = await self._get_person_cn_name(tmdb, tmdb_id)
                     if cn_name and cn_name != name:
                         person["Name"] = cn_name
+                        changed = True
+                        translated += 1
+                    else:
+                        skipped += 1
+                except Exception as e:
+                    logger.debug("翻译演员 %s 失败: %s", name, e)
+                    errors += 1
 
             # 写回 Emby
             if changed:
