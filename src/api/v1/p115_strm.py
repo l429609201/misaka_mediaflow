@@ -126,6 +126,12 @@ async def clean_invalid_strm(payload: CleanStrmPayload):
     )
 
 
+@router.post("/sync/rescrape", dependencies=[Depends(verify_token)])
+async def rescrape_missing_nfo(strm_root: str = None):
+    """补刮削：扫描缺失 NFO 的 STRM 文件并重新刮削"""
+    return await _strm_sync_svc.rescrape_missing_nfo(strm_root)
+
+
 # ─────────────────────── 生活事件监控 ───────────────────────
 
 @router.get("/monitor/config", dependencies=[Depends(verify_token)])

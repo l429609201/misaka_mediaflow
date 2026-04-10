@@ -235,6 +235,102 @@ class P115StrmSyncService:
         logger.info("[STRM清理] 完成: %s", stats)
         return stats
 
+    async def rescrape_missing_nfo(self, strm_root: str = None) -> dict:
+        """
+        补刮削：扫描缺失 NFO 的 STRM 文件并重新刮削。
+
+        Args:
+            strm_root: 指定目录，为空则处理所有配置的 sync_pairs
+
+        Returns:
+            {
+                "total": 扫描的 STRM 总数,
+                "missing_nfo": 缺失 NFO 的数量,
+                "scraped": 成功刮削的数量,
+                "failed": 刮削失败的数量
+            }
+        """
+        from src.services.p115.modules import resolve_sync_pairs
+        from src.services.metadata_service import metadata_service
+        from src.services.p115.modules.scraper import Scraper
+        from src.db.database import get_async_session_local
+        from src.db.models import SystemConfig
+        from sqlalchemy import select
+        import json as _json
+
+        config = await self.get_config()
+
+        # 确定扫描路径
+        if strm_root:
+            scan_paths = [Path(strm_root)]
+        else:
+            sync_pairs = await resolve_sync_pairs(config)
+            scan_paths = [Path(pair["strm_path"]) for pair in sync_pairs if pair.get("strm_path")]
+
+        if not scan_paths:
+            return {"error": "未配置 STRM 路径"}
+
+        # 获取 TMDB provider
+        tmdb = await metadata_service.get_provider("tmdb")
+        if not tmdb:
+            return {"error": "TMDB 未配置"}
+
+        # 读取刮削配置
+        scrape_config = {}
+        try:
+            async with get_async_session_local() as db:
+                result = await db.execute(
+                    select(SystemConfig).where(SystemConfig.key == "p115_scrape_config")
+                )
+                cfg = result.scalars().first()
+                if cfg and cfg.value:
+                    scrape_config = _json.loads(cfg.value)
+        except Exception as e:
+            logger.warning("[补刮削] 读取刮削配置失败: %s", e)
+
+        movie_format = scrape_config.get("movie_format", "{title} ({year})/{title} ({year})")
+        tv_format = scrape_config.get("tv_format", "{title} ({year})/Season {season:02d}/{title} - {season_episode} - {episode_title}")
+        episode_group_id = config.get("episode_group_id", "")
+        download_images = config.get("scrape_download_image", True)
+
+        scraper = Scraper(
+            tmdb,
+            episode_group_id=episode_group_id,
+            download_images=download_images,
+            movie_format=movie_format,
+            tv_format=tv_format
+        )
+
+        stats = {
+            "total": 0,
+            "missing_nfo": 0,
+            "scraped": 0,
+            "failed": 0
+        }
+
+        for strm_path in scan_paths:
+            if not strm_path.exists():
+                continue
+
+            for strm_file in strm_path.rglob("*.strm"):
+                stats["total"] += 1
+                nfo_file = strm_file.with_suffix(".nfo")
+
+                if not nfo_file.exists():
+                    stats["missing_nfo"] += 1
+                    try:
+                        success = await scraper.scrape_file(strm_file)
+                        if success:
+                            stats["scraped"] += 1
+                        else:
+                            stats["failed"] += 1
+                    except Exception as e:
+                        logger.error("[补刮削] 刮削失败 %s: %s", strm_file, e)
+                        stats["failed"] += 1
+
+        logger.info("[补刮削] 完成: %s", stats)
+        return stats
+
     # ── 触发接口 ──────────────────────────────────────────────────────────────
 
     async def trigger_full_sync(self) -> dict:
