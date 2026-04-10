@@ -2,13 +2,55 @@
 // 系统设置
 
  import { useState, useEffect } from 'react'
- import { Card, Divider, Form, Input, Button, message, Switch, Tabs, Typography, Space } from 'antd'
- import { BellOutlined, CopyOutlined, SaveOutlined, KeyOutlined, SafetyOutlined, SendOutlined } from '@ant-design/icons'
+ import { Card, Divider, Form, Input, Button, message, Switch, Tabs, Typography, Space, Badge, Tag } from 'antd'
+ import { BellOutlined, CopyOutlined, SaveOutlined, KeyOutlined, SafetyOutlined, SendOutlined, RobotOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useTranslation } from 'react-i18next'
 import { authApi, systemApi } from '@/apis'
 
 const { Text } = Typography
 const { TextArea } = Input
+
+// ── TG Bot 状态小卡片 ──────────────────────────────────
+function BotStatusCard() {
+  const [botStatus, setBotStatus] = useState(null)
+  const [restarting, setRestarting] = useState(false)
+
+  useEffect(() => {
+    systemApi.getTgBotStatus().then(({ data }) => setBotStatus(data)).catch(() => {})
+  }, [])
+
+  const handleRestart = async () => {
+    setRestarting(true)
+    try {
+      const { data } = await systemApi.restartTgBot()
+      message.success(data?.running ? 'Bot 已启动' : 'Bot 未启动（检查 Token 配置）')
+      const s = await systemApi.getTgBotStatus()
+      setBotStatus(s.data)
+    } catch { message.error('重启失败') }
+    finally { setRestarting(false) }
+  }
+
+  return (
+    <div style={{ background: '#f0f5ff', border: '1px solid #adc6ff', borderRadius: 8, padding: '10px 14px', marginBottom: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <Space>
+          <RobotOutlined style={{ color: '#1677ff' }} />
+          <Text strong style={{ fontSize: 12 }}>TG Bot 交互服务</Text>
+          {botStatus?.running
+            ? <Badge status="processing" text={<Text style={{ fontSize: 11 }}>运行中</Text>} />
+            : <Badge status="default" text={<Text type="secondary" style={{ fontSize: 11 }}>未启动</Text>} />
+          }
+        </Space>
+        <Button size="small" icon={<ReloadOutlined />} loading={restarting} onClick={handleRestart}>
+          重启 Bot
+        </Button>
+      </div>
+      <div style={{ fontSize: 11, color: '#888', marginTop: 4 }}>
+        支持命令：/status /playing /stats /search /ol（离线下载）— 保存通知配置后重启生效
+      </div>
+    </div>
+  )
+}
 
 export const Setting = () => {
   const { t } = useTranslation()
@@ -166,6 +208,8 @@ export const Setting = () => {
                 onChange={e => setTg('chat_id', e.target.value)}
                 placeholder={t('settings.notifyChatIdPlaceholder')} disabled={!notifyCfg.telegram.enabled} />
             </Form.Item>
+            {/* TG Bot 状态 */}
+            <BotStatusCard />
             {/* Server酱 */}
             <Divider orientation="left">{t('settings.notifyServerchan')}</Divider>
             <Form.Item label={t('settings.notifyEnabled')}>

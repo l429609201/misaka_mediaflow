@@ -828,3 +828,27 @@ async def test_notify():
     from src.services.notify_service import send
     results = await send("Misaka MediaFlow 通知测试", "如果您收到此消息，说明通知渠道配置正确。")
     return {"success": bool(results), "results": results}
+
+
+
+# ==================== TG Bot ====================
+
+@router.get("/tg-bot/status", dependencies=[Depends(verify_token)])
+async def tg_bot_status():
+    """获取 TG Bot 运行状态"""
+    from src.services.tg_bot_service import get_tg_bot
+    bot = get_tg_bot()
+    return {
+        "running": bot._running if bot else False,
+        "has_token": bool(bot._token) if bot else False,
+        "chat_id": bot._chat_id if bot else "",
+    }
+
+@router.post("/tg-bot/restart", dependencies=[Depends(verify_token)])
+async def tg_bot_restart():
+    """重启 TG Bot（重新加载配置）"""
+    from src.services.tg_bot_service import get_tg_bot, init_tg_bot, shutdown_tg_bot
+    await shutdown_tg_bot()
+    await init_tg_bot()
+    bot = get_tg_bot()
+    return {"success": True, "running": bot._running if bot else False}

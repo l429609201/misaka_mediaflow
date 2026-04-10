@@ -139,9 +139,22 @@ async def lifespan(app: FastAPI):
         logger.warning("Go 反代自动启动跳过: %s", go_result.get("message", ""))
 
     logger.info(f"{APP_NAME} 已启动 — 监听 {settings.server.host}:{settings.server.port}")
+
+    # TG Bot 启动
+    try:
+        from src.services.tg_bot_service import init_tg_bot
+        await init_tg_bot()
+    except Exception as e:
+        logger.warning("TG Bot 启动跳过: %s", e)
+
     yield
 
     # 关闭
+    try:
+        from src.services.tg_bot_service import shutdown_tg_bot
+        await shutdown_tg_bot()
+    except Exception:
+        pass
     await go_proxy_service.stop()
     shutdown_scheduler()
     await close_db_engine(app)

@@ -49,6 +49,9 @@ export const systemApi = {
   getNotifyConfig: () => api.get('/system/notify/config'),
   saveNotifyConfig: (payload) => api.post('/system/notify/config', payload),
   testNotify: () => api.post('/system/notify/test'),
+  // TG Bot
+  getTgBotStatus: () => api.get('/system/tg-bot/status'),
+  restartTgBot: () => api.post('/system/tg-bot/restart'),
 }
 
 // ==================== Subtitle ====================
