@@ -1,5 +1,5 @@
 # src/api/v1/ai.py
-# AI 对话助手 API
+# AI 配置 + 翻译 + 统计 + 缓存 API
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -8,18 +8,18 @@ from typing import Optional
 from src.core.security import verify_token
 from src.services.ai_service import (
     get_ai_service, get_ai_config, save_ai_config, invalidate_ai_cache,
+    get_ai_stats, reset_ai_stats,
+    get_translate_cache_stats, clear_translate_cache,
 )
 
-router = APIRouter(prefix="/ai", tags=["AI 助手"])
+router = APIRouter(prefix="/ai", tags=["AI 服务"])
 
 
 # ── 配置 ──────────────────────────────────────────────────────────────
 
 @router.get("/config", dependencies=[Depends(verify_token)])
 async def get_config():
-    """获取 AI 配置"""
     config = await get_ai_config()
-    # 不返回完整 api_key，脱敏
     safe = {**config}
     if safe.get("api_key"):
         key = safe["api_key"]
@@ -31,17 +31,17 @@ async def get_config():
 
 
 class AIConfigPayload(BaseModel):
-    provider: str = "openai"        # openai / claude / compatible
+    provider: str = "openai"
     api_key: str = ""
     base_url: str = ""
     model: str = "gpt-4o-mini"
+    actor_translate_enabled: bool = False
+    overview_translate_enabled: bool = False
 
 
 @router.post("/config", dependencies=[Depends(verify_token)])
 async def update_config(payload: AIConfigPayload):
-    """保存 AI 配置"""
     data = payload.model_dump()
-    # 如果 api_key 是脱敏的，保留旧值
     if "****" in data.get("api_key", ""):
         old = await get_ai_config()
         data["api_key"] = old.get("api_key", "")
@@ -49,24 +49,28 @@ async def update_config(payload: AIConfigPayload):
     return await save_ai_config(data)
 
 
-# ── 对话 ──────────────────────────────────────────────────────────────
+# ── 统计 ──────────────────────────────────────────────────────────────
 
-class ChatMessage(BaseModel):
-    role: str = "user"
-    content: str = ""
-
-
-class ChatPayload(BaseModel):
-    messages: list[ChatMessage]
-    context: Optional[str] = None
+@router.get("/stats", dependencies=[Depends(verify_token)])
+async def get_stats():
+    return await get_ai_stats()
 
 
-@router.post("/chat", dependencies=[Depends(verify_token)])
-async def chat(payload: ChatPayload):
-    """AI 对话"""
-    svc = get_ai_service()
-    messages = [m.model_dump() for m in payload.messages]
-    return await svc.chat(messages)
+@router.post("/stats/reset", dependencies=[Depends(verify_token)])
+async def reset_stats():
+    return await reset_ai_stats()
+
+
+# ── 翻译缓存 ──────────────────────────────────────────────────────────
+
+@router.get("/cache", dependencies=[Depends(verify_token)])
+async def get_cache():
+    return get_translate_cache_stats()
+
+
+@router.post("/cache/clear", dependencies=[Depends(verify_token)])
+async def clear_cache():
+    return clear_translate_cache()
 
 
 # ── 翻译 ──────────────────────────────────────────────────────────────
@@ -78,6 +82,24 @@ class TranslatePayload(BaseModel):
 
 @router.post("/translate", dependencies=[Depends(verify_token)])
 async def translate(payload: TranslatePayload):
-    """AI 翻译"""
     svc = get_ai_service()
     return await svc.translate_text(payload.text, payload.target_lang)
+
+
+class BatchTranslatePayload(BaseModel):
+    names: list[str]
+
+
+@router.post("/translate/actors", dependencies=[Depends(verify_token)])
+async def translate_actors(payload: BatchTranslatePayload):
+    svc = get_ai_service()
+    return await svc.translate_actor_names(payload.names)
+
+
+# ── 连接测试 ──────────────────────────────────────────────────────────
+
+@router.post("/test", dependencies=[Depends(verify_token)])
+async def test_connection():
+    svc = get_ai_service()
+    result = await svc.translate_text("hello", "zh-CN")
+    return result

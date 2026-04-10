@@ -229,11 +229,19 @@ export const actorApi = {
   cleanup: (mode = 'ghost') => api.post('/actor/cleanup', null, { params: { mode } }),
 }
 
-// ==================== AI 助手 ====================
+// ==================== AI 服务 ====================
 export const aiApi = {
   getConfig: () => api.get('/ai/config'),
   saveConfig: (payload) => api.post('/ai/config', payload),
-  chat: (messages, context) => api.post('/ai/chat', { messages, context }),
+  testConnection: () => api.post('/ai/test'),
+  // 统计
+  getStats: () => api.get('/ai/stats'),
+  resetStats: () => api.post('/ai/stats/reset'),
+  // 翻译缓存
+  getCache: () => api.get('/ai/cache'),
+  clearCache: () => api.post('/ai/cache/clear'),
+  // 翻译
   translate: (text, target_lang = 'zh-CN') => api.post('/ai/translate', { text, target_lang }),
+  translateActors: (names) => api.post('/ai/translate/actors', { names }),
 }
 
