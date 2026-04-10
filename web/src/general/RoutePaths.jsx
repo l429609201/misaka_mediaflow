@@ -16,6 +16,7 @@ export const RoutePaths = {
   REALTIME_SUBTITLE: '/realtime-subtitle',
   MEDIA_PROXY: '/media-proxy',
   TASKS: '/tasks',
+  GAPS: '/gaps',
   SETTING: '/setting',
 }
 

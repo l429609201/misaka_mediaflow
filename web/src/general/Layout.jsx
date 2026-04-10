@@ -27,6 +27,7 @@ import {
   FolderAddOutlined,
   SyncOutlined,
   RadarChartOutlined,
+  AlertOutlined,
 } from '@ant-design/icons'
 import { useTranslation } from 'react-i18next'
 import LanguageSwitch from '@/components/LanguageSwitch'
@@ -70,6 +71,7 @@ export const Layout = () => {
     { key: RoutePaths.REALTIME_SUBTITLE, icon: <FontSizeOutlined />,     label: t('menu.realtimeSubtitle') },
     { key: RoutePaths.SEARCH_SOURCE,     icon: <SearchOutlined />,       label: t('menu.searchSource') },
     { key: RoutePaths.TASKS,             icon: <UnorderedListOutlined />, label: t('menu.tasks') },
+    { key: RoutePaths.GAPS,              icon: <AlertOutlined />,        label: '缺集管理' },
     { key: RoutePaths.SETTING,           icon: <SettingOutlined />,      label: t('menu.settings') },
   ]
 
