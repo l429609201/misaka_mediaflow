@@ -1,4 +1,4 @@
-﻿// web/src/pages/ai/index.jsx
+// web/src/pages/ai/index.jsx
 // AI 对话助手页面
 import { useState, useRef, useEffect, useCallback } from 'react'
 import {
@@ -24,7 +24,7 @@ const ChatBubble = ({ msg, onCopy }) => {
           <RobotOutlined style={{ color: '#fff', fontSize: 18 }} />
         </div>
       )}
-      <div style={{ maxWidth: '75%', padding: '10px 14px', borderRadius: 12, background: isUser ? token.colorPrimary : token.colorBgContainer, color: isUser ? '#fff' : token.colorText, border: isUser ? 'none' : 1px solid +token.colorBorderSecondary, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', position: 'relative' }}>
+      <div style={{ maxWidth: '75%', padding: '10px 14px', borderRadius: 12, background: isUser ? token.colorPrimary : token.colorBgContainer, color: isUser ? '#fff' : token.colorText, border: isUser ? 'none' : `1px solid ${token.colorBorderSecondary}`, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', position: 'relative' }}>
         <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 14, lineHeight: 1.6 }}>{msg.content}</div>
         {!isUser && msg.content && (
           <Tooltip title="复制"><Button type="text" size="small" icon={<CopyOutlined />} style={{ position: 'absolute', top: 4, right: 4, opacity: 0.5 }} onClick={() => onCopy(msg.content)} /></Tooltip>
