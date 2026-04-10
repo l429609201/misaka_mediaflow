@@ -149,9 +149,16 @@ class P115StrmSyncService:
                     stats["missing_nfo"] += 1
 
                 # 读取 STRM 内容，检查是否有效
+                # 有效的STRM内容可以是：
+                # 1. URL形式：包含 http 或 pickcode=
+                # 2. 路径形式：以 / 开头的绝对路径
                 try:
                     content = strm_file.read_text(encoding="utf-8").strip()
-                    if content and ("pickcode=" in content or "http" in content):
+                    if content and (
+                        "pickcode=" in content or
+                        "http" in content or
+                        content.startswith("/")
+                    ):
                         stats["valid"] += 1
                     else:
                         stats["invalid"] += 1
@@ -205,9 +212,16 @@ class P115StrmSyncService:
 
             for strm_file in strm_path.rglob("*.strm"):
                 # 检查 STRM 是否有效
+                # 有效的STRM内容可以是：
+                # 1. URL形式：包含 http 或 pickcode=
+                # 2. 路径形式：以 / 开头的绝对路径
                 try:
                     content = strm_file.read_text(encoding="utf-8").strip()
-                    is_valid = content and ("pickcode=" in content or "http" in content)
+                    is_valid = content and (
+                        "pickcode=" in content or
+                        "http" in content or
+                        content.startswith("/")
+                    )
                 except Exception:
                     is_valid = False
 
