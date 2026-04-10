@@ -485,6 +485,8 @@ class P115StrmSyncService:
             try:
                 from src.services.p115.enhancements import record_strm_exec
                 record_strm_exec("full", stats, elapsed)
+            except Exception:
+                pass
 
     # ── 增量同步 ──────────────────────────────────────────────────────────────
 
