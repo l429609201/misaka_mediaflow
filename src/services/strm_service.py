@@ -306,3 +306,17 @@ class StrmService:
                 "size": size,
             }
 
+
+    async def purge_stale_files(self) -> dict:
+        """清理数据库中本地文件已不存在的 StrmFile 记录"""
+        deleted = 0
+        async with get_async_session_local() as db:
+            result = await db.execute(select(StrmFile))
+            all_files = result.scalars().all()
+            for f in all_files:
+                if not Path(f.strm_path).exists():
+                    await db.delete(f)
+                    deleted += 1
+            await db.commit()
+        logger.info("[STRM] 清理失效DB记录: 删除 %d 条", deleted)
+        return {"deleted": deleted, "total_checked": len(all_files)}

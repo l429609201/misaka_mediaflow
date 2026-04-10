@@ -84,3 +84,9 @@ async def list_strm_files(task_id: int = 0, page: int = 1, size: int = 20):
     """分页获取 STRM 文件列表"""
     return await _strm_service.list_files(task_id, page, size)
 
+
+
+@router.post("/files/purge", dependencies=[Depends(verify_token)])
+async def purge_stale_files():
+    """清理数据库中本地文件已不存在的 StrmFile 记录"""
+    return await _strm_service.purge_stale_files()

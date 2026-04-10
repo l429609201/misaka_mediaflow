@@ -104,10 +104,11 @@
        if (r.data?.error) { message.error(r.data.error); return }
        setStats(r.data)
        message.success('扫描完成')
+       fetchFiles()
      } catch { message.error(t('common.failed')) }
      finally { setScanLoading(false) }
    }
- 
+
    const handleClean = async (dryRun = true) => {
      setCleanLoading(true)
      try {
@@ -116,11 +117,11 @@
        const s = r.data
        const action = dryRun ? '预计清理' : '已清理'
        message.success(`${action}：${s.deleted_strm} 个 STRM、${s.deleted_nfo} 个 NFO、${s.deleted_images} 张图片`)
-       if (!dryRun) setTimeout(handleScan, 800)
+       if (!dryRun) { setTimeout(handleScan, 800) }
      } catch { message.error(t('common.failed')) }
      finally { setCleanLoading(false) }
    }
- 
+
    const handleRescrape = async () => {
      setScrapeLoading(true)
      try {
@@ -131,6 +132,17 @@
        setTimeout(handleScan, 800)
      } catch { message.error(t('common.failed')) }
      finally { setScrapeLoading(false) }
+   }
+
+   const [purgeLoading, setPurgeLoading] = useState(false)
+   const handlePurge = async () => {
+     setPurgeLoading(true)
+     try {
+       const r = await strmApi.purgeStaleFiles()
+       message.success(`已清理 ${r.data?.deleted || 0} 条失效记录（共检查 ${r.data?.total_checked || 0} 条）`)
+       fetchFiles()
+     } catch { message.error(t('common.failed')) }
+     finally { setPurgeLoading(false) }
    }
  
    const fileColumns = [
@@ -246,6 +258,16 @@
        label: <Space><FileTextOutlined />文件列表<Badge count={filePagination.total} overflowCount={99999} style={{ backgroundColor: '#6366f1' }} /></Space>,
        children: (
          <div style={{ paddingTop: 16 }}>
+           <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12, gap: 8 }}>
+             <Popconfirm title="将删除数据库中本地文件已不存在的记录，确定继续？" onConfirm={handlePurge} okText="确定" cancelText="取消">
+               <Button icon={<DeleteOutlined />} danger size="small" loading={purgeLoading}>
+                 清理失效记录
+               </Button>
+             </Popconfirm>
+             <Button icon={<ReloadOutlined />} size="small" onClick={() => fetchFiles()}>
+               刷新
+             </Button>
+           </div>
            <Table
              rowKey="id"
              columns={fileColumns}
