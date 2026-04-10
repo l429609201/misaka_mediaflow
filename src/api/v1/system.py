@@ -852,3 +852,79 @@ async def tg_bot_restart():
     await init_tg_bot()
     bot = get_tg_bot()
     return {"success": True, "running": bot._running if bot else False}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  增强功能 API
+# ═══════════════════════════════════════════════════════════════════════
+
+# ── 302 缓存 ──
+@router.get("/302-cache/stats", dependencies=[Depends(verify_token)])
+async def cache_302_stats():
+    from src.services.p115.enhancements import cache_stats
+    return cache_stats()
+
+@router.post("/302-cache/clear", dependencies=[Depends(verify_token)])
+async def cache_302_clear():
+    from src.services.p115.enhancements import cache_clear
+    return {"success": True, "cleared": cache_clear()}
+
+# ── 生活事件守护 ──
+@router.get("/life-guard/status", dependencies=[Depends(verify_token)])
+async def life_guard_status():
+    from src.services.p115.enhancements import get_guard_state
+    return get_guard_state()
+
+@router.post("/life-guard/tick", dependencies=[Depends(verify_token)])
+async def life_guard_tick():
+    from src.services.p115.enhancements import life_event_guard_tick
+    return await life_event_guard_tick()
+
+# ── 回收站清理 ──
+@router.post("/recyclebin/clean", dependencies=[Depends(verify_token)])
+async def recyclebin_clean():
+    from src.services.p115.enhancements import clean_recyclebin
+    return await clean_recyclebin()
+
+# ── STRM 执行历史 ──
+@router.get("/strm-history", dependencies=[Depends(verify_token)])
+async def strm_exec_history(limit: int = 50):
+    from src.services.p115.enhancements import get_strm_exec_history
+    return {"history": get_strm_exec_history(limit)}
+
+@router.post("/strm-history/clear", dependencies=[Depends(verify_token)])
+async def strm_exec_history_clear():
+    from src.services.p115.enhancements import clear_strm_exec_history
+    return {"success": True, "cleared": clear_strm_exec_history()}
+
+# ── 增强配置（最小文件大小 + 黑名单 + 增量cron + 回收站cron）──
+class EnhancementConfigPayload(BaseModel):
+    min_file_size_mb: float = 0
+    strm_blacklist: list = []
+    inc_sync_cron: str = ""
+    recyclebin_cron: str = ""
+    sync_del_enabled: bool = False
+    life_guard_enabled: bool = False
+
+@router.get("/enhancement-config", dependencies=[Depends(verify_token)])
+async def get_enhancement_config():
+    async with get_async_session_local() as db:
+        row = await db.execute(select(SystemConfig).where(SystemConfig.key == "enhancement_config"))
+        cfg = row.scalars().first()
+        if cfg and cfg.value:
+            return _json.loads(cfg.value)
+    return {"min_file_size_mb": 0, "strm_blacklist": [], "inc_sync_cron": "",
+            "recyclebin_cron": "", "sync_del_enabled": False, "life_guard_enabled": False}
+
+@router.post("/enhancement-config", dependencies=[Depends(verify_token)])
+async def save_enhancement_config(payload: EnhancementConfigPayload):
+    async with get_async_session_local() as db:
+        row = await db.execute(select(SystemConfig).where(SystemConfig.key == "enhancement_config"))
+        obj = row.scalars().first()
+        val = _json.dumps(payload.model_dump(), ensure_ascii=False)
+        if obj:
+            obj.value = val
+        else:
+            db.add(SystemConfig(key="enhancement_config", value=val))
+        await db.commit()
+    return {"success": True}

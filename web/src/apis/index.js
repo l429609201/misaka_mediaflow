@@ -52,6 +52,19 @@ export const systemApi = {
   // TG Bot
   getTgBotStatus: () => api.get('/system/tg-bot/status'),
   restartTgBot: () => api.post('/system/tg-bot/restart'),
+  // 增强功能
+  get302CacheStats: () => api.get('/system/302-cache/stats'),
+  clear302Cache: () => api.post('/system/302-cache/clear'),
+  getLifeGuardStatus: () => api.get('/system/life-guard/status'),
+  lifeGuardTick: () => api.post('/system/life-guard/tick'),
+  cleanRecyclebin: () => api.post('/system/recyclebin/clean'),
+  getStrmHistory: (limit) => api.get('/system/strm-history', { params: { limit } }),
+  clearStrmHistory: () => api.post('/system/strm-history/clear'),
+  getEnhancementConfig: () => api.get('/system/enhancement-config'),
+  saveEnhancementConfig: (payload) => api.post('/system/enhancement-config', payload),
+  // 同步删除
+  getSyncDelHistory: () => api.get('/webhook/sync-del/history'),
+  clearSyncDelHistory: () => api.post('/webhook/sync-del/clear'),
 }
 
 // ==================== Subtitle ====================

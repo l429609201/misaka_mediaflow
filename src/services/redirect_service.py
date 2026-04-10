@@ -157,7 +157,14 @@ class RedirectService:
     # ──────────────────────────────────────────────────────────────────────
 
     async def _resolve_by_pickcode(self, pickcode: str, user_agent: str = "", source: str = "pickcode") -> dict:
-        """通过 pick_code 直接获取 115 直链"""
+        """通过 pick_code 直接获取 115 直链（带 302 缓存）"""
+        # ── 先查缓存 ──
+        from src.services.p115.enhancements import cache_get, cache_set
+        cached_url = cache_get(pickcode)
+        if cached_url:
+            logger.info("[redirect] 302缓存命中 pickcode=%s source=%s", pickcode, source)
+            return {"url": cached_url, "expires_in": 600, "source": f"{source}_cached", "error": ""}
+
         _t0 = time.monotonic()
         try:
             from src.adapters.storage.p115 import P115Manager
@@ -165,13 +172,11 @@ class RedirectService:
             if not manager.enabled:
                 return {"url": "", "expires_in": 0, "source": source, "error": "115 not enabled"}
 
-            # ── 确保已初始化 ─────────────────────────────────────────────────
             _t1 = time.monotonic()
             if not manager.ready:
                 manager.initialize()
             logger.debug("[redirect⏱] manager初始化检查 %.3fs", time.monotonic()-_t1)
 
-            # ── 从数据库加载 Cookie（解决扫码后重启 Cookie 丢失问题）─────────
             _t2 = time.monotonic()
             if not manager.auth.has_cookie:
                 await self._load_cookie_from_db(manager)
@@ -185,6 +190,8 @@ class RedirectService:
             logger.info("[redirect⏱] get_direct_link耗时=%.3fs pickcode=%s ok=%s",
                         time.monotonic()-_t3, pickcode, bool(link and link.url))
             if link and link.url:
+                # ── 写入缓存 ──
+                cache_set(pickcode, link.url, ttl=min(link.expires_in or 600, 600))
                 logger.info("[redirect] pickcode=%s 直链成功 source=%s 总耗时=%.3fs",
                             pickcode, source, time.monotonic()-_t0)
                 return {"url": link.url, "expires_in": link.expires_in, "source": source, "error": ""}

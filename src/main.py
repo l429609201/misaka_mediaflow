@@ -147,6 +147,43 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("TG Bot 启动跳过: %s", e)
 
+    # 增强功能 Cron 注册（生活事件守护 + 增量同步 + 回收站清理）
+    async def _register_enhancement_crons():
+        try:
+            import json as _j
+            from sqlalchemy import select as _sel
+            from src.db import get_async_session_local as _gs
+            from src.db.models import SystemConfig as _SC
+            async with _gs() as _db:
+                _r = await _db.execute(_sel(_SC).where(_SC.key == "enhancement_config"))
+                _c = _r.scalars().first()
+                cfg = _j.loads(_c.value) if _c and _c.value else {}
+
+            from src.core.scheduler import add_cron_job
+            # 生活事件守护 — 每分钟心跳
+            if cfg.get("life_guard_enabled"):
+                from src.services.p115.enhancements import life_event_guard_tick
+                add_cron_job(life_event_guard_tick, "*/1 * * * *", "life_guard")
+                logger.info("已注册生活事件守护 cron (每分钟)")
+
+            # 增量同步 cron
+            inc_cron = cfg.get("inc_sync_cron", "").strip()
+            if inc_cron:
+                from src.services.p115.strm_sync_service import P115StrmSyncService
+                _svc = P115StrmSyncService()
+                add_cron_job(_svc.trigger_inc_sync, inc_cron, "inc_sync")
+                logger.info("已注册增量同步 cron: %s", inc_cron)
+
+            # 回收站清理 cron
+            rec_cron = cfg.get("recyclebin_cron", "").strip()
+            if rec_cron:
+                from src.services.p115.enhancements import clean_recyclebin
+                add_cron_job(clean_recyclebin, rec_cron, "recyclebin_clean")
+                logger.info("已注册回收站清理 cron: %s", rec_cron)
+        except Exception as _e:
+            logger.debug("增强 Cron 注册跳过: %s", _e)
+    asyncio.create_task(_register_enhancement_crons())
+
     yield
 
     # 关闭

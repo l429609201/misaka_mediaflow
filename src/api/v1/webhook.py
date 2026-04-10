@@ -128,3 +128,48 @@ async def webhook_status():
         "last_received": _stats["last_received"],
         "last_source":   _stats["last_source"],
     }
+
+
+
+# ── Emby 同步删除 Webhook ─────────────────────────────────────────────
+
+@router.post("/emby")
+async def receive_emby_webhook(request: Request):
+    """
+    接收 Emby Webhook 推送（主要处理删除事件）
+    Emby 设置 → Webhook → URL: {base_url}/api/v1/webhook/emby
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        logger.warning("[Webhook/Emby] 请求体解析失败")
+        return {"success": False, "message": "invalid json"}
+
+    event_type = payload.get("Event", "")
+    _stats["last_received"] = int(time.time())
+    _stats["last_source"] = f"emby:{event_type}"
+
+    # 仅处理删除事件
+    if event_type in ("library.deleted", "item.remove"):
+        from src.services.p115.enhancements import sync_delete_by_emby_webhook
+        result = await sync_delete_by_emby_webhook(payload)
+        logger.info("[Webhook/Emby] 同步删除处理: %s", result)
+        return {"success": True, **result}
+
+    logger.debug("[Webhook/Emby] 事件 %s 不处理", event_type)
+    return {"success": True, "skipped": True, "event": event_type}
+
+
+@router.get("/sync-del/history")
+async def get_sync_del_history():
+    """获取同步删除历史"""
+    from src.services.p115.enhancements import get_sync_del_history
+    return {"history": get_sync_del_history()}
+
+
+@router.post("/sync-del/clear")
+async def clear_sync_del_history_api():
+    """清空同步删除历史"""
+    from src.services.p115.enhancements import clear_sync_del_history
+    count = clear_sync_del_history()
+    return {"success": True, "cleared": count}

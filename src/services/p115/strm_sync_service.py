@@ -481,6 +481,10 @@ class P115StrmSyncService:
             self._progress = {"stage": "done", **stats}
             logger.info("【全量STRM生成】完成: 生成%d个 耗时%.1fs stats=%s",
                         stats.get("created", 0), elapsed, stats)
+            # 记录执行历史
+            try:
+                from src.services.p115.enhancements import record_strm_exec
+                record_strm_exec("full", stats, elapsed)
 
     # ── 增量同步 ──────────────────────────────────────────────────────────────
 
@@ -580,6 +584,12 @@ class P115StrmSyncService:
             self._progress = {"stage": "done", **stats}
             logger.info("【增量STRM生成】完成: 生成%d个 耗时%.1fs stats=%s",
                         stats.get("created", 0), elapsed, stats)
+            # 记录执行历史
+            try:
+                from src.services.p115.enhancements import record_strm_exec
+                record_strm_exec("increment", stats, elapsed)
+            except Exception:
+                pass
 
 
 async def _run_scrape(config: dict, sync_pairs: list) -> None:
