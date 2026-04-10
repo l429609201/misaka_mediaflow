@@ -55,23 +55,9 @@
    const [syncPickerState, setSyncPickerState] = useState({ open: false, field: null, type: 'cloud' })
  
    // ── 数据加载 ──────────────────────────────────────────────────────────
-   const fetchAll = useCallback(async () => {
-     try {
-       const [cfgRes, stRes, tmplRes] = await Promise.all([
-         p115StrmApi.getSyncConfig(),
-         p115StrmApi.getSyncStatus(),
-         strmApi.getUrlTemplate(),
-       ])
-       setStrmStatus(stRes.data || {})
-       setUrlTemplate(tmplRes.data?.template || DEFAULT_TEMPLATE)
-       const cfg = cfgRes.data || {}
-       if (cfg.full_sync_cfg)         setFullSyncCfg(c => ({ ...c, ...cfg.full_sync_cfg }))
-       if (cfg.full_overwrite_mode)   setFullOverwriteMode(cfg.full_overwrite_mode)
-     } catch { /* ignore */ }
   const [fullSyncCron, setFullSyncCron] = useState('')
 
-  // 在 fetchAll 中恢复 cron
-  const fetchAllWithCron = useCallback(async () => {
+  const fetchAll = useCallback(async () => {
     try {
       const [cfgRes, stRes, tmplRes] = await Promise.all([
         p115StrmApi.getSyncConfig(),
@@ -86,8 +72,8 @@
       if (cfg.full_sync_cron        !== undefined) setFullSyncCron(cfg.full_sync_cron || '')
     } catch { /* ignore */ }
   }, [])
- 
-  useEffect(() => { fetchAllWithCron() }, [fetchAllWithCron])
+
+  useEffect(() => { fetchAll() }, [fetchAll])
  
    // ── 全量同步 ───────────────────────────────────────────────────────────
    const handleFullSync = async () => {
@@ -100,7 +86,7 @@
        r.data?.success
          ? message.success(t('p115.syncStarted'))
          : message.warning(r.data?.message || t('p115.syncStartFailed'))
-      setTimeout(fetchAllWithCron, 1500)
+      setTimeout(fetchAll, 1500)
      } catch { message.error(t('common.failed')) }
      finally { setStrmSyncing(false) }
    }
