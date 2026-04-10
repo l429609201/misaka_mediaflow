@@ -1,18 +1,18 @@
 ﻿// src/pages/strm/index.jsx
 // STRM 管理 - 本地 STRM 文件扫描、清理和维护工具
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
-  Card, Button, Space, Alert, Row, Col, Statistic, Typography, message, Divider
+  Card, Button, Space, Alert, Row, Col, Statistic, Typography, message, Divider, Table, Tabs
 } from 'antd'
 import {
   ScanOutlined, DeleteOutlined, UnorderedListOutlined,
   FileTextOutlined, CheckCircleOutlined, CloseCircleOutlined,
-  WarningOutlined
+  WarningOutlined, ReloadOutlined
 } from '@ant-design/icons'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
-import { p115StrmApi } from '@/apis'
+import { p115StrmApi, strmApi } from '@/apis'
 
 const { Title, Text } = Typography
 
@@ -25,6 +25,23 @@ export const Strm = () => {
   const [localCleanLoading, setLocalCleanLoading] = useState(false)
   const [rescrapeLoading, setRescrapeLoading] = useState(false)
   const [localStrmStats, setLocalStrmStats] = useState(null)
+  const [files, setFiles] = useState([])
+  const [fileLoading, setFileLoading] = useState(false)
+  const [filePagination, setFilePagination] = useState({ current: 1, pageSize: 20, total: 0 })
+
+  // ── 获取文件列表 ──────────────────────────────────────────────────────
+  const fetchFiles = async (page = 1, size = 20) => {
+    setFileLoading(true)
+    try {
+      const { data } = await strmApi.listFiles({ page, size })
+      setFiles(data.items || [])
+      setFilePagination({ current: data.page, pageSize: data.size, total: data.total })
+    } catch (e) {
+      message.error(t('common.failed'))
+    } finally {
+      setFileLoading(false)
+    }
+  }
 
   // ── 扫描本地 STRM ──────────────────────────────────────────────────────
   const handleScanLocalStrm = async () => {
@@ -174,7 +191,7 @@ export const Strm = () => {
 
       {/* 扫描结果展示 */}
       {localStrmStats && (
-        <Card title={<Space><CheckCircleOutlined />扫描结果</Space>}>
+        <Card title={<Space><CheckCircleOutlined />扫描结果</Space>} style={{ marginBottom: 24 }}>
           <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
             <Col xs={12} sm={6}>
               <Statistic
@@ -221,6 +238,35 @@ export const Strm = () => {
           </div>
         </Card>
       )}
+
+      {/* STRM 文件列表 */}
+      <Card
+        title={<Space><FileTextOutlined />STRM 文件列表</Space>}
+        extra={
+          <Button icon={<ReloadOutlined />} onClick={() => fetchFiles()}>
+            {t('common.refresh')}
+          </Button>
+        }
+      >
+        <Table
+          rowKey="id"
+          columns={[
+            { title: 'ID', dataIndex: 'id', width: 60 },
+            { title: t('strm.strmPath'), dataIndex: 'strm_path', ellipsis: true },
+            { title: t('strm.strmContent'), dataIndex: 'strm_content', ellipsis: true },
+            { title: t('strm.strmMode'), dataIndex: 'strm_mode', width: 100 },
+            { title: t('common.time'), dataIndex: 'created_at', width: 160 },
+          ]}
+          dataSource={files}
+          loading={fileLoading}
+          scroll={{ x: 800 }}
+          pagination={{
+            ...filePagination,
+            onChange: (p, s) => fetchFiles(p, s),
+            showTotal: (total) => `共 ${total} 条`
+          }}
+        />
+      </Card>
     </div>
   )
 }
