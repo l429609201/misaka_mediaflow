@@ -16,6 +16,7 @@ from src.api.v1.classify import router as classify_router   # 通用分类引擎
 from src.api.v1.tasks import router as tasks_router         # 任务中心
 from src.api.v1.webhook import router as webhook_router     # Webhook 接收
 from src.api.v1.gaps import router as gaps_router           # 缺集管理
+from src.api.v1.calendar import router as calendar_router   # 追剧日历
 from src.api.redirect_url import router as redirect_url_router
 
 v1_router = APIRouter(prefix="/api/v1")
@@ -32,6 +33,7 @@ v1_router.include_router(classify_router)   # 通用分类引擎
 v1_router.include_router(tasks_router)      # 任务中心
 v1_router.include_router(webhook_router)    # Webhook 接收
 v1_router.include_router(gaps_router)       # 缺集管理
+v1_router.include_router(calendar_router)   # 追剧日历
 
 
 v1_router.include_router(redirect_url_router)

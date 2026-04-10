@@ -17,6 +17,7 @@ export const RoutePaths = {
   MEDIA_PROXY: '/media-proxy',
   TASKS: '/tasks',
   GAPS: '/gaps',
+  CALENDAR: '/calendar',
   SETTING: '/setting',
 }
 

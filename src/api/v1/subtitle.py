@@ -130,3 +130,31 @@ async def trigger_font_scan():
         logger.warning("[subtitle-api] 字体扫描触发失败: %s", e)
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
+
+
+# ==================== 字幕自动下载 ====================
+
+from pydantic import BaseModel
+
+class SubDLConfigPayload(BaseModel):
+    enabled: bool = False
+    api_key: str = ""
+    languages: str = "zh-cn,zh-tw,en"
+
+@router.get("/download/config", dependencies=[Depends(verify_token)])
+async def get_subdl_config():
+    from src.services.subtitle_download_service import _load_config
+    return await _load_config()
+
+@router.post("/download/config", dependencies=[Depends(verify_token)])
+async def save_subdl_config(payload: SubDLConfigPayload):
+    from src.services.subtitle_download_service import save_config
+    ok = await save_config(payload.model_dump())
+    return {"success": ok}
+
+@router.get("/download/search", dependencies=[Depends(verify_token)])
+async def search_subtitles(query: str, tmdb_id: int = 0, languages: str = "zh-cn,zh-tw,en"):
+    from src.services.subtitle_download_service import SubtitleDownloadService
+    svc = SubtitleDownloadService()
+    results = await svc.search_subtitles(query, tmdb_id, languages)
+    return {"results": results}

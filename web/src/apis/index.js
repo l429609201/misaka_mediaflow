@@ -62,6 +62,10 @@ export const subtitleApi = {
   getFontStatus: () => api.get('/subtitle/font/status'),
   // 手动触发字体扫描
   triggerFontScan: () => api.post('/subtitle/font/scan'),
+  // 字幕自动下载
+  getSubDLConfig: () => api.get('/subtitle/download/config'),
+  saveSubDLConfig: (payload) => api.post('/subtitle/download/config', payload),
+  searchSubtitles: (query, tmdbId, languages) => api.get('/subtitle/download/search', { params: { query, tmdb_id: tmdbId, languages } }),
 }
 
 // ==================== Storage ====================
@@ -179,5 +183,10 @@ export const tasksApi = {
 // ==================== 缺集管理 ====================
 export const gapsApi = {
   scan: (libraryId) => api.get('/gaps/scan', { params: { library_id: libraryId || '' } }),
+}
+
+// ==================== 追剧日历 ====================
+export const calendarApi = {
+  today: () => api.get('/calendar/today'),
 }
 
