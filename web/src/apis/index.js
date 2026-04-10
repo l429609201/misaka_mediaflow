@@ -203,3 +203,37 @@ export const calendarApi = {
   today: () => api.get('/calendar/today'),
 }
 
+// ==================== 工作流 ====================
+export const workflowApi = {
+  // 节点类型
+  getNodeTypes: () => api.get('/workflow/node-types'),
+  // CRUD
+  list: () => api.get('/workflow'),
+  get: (id) => api.get(`/workflow/${id}`),
+  save: (payload) => api.post('/workflow', payload),
+  remove: (id) => api.delete(`/workflow/${id}`),
+  // 执行
+  execute: (id) => api.post(`/workflow/${id}/execute`),
+  listExecutions: (params) => api.get('/workflow/executions/list', { params }),
+  cancelExecution: (id) => api.post(`/workflow/executions/${id}/cancel`),
+}
+
+// ==================== 演员管理 ====================
+export const actorApi = {
+  listPersons: () => api.get('/actor/persons'),
+  findOrphans: () => api.get('/actor/orphans'),
+  findGhosts: (limit = 100) => api.get('/actor/ghosts', { params: { limit } }),
+  translate: (limit = 200) => api.post('/actor/translate', null, { params: { limit } }),
+  deletePerson: (id) => api.delete(`/actor/person/${id}`),
+  batchDelete: (person_ids) => api.post('/actor/batch-delete', { person_ids }),
+  cleanup: (mode = 'ghost') => api.post('/actor/cleanup', null, { params: { mode } }),
+}
+
+// ==================== AI 助手 ====================
+export const aiApi = {
+  getConfig: () => api.get('/ai/config'),
+  saveConfig: (payload) => api.post('/ai/config', payload),
+  chat: (messages, context) => api.post('/ai/chat', { messages, context }),
+  translate: (text, target_lang = 'zh-CN') => api.post('/ai/translate', { text, target_lang }),
+}
+

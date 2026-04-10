@@ -20,6 +20,8 @@ import { RealtimeSubtitle } from '@/pages/realtime-subtitle/index.jsx'
 import P115 from '@/pages/media-proxy/index.jsx'
 import SearchSource from '@/pages/search-source/index.jsx'
 import Tasks from '@/pages/tasks/index.jsx'
+import ActorPage from '@/pages/actor/index.jsx'
+import AIPage from '@/pages/ai/index.jsx'
 import Gaps from '@/pages/gaps/index.jsx'
 import Calendar from '@/pages/calendar/index.jsx'
 import Setting from '@/pages/setting/index.jsx'
@@ -87,6 +89,8 @@ export const router = createBrowserRouter(
         { path: RoutePaths.REALTIME_SUBTITLE.slice(1), element: <RealtimeSubtitle /> },
         { path: RoutePaths.SEARCH_SOURCE.slice(1),     element: <SearchSource /> },
         { path: RoutePaths.TASKS.slice(1),             element: <Tasks /> },
+        { path: RoutePaths.ACTOR.slice(1),             element: <ActorPage /> },
+        { path: RoutePaths.AI.slice(1),                element: <AIPage /> },
         { path: RoutePaths.GAPS.slice(1),              element: <Gaps /> },
         { path: RoutePaths.CALENDAR.slice(1),          element: <Calendar /> },
         { path: RoutePaths.SETTING.slice(1),           element: <Setting /> },

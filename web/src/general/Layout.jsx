@@ -29,6 +29,8 @@ import {
   RadarChartOutlined,
   AlertOutlined,
   CalendarOutlined,
+  TeamOutlined,
+  RobotOutlined,
 } from '@ant-design/icons'
 import { useTranslation } from 'react-i18next'
 import LanguageSwitch from '@/components/LanguageSwitch'
@@ -72,6 +74,8 @@ export const Layout = () => {
     { key: RoutePaths.REALTIME_SUBTITLE, icon: <FontSizeOutlined />,     label: t('menu.realtimeSubtitle') },
     { key: RoutePaths.SEARCH_SOURCE,     icon: <SearchOutlined />,       label: t('menu.searchSource') },
     { key: RoutePaths.TASKS,             icon: <UnorderedListOutlined />, label: t('menu.tasks') },
+    { key: RoutePaths.ACTOR,             icon: <TeamOutlined />,          label: t('menu.actor') },
+    { key: RoutePaths.AI,                icon: <RobotOutlined />,         label: t('menu.ai') },
     { key: RoutePaths.GAPS,              icon: <AlertOutlined />,        label: t('menu.gaps') },
     { key: RoutePaths.CALENDAR,          icon: <CalendarOutlined />,     label: t('menu.calendar') },
     { key: RoutePaths.SETTING,           icon: <SettingOutlined />,      label: t('menu.settings') },

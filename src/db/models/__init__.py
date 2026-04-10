@@ -9,6 +9,7 @@ from src.db.models.system import SystemConfig, OperationLog
 from src.db.models.p115 import P115FsCache, P115MediaInfo, P115OrganizeRecord
 from src.db.models.user import User
 from src.db.models.font import FontFile, FontFace, FontName, SubtitleFile
+from src.db.models.workflow import Workflow, WorkflowExecution
 
 __all__ = [
     # 存储
@@ -35,5 +36,8 @@ __all__ = [
     "FontFace",
     "FontName",
     "SubtitleFile",
+    # 工作流
+    "Workflow",
+    "WorkflowExecution",
 ]
 

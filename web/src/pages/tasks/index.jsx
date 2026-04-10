@@ -1,18 +1,19 @@
  // web/src/pages/tasks/index.jsx
- // 真正的任务中心 — 运行中任务实时卡片 + 历史任务分页表格
+ // 任务中心 — Tab1=任务历史 Tab2=工作流
  import { useState, useEffect, useRef, useCallback } from 'react'
  import {
-   Card, Table, Tag, Button, Space, Typography, Progress,
-   Tooltip, Popconfirm, message, Badge, Select, Empty,
-   Statistic, Row, Col,
+   Card, Table, Tag, Button, Space, Typography, Progress, Tabs,
+   Tooltip, Popconfirm, message, Badge, Select, Empty, Input,
+   Statistic, Row, Col, Modal, List, Descriptions,
  } from 'antd'
  import {
    ReloadOutlined, DeleteOutlined, StopOutlined,
    ThunderboltOutlined, ClockCircleOutlined, CheckCircleOutlined,
    CloseCircleOutlined, SyncOutlined, ClearOutlined, ScissorOutlined,
+   PlusOutlined, PlayCircleOutlined, EditOutlined, ApartmentOutlined,
  } from '@ant-design/icons'
  import { useTranslation } from 'react-i18next'
- import { tasksApi } from '@/apis/index.js'
+ import { tasksApi, workflowApi } from '@/apis/index.js'
  
  const { Text, Title } = Typography
  
@@ -84,7 +85,7 @@
  }
  
  // ── 主页面 ───────────────────────────────────────────────────────
- export const Tasks = () => {
+ const TaskCenter = () => {
    const { t } = useTranslation()
    const [tasks,      setTasks]      = useState([])
    const [running,    setRunning]    = useState([])
@@ -213,9 +214,7 @@
    ]
  
    return (
-     <div style={{ padding: 24 }}>
-       <Title level={4} style={{ marginBottom: 16 }}>{t('tasks.title')}</Title>
- 
+     <div>
        {/* 运行中任务卡片区 */}
        {running.length > 0 && (
          <Card
@@ -248,7 +247,7 @@
            </Popconfirm>
          </Space>
        </Card>
- 
+
        {/* 历史任务表格 */}
        <Card size="small">
          <Table
@@ -269,6 +268,271 @@
      </div>
    )
  }
- 
+
+ // ── 工作流 Tab ──────────────────────────────────────────────────────
+ const WorkflowTab = () => {
+   const { t } = useTranslation()
+   const [workflows, setWorkflows] = useState([])
+   const [loading, setLoading] = useState(false)
+   const [editModal, setEditModal] = useState(false)
+   const [editData, setEditData] = useState(null)
+   const [executions, setExecutions] = useState([])
+   const [nodeTypes, setNodeTypes] = useState([])
+
+   const fetchWorkflows = useCallback(async () => {
+     setLoading(true)
+     try {
+       const { data } = await workflowApi.list()
+       setWorkflows(data?.items || [])
+     } catch { /* ignore */ }
+     finally { setLoading(false) }
+   }, [])
+
+   const fetchExecutions = useCallback(async () => {
+     try {
+       const { data } = await workflowApi.listExecutions({ page: 1, size: 20 })
+       setExecutions(data?.items || [])
+     } catch { /* ignore */ }
+   }, [])
+
+   const fetchNodeTypes = useCallback(async () => {
+     try {
+       const { data } = await workflowApi.getNodeTypes()
+       setNodeTypes(data?.items || [])
+     } catch { /* ignore */ }
+   }, [])
+
+   useEffect(() => {
+     fetchWorkflows()
+     fetchExecutions()
+     fetchNodeTypes()
+   }, [fetchWorkflows, fetchExecutions, fetchNodeTypes])
+
+   const handleCreate = () => {
+     setEditData({
+       name: t('workflow.newWorkflow', '新工作流'),
+       description: '',
+       nodes: [
+         { id: 'start-1', type: 'default', position: { x: 250, y: 50 },
+           data: { type: 'start', label: t('workflow.nodeStart', '开始'), params: {} } },
+         { id: 'end-1', type: 'default', position: { x: 250, y: 300 },
+           data: { type: 'end', label: t('workflow.nodeEnd', '结束'), params: {} } },
+       ],
+       edges: [{ id: 'e-start-end', source: 'start-1', target: 'end-1' }],
+       enabled: 1,
+       cron: '',
+     })
+     setEditModal(true)
+   }
+
+   const handleEdit = (wf) => {
+     const data = { ...wf }
+     try { data.nodes = typeof data.nodes === 'string' ? JSON.parse(data.nodes) : data.nodes } catch { data.nodes = [] }
+     try { data.edges = typeof data.edges === 'string' ? JSON.parse(data.edges) : data.edges } catch { data.edges = [] }
+     setEditData(data)
+     setEditModal(true)
+   }
+
+   const handleSave = async () => {
+     if (!editData) return
+     try {
+       await workflowApi.save(editData)
+       message.success(t('common.success'))
+       setEditModal(false)
+       fetchWorkflows()
+     } catch { message.error(t('common.failed')) }
+   }
+
+   const handleDelete = async (id) => {
+     try {
+       await workflowApi.remove(id)
+       message.success(t('common.success'))
+       fetchWorkflows()
+     } catch { message.error(t('common.failed')) }
+   }
+
+   const handleExecute = async (id) => {
+     try {
+       const { data } = await workflowApi.execute(id)
+       if (data?.success) {
+         message.success(t('workflow.executeStarted', '工作流已启动'))
+         setTimeout(fetchExecutions, 1000)
+       } else {
+         message.warning(data?.message || t('common.failed'))
+       }
+     } catch { message.error(t('common.failed')) }
+   }
+
+   const STATUS_COLORS = {
+     running: 'processing', completed: 'success', failed: 'error', cancelled: 'warning',
+   }
+
+   return (
+     <div>
+       {/* 工作流列表 */}
+       <Card
+         title={<Space><ApartmentOutlined /><span>{t('workflow.title', '工作流')}</span></Space>}
+         extra={<Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>{t('workflow.create', '新建工作流')}</Button>}
+         style={{ marginBottom: 16 }} size="small"
+       >
+         <List
+           loading={loading}
+           dataSource={workflows}
+           locale={{ emptyText: <Empty description={t('workflow.noWorkflows', '暂无工作流，点击右上角新建')} /> }}
+           renderItem={wf => (
+             <List.Item
+               actions={[
+                 <Button key="run" type="primary" size="small" icon={<PlayCircleOutlined />}
+                   onClick={() => handleExecute(wf.id)}>{t('workflow.run', '执行')}</Button>,
+                 <Button key="edit" size="small" icon={<EditOutlined />}
+                   onClick={() => handleEdit(wf)}>{t('common.edit')}</Button>,
+                 <Popconfirm key="del" title={t('common.confirm')} onConfirm={() => handleDelete(wf.id)}>
+                   <Button danger size="small" icon={<DeleteOutlined />} />
+                 </Popconfirm>,
+               ]}
+             >
+               <List.Item.Meta
+                 avatar={<ApartmentOutlined style={{ fontSize: 24, color: wf.enabled ? '#1677ff' : '#999' }} />}
+                 title={<Space>{wf.name}{wf.cron && <Tag color="blue">{wf.cron}</Tag>}{!wf.enabled && <Tag color="default">{t('common.disabled')}</Tag>}</Space>}
+                 description={wf.description || t('workflow.noDescription', '无描述')}
+               />
+             </List.Item>
+           )}
+         />
+       </Card>
+
+       {/* 执行记录 */}
+       <Card title={t('workflow.execHistory', '执行记录')} size="small"
+         extra={<Button icon={<ReloadOutlined />} size="small" onClick={fetchExecutions}>{t('common.refresh')}</Button>}>
+         <Table
+           rowKey="id" dataSource={executions} size="small"
+           locale={{ emptyText: <Empty description={t('workflow.noExecutions', '暂无执行记录')} /> }}
+           pagination={{ pageSize: 10, showSizeChanger: false }}
+           columns={[
+             { title: t('workflow.colName', '工作流'), dataIndex: 'workflow_name', width: 160 },
+             { title: t('workflow.colStatus', '状态'), dataIndex: 'status', width: 100,
+               render: v => <Badge status={STATUS_COLORS[v] || 'default'} text={v} /> },
+             { title: t('workflow.colTrigger', '触发'), dataIndex: 'triggered_by', width: 80,
+               render: v => <Tag>{v}</Tag> },
+             { title: t('workflow.colStarted', '开始时间'), dataIndex: 'started_at', width: 160,
+               render: v => <Typography.Text type="secondary" style={{ fontSize: 12 }}>{v || '-'}</Typography.Text> },
+             { title: t('workflow.colFinished', '完成时间'), dataIndex: 'finished_at', width: 160,
+               render: v => <Typography.Text type="secondary" style={{ fontSize: 12 }}>{v || '-'}</Typography.Text> },
+             { title: t('workflow.colError', '错误'), dataIndex: 'error_message', ellipsis: true,
+               render: v => v ? <Tooltip title={v}><Typography.Text type="danger" ellipsis>{v}</Typography.Text></Tooltip> : '-' },
+           ]}
+         />
+       </Card>
+
+       {/* 工作流编辑弹窗 */}
+       <Modal
+         title={editData?.id ? t('workflow.editTitle', '编辑工作流') : t('workflow.createTitle', '新建工作流')}
+         open={editModal} onCancel={() => setEditModal(false)}
+         onOk={handleSave} width={700} destroyOnClose
+       >
+         {editData && (
+           <div>
+             <Space direction="vertical" style={{ width: '100%' }} size="middle">
+               <div>
+                 <Typography.Text strong>{t('workflow.name', '名称')}</Typography.Text>
+                 <Input value={editData.name} onChange={e => setEditData({ ...editData, name: e.target.value })}
+                   style={{ marginTop: 4 }} />
+               </div>
+               <div>
+                 <Typography.Text strong>{t('workflow.description', '描述')}</Typography.Text>
+                 <Input.TextArea value={editData.description}
+                   onChange={e => setEditData({ ...editData, description: e.target.value })}
+                   style={{ marginTop: 4 }} rows={2} />
+               </div>
+               <div>
+                 <Typography.Text strong>{t('workflow.cron', '定时表达式')}</Typography.Text>
+                 <Input value={editData.cron} placeholder="0 3 * * *（留空=手动触发）"
+                   onChange={e => setEditData({ ...editData, cron: e.target.value })}
+                   style={{ marginTop: 4 }} />
+               </div>
+               {/* 节点编排 — 简化版列表 */}
+               <div>
+                 <Typography.Text strong>{t('workflow.nodes', '执行节点')}</Typography.Text>
+                 <div style={{ marginTop: 8 }}>
+                   {(editData.nodes || []).map((node, idx) => (
+                     <Tag key={node.id} color={nodeTypes.find(n => n.type === node.data?.type)?.color || '#999'}
+                       closable={!['start', 'end'].includes(node.data?.type)}
+                       onClose={() => {
+                         const newNodes = editData.nodes.filter((_, i) => i !== idx)
+                         const newEdges = editData.edges.filter(e => e.source !== node.id && e.target !== node.id)
+                         setEditData({ ...editData, nodes: newNodes, edges: newEdges })
+                       }}
+                       style={{ marginBottom: 4 }}
+                     >
+                       {nodeTypes.find(n => n.type === node.data?.type)?.label || node.data?.type || '?'}
+                     </Tag>
+                   ))}
+                 </div>
+                 <Select
+                   placeholder={t('workflow.addNode', '添加节点')}
+                   style={{ width: 200, marginTop: 8 }}
+                   onChange={(type) => {
+                     const info = nodeTypes.find(n => n.type === type) || {}
+                     const newId = `${type}-${Date.now()}`
+                     const endNode = editData.nodes.find(n => n.data?.type === 'end')
+                     const lastNonEnd = [...editData.nodes].reverse().find(n => n.data?.type !== 'end')
+                     const newNode = {
+                       id: newId, type: 'default',
+                       position: { x: 250, y: (editData.nodes.length) * 80 + 50 },
+                       data: { type, label: info.label || type, params: {} },
+                     }
+                     // 插入到 end 之前
+                     const nodes = editData.nodes.filter(n => n.data?.type !== 'end')
+                     nodes.push(newNode)
+                     if (endNode) nodes.push(endNode)
+                     // 重建边
+                     const edges = []
+                     for (let i = 0; i < nodes.length - 1; i++) {
+                       edges.push({ id: `e-${nodes[i].id}-${nodes[i+1].id}`, source: nodes[i].id, target: nodes[i+1].id })
+                     }
+                     setEditData({ ...editData, nodes, edges })
+                   }}
+                   value={null}
+                 >
+                   {nodeTypes.filter(n => !['start', 'end'].includes(n.type)).map(n => (
+                     <Select.Option key={n.type} value={n.type}>
+                       <Space><span style={{ color: n.color }}>●</span>{n.label}</Space>
+                     </Select.Option>
+                   ))}
+                 </Select>
+               </div>
+             </Space>
+           </div>
+         )}
+       </Modal>
+     </div>
+   )
+ }
+
+ // ── 主页面（Tabs 容器）──────────────────────────────────────────────
+ export const Tasks = () => {
+   const { t } = useTranslation()
+   return (
+     <div style={{ padding: 24 }}>
+       <Typography.Title level={4} style={{ marginBottom: 16 }}>{t('tasks.title')}</Typography.Title>
+       <Tabs
+         defaultActiveKey="tasks"
+         items={[
+           {
+             key: 'tasks',
+             label: <Space><UnorderedListOutlined />{t('tasks.tabTasks', '任务中心')}</Space>,
+             children: <TaskCenter />,
+           },
+           {
+             key: 'workflow',
+             label: <Space><ApartmentOutlined />{t('tasks.tabWorkflow', '工作流')}</Space>,
+             children: <WorkflowTab />,
+           },
+         ]}
+       />
+     </div>
+   )
+ }
+
  export default Tasks
 

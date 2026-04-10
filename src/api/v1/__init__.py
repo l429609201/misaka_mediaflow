@@ -17,6 +17,9 @@ from src.api.v1.tasks import router as tasks_router         # 任务中心
 from src.api.v1.webhook import router as webhook_router     # Webhook 接收
 from src.api.v1.gaps import router as gaps_router           # 缺集管理
 from src.api.v1.calendar import router as calendar_router   # 追剧日历
+from src.api.v1.workflow import router as workflow_router   # 工作流
+from src.api.v1.actor import router as actor_router         # 演员管理
+from src.api.v1.ai import router as ai_router               # AI 助手
 from src.api.redirect_url import router as redirect_url_router
 
 v1_router = APIRouter(prefix="/api/v1")
@@ -34,6 +37,9 @@ v1_router.include_router(tasks_router)      # 任务中心
 v1_router.include_router(webhook_router)    # Webhook 接收
 v1_router.include_router(gaps_router)       # 缺集管理
 v1_router.include_router(calendar_router)   # 追剧日历
+v1_router.include_router(workflow_router)   # 工作流
+v1_router.include_router(actor_router)      # 演员管理
+v1_router.include_router(ai_router)         # AI 助手
 
 
 v1_router.include_router(redirect_url_router)
