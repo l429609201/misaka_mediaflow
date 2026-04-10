@@ -11,11 +11,14 @@ router = APIRouter(prefix="/actor", tags=["演员管理"])
 
 
 @router.get("/persons", dependencies=[Depends(verify_token)])
-async def list_persons():
-    """获取 Emby 中所有演员"""
+async def list_persons(
+    search: str = Query("", description="搜索关键词"),
+    page: int = Query(1, ge=1),
+    size: int = Query(50, ge=1, le=200),
+):
+    """获取 Emby 中演员列表（带搜索、分页、头像）"""
     svc = get_actor_service()
-    persons = await svc.get_all_persons()
-    return {"items": persons, "total": len(persons)}
+    return await svc.get_all_persons(search=search, page=page, size=size)
 
 
 @router.get("/orphans", dependencies=[Depends(verify_token)])
@@ -64,3 +67,15 @@ async def cleanup_actors(mode: str = Query("ghost", description="orphan/ghost"))
     """清理演员（仅检测并返回列表，不自动删除）"""
     svc = get_actor_service()
     return await svc.cleanup(mode=mode)
+
+
+class UpdatePersonPayload(BaseModel):
+    name: str = ""
+    provider_ids: dict = None
+
+
+@router.post("/person/{person_id}/update", dependencies=[Depends(verify_token)])
+async def update_person(person_id: str, payload: UpdatePersonPayload):
+    """编辑演员信息"""
+    svc = get_actor_service()
+    return await svc.update_person(person_id, name=payload.name, provider_ids=payload.provider_ids)

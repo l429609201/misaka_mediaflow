@@ -32,25 +32,55 @@ class ActorService:
 
     # ── 拉取 Emby 所有演员 ────────────────────────────────────────────
 
-    async def get_all_persons(self) -> list[dict]:
-        """从 Emby 拉取所有演员"""
-        _, client = await self._get_emby()
-        resp = await client.get("/emby/Persons", params={
+    async def get_all_persons(self, search: str = "", page: int = 1, size: int = 50) -> dict:
+        """从 Emby 拉取演员列表（带搜索、分页、头像URL）"""
+        adapter, client = await self._get_emby()
+        params = {
             "Fields": "ProviderIds,Overview,PrimaryImageTag",
-            "Limit": "50000",
-        })
+            "Limit": str(size),
+            "StartIndex": str((page - 1) * size),
+            "SortBy": "SortName",
+            "SortOrder": "Ascending",
+        }
+        if search:
+            params["SearchTerm"] = search
+        resp = await client.get("/emby/Persons", params=params)
         if resp.status_code != 200:
-            return []
+            return {"items": [], "total": 0}
         data = resp.json()
-        items = data.get("Items", []) if isinstance(data, dict) else data
-        return [{
-            "id": p.get("Id", ""),
-            "name": p.get("Name", ""),
-            "provider_ids": p.get("ProviderIds", {}),
-            "has_image": bool(p.get("PrimaryImageTag")),
-            "overview": p.get("Overview", ""),
-            "type": p.get("Type", ""),
-        } for p in items]
+        items_raw = data.get("Items", []) if isinstance(data, dict) else data
+        total = data.get("TotalRecordCount", len(items_raw)) if isinstance(data, dict) else len(items_raw)
+        host = adapter._host
+        items = []
+        for p in items_raw:
+            pid = p.get("Id", "")
+            tag = p.get("PrimaryImageTag", "")
+            img = f"{host}/emby/Items/{pid}/Images/Primary?tag={tag}&maxWidth=120" if tag else ""
+            items.append({
+                "id": pid,
+                "name": p.get("Name", ""),
+                "provider_ids": p.get("ProviderIds", {}),
+                "has_image": bool(tag),
+                "image_url": img,
+                "overview": p.get("Overview", ""),
+                "type": p.get("Type", ""),
+            })
+        return {"items": items, "total": total}
+
+    async def update_person(self, person_id: str, name: str = "", provider_ids: dict = None) -> dict:
+        """编辑演员信息（名称、ProviderIds）"""
+        _, client = await self._get_emby()
+        # 先获取当前数据
+        resp = await client.get(f"/emby/Items/{person_id}", params={"Fields": "ProviderIds,Overview"})
+        if resp.status_code != 200:
+            return {"success": False, "message": "演员不存在"}
+        item = resp.json()
+        if name:
+            item["Name"] = name
+        if provider_ids is not None:
+            item["ProviderIds"] = {**item.get("ProviderIds", {}), **provider_ids}
+        resp2 = await client.post(f"/emby/Items/{person_id}", json=item)
+        return {"success": resp2.status_code in (200, 204)}
 
     async def get_media_with_people(self, item_types: str = "Series,Movie") -> list[dict]:
         """拉取所有带 People 字段的媒体"""

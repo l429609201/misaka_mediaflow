@@ -220,11 +220,12 @@ export const workflowApi = {
 
 // ==================== 演员管理 ====================
 export const actorApi = {
-  listPersons: () => api.get('/actor/persons'),
+  listPersons: (params) => api.get('/actor/persons', { params }),
   findOrphans: () => api.get('/actor/orphans'),
   findGhosts: (limit = 100) => api.get('/actor/ghosts', { params: { limit } }),
   translate: (limit = 200) => api.post('/actor/translate', null, { params: { limit } }),
   deletePerson: (id) => api.delete(`/actor/person/${id}`),
+  updatePerson: (id, payload) => api.post(`/actor/person/${id}/update`, payload),
   batchDelete: (person_ids) => api.post('/actor/batch-delete', { person_ids }),
   cleanup: (mode = 'ghost') => api.post('/actor/cleanup', null, { params: { mode } }),
 }

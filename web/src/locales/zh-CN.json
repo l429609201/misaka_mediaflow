@@ -614,6 +614,8 @@
     "orphanDesc": "黑户演员：在 Emby 中存在但没有关联任何电影或剧集的演员记录。",
     "orphanEmpty": "点击上方按钮扫描",
     "scanOrphans": "扫描黑户演员",
+    "searchPlaceholder": "搜索演员名...",
+    "editTitle": "编辑演员",
     "ghostDesc": "幽灵演员：没有 TMDB ID 且在 TMDB 中搜索不到的演员。",
     "scanGhosts": "扫描幽灵演员",
     "translateDesc": "通过 TMDB 翻译接口获取演员中文名，并写回 Emby。需要配置 TMDB API Key。",
