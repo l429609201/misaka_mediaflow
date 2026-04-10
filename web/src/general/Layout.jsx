@@ -72,8 +72,8 @@ export const Layout = () => {
     { key: RoutePaths.REALTIME_SUBTITLE, icon: <FontSizeOutlined />,     label: t('menu.realtimeSubtitle') },
     { key: RoutePaths.SEARCH_SOURCE,     icon: <SearchOutlined />,       label: t('menu.searchSource') },
     { key: RoutePaths.TASKS,             icon: <UnorderedListOutlined />, label: t('menu.tasks') },
-    { key: RoutePaths.GAPS,              icon: <AlertOutlined />,        label: '缺集管理' },
-    { key: RoutePaths.CALENDAR,          icon: <CalendarOutlined />,     label: '追剧日历' },
+    { key: RoutePaths.GAPS,              icon: <AlertOutlined />,        label: t('menu.gaps') },
+    { key: RoutePaths.CALENDAR,          icon: <CalendarOutlined />,     label: t('menu.calendar') },
     { key: RoutePaths.SETTING,           icon: <SettingOutlined />,      label: t('menu.settings') },
   ]
 

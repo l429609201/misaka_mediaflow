@@ -10,12 +10,12 @@ import {
   AlertOutlined, ScanOutlined, CheckCircleOutlined,
   WarningOutlined, ReloadOutlined,
 } from '@ant-design/icons'
+import { useTranslation } from 'react-i18next'
 import { gapsApi } from '@/apis'
 
 const { Text, Title } = Typography
 
-function MissingBadges({ missing }) {
-  // 按季分组显示缺失集数
+function MissingBadges({ missing, t }) {
   const bySeason = {}
   missing.forEach(m => {
     if (!bySeason[m.season]) bySeason[m.season] = []
@@ -24,9 +24,9 @@ function MissingBadges({ missing }) {
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 8 }}>
       {Object.entries(bySeason).map(([s, eps]) => (
-        <Tooltip key={s} title={`S${s.padStart(2, '0')} 缺 ${eps.length} 集: E${eps.join(', E')}`}>
+        <Tooltip key={s} title={`S${s.padStart(2, '0')} missing ${eps.length}: E${eps.join(', E')}`}>
           <Tag color="red" style={{ cursor: 'help' }}>
-            S{s.padStart(2, '0')} 缺 {eps.length} 集
+            {t('gaps.seasonMissing', { season: s.padStart(2, '0'), count: eps.length })}
           </Tag>
         </Tooltip>
       ))}
@@ -55,11 +55,11 @@ function GapCard({ gap }) {
                 TMDB: {gap.tmdb_id} · 共 {gap.total_episodes} 集 · 已有 {gap.owned_episodes} 集
               </div>
             </div>
-            <Badge count={`缺 ${gap.missing_count}`} style={{ backgroundColor: '#ef4444' }} />
+            <Badge count={`-${gap.missing_count}`} style={{ backgroundColor: '#ef4444' }} />
           </div>
           <Progress percent={pct} size="small" strokeColor={pct === 100 ? '#52c41a' : '#1677ff'}
             format={() => `${pct}%`} style={{ marginTop: 6 }} />
-          <MissingBadges missing={gap.missing} />
+          <MissingBadges missing={gap.missing} t={() => ''} />
         </div>
       </div>
     </Card>
@@ -67,6 +67,7 @@ function GapCard({ gap }) {
 }
 
 export const Gaps = () => {
+  const { t } = useTranslation()
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
 
@@ -78,10 +79,10 @@ export const Gaps = () => {
         message.error(data.error)
       } else {
         setResult(data)
-        message.success(`扫描完成: ${data.total_series} 部剧集, ${data.gaps_count} 部有缺集`)
+        message.success(t('gaps.scanDone', { series: data.total_series, gaps: data.gaps_count }))
       }
     } catch {
-      message.error('扫描失败')
+      message.error(t('gaps.scanFail'))
     } finally {
       setLoading(false)
     }
@@ -93,16 +94,16 @@ export const Gaps = () => {
     <div style={{ padding: 24 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
         <Title level={4} style={{ margin: 0 }}>
-          <Space><AlertOutlined />缺集管理</Space>
+          <Space><AlertOutlined />{t('gaps.title')}</Space>
         </Title>
         <Button icon={<ScanOutlined />} type="primary" loading={loading} onClick={handleScan}>
-          扫描缺集
+          {t('gaps.scan')}
         </Button>
       </div>
 
       {loading && (
         <div style={{ textAlign: 'center', padding: 60 }}>
-          <Spin size="large" tip="正在扫描 Emby 库并与 TMDB 比对，请稍候..." />
+          <Spin size="large" tip={t('gaps.scanning')} />
         </div>
       )}
 
@@ -111,7 +112,7 @@ export const Gaps = () => {
           <Row gutter={[12, 12]} style={{ marginBottom: 20 }}>
             <Col xs={8}>
               <Card size="small" style={{ borderTop: '3px solid #6366f1' }}>
-                <Text type="secondary" style={{ fontSize: 11 }}>扫描剧集</Text>
+                <Text type="secondary" style={{ fontSize: 11 }}>{t('gaps.totalSeries')}</Text>
                 <div style={{ fontSize: 28, fontWeight: 700, color: '#6366f1' }}>
                   {result.total_series}
                 </div>
@@ -119,7 +120,7 @@ export const Gaps = () => {
             </Col>
             <Col xs={8}>
               <Card size="small" style={{ borderTop: '3px solid #ef4444' }}>
-                <Text type="secondary" style={{ fontSize: 11 }}>有缺集</Text>
+                <Text type="secondary" style={{ fontSize: 11 }}>{t('gaps.hasGaps')}</Text>
                 <div style={{ fontSize: 28, fontWeight: 700, color: '#ef4444' }}>
                   {result.gaps_count}
                 </div>
@@ -127,7 +128,7 @@ export const Gaps = () => {
             </Col>
             <Col xs={8}>
               <Card size="small" style={{ borderTop: '3px solid #10b981' }}>
-                <Text type="secondary" style={{ fontSize: 11 }}>完整</Text>
+                <Text type="secondary" style={{ fontSize: 11 }}>{t('gaps.complete')}</Text>
                 <div style={{ fontSize: 28, fontWeight: 700, color: '#10b981' }}>
                   {result.total_series - result.gaps_count}
                 </div>
@@ -136,14 +137,14 @@ export const Gaps = () => {
           </Row>
 
           {gaps.length > 0 ? (
-            <Card title={<Space><WarningOutlined style={{ color: '#ef4444' }} />缺集列表</Space>} size="small">
+            <Card title={<Space><WarningOutlined style={{ color: '#ef4444' }} />{t('gaps.gapList')}</Space>} size="small">
               {gaps.map(g => <GapCard key={g.tmdb_id} gap={g} />)}
             </Card>
           ) : (
             <Card size="small">
               <Empty
                 image={<CheckCircleOutlined style={{ fontSize: 48, color: '#52c41a' }} />}
-                description={<Text type="secondary">所有剧集已完整，没有缺集</Text>}
+                description={<Text type="secondary">{t('gaps.allComplete')}</Text>}
               />
             </Card>
           )}
@@ -154,7 +155,7 @@ export const Gaps = () => {
         <Card size="small">
           <Empty
             image={<AlertOutlined style={{ fontSize: 48, color: '#d9d9d9' }} />}
-            description={<Text type="secondary">点击「扫描缺集」开始比对 Emby 库与 TMDB 数据</Text>}
+            description={<Text type="secondary">{t('gaps.emptyHint')}</Text>}
           />
         </Card>
       )}

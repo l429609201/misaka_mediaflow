@@ -10,11 +10,12 @@ import {
   CalendarOutlined, CheckCircleOutlined, CloseCircleOutlined,
   ReloadOutlined, GlobalOutlined,
 } from '@ant-design/icons'
+import { useTranslation } from 'react-i18next'
 import { calendarApi } from '@/apis'
 
 const { Text, Title } = Typography
 
-function ShowCard({ show }) {
+function ShowCard({ show, t }) {
   return (
     <Card
       size="small"
@@ -35,8 +36,8 @@ function ShowCard({ show }) {
             {show.name}
           </Text>
           {show.in_library
-            ? <Tag color="success" style={{ fontSize: 10, margin: 0 }}>已入库</Tag>
-            : <Tag style={{ fontSize: 10, margin: 0 }}>未入库</Tag>
+            ? <Tag color="success" style={{ fontSize: 10, margin: 0 }}>{t('calendar.inLibrary')}</Tag>
+            : <Tag style={{ fontSize: 10, margin: 0 }}>{t('calendar.notInLibrary')}</Tag>
           }
         </div>
         {show.original_name !== show.name && (
@@ -72,6 +73,7 @@ function ShowCard({ show }) {
 }
 
 export const Calendar = () => {
+  const { t } = useTranslation()
   const [loading, setLoading] = useState(true)
   const [data, setData] = useState(null)
 
@@ -94,20 +96,20 @@ export const Calendar = () => {
     <div style={{ padding: 24 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
         <Title level={4} style={{ margin: 0 }}>
-          <Space><CalendarOutlined />追剧日历</Space>
+          <Space><CalendarOutlined />{t('calendar.title')}</Space>
         </Title>
         <Space>
           {data?.date && <Text type="secondary">{data.date}</Text>}
-          <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>刷新</Button>
+          <Button icon={<ReloadOutlined />} onClick={fetchData} loading={loading}>{t('calendar.refresh')}</Button>
         </Space>
       </div>
 
       {loading ? (
         <div style={{ textAlign: 'center', padding: 80 }}>
-          <Spin size="large" tip="加载中..." />
+          <Spin size="large" tip={t('calendar.loading')} />
         </div>
       ) : !data || shows.length === 0 ? (
-        <Empty description="暂无数据" />
+        <Empty description={t('calendar.noData')} />
       ) : (
         <>
           {/* 统计 */}
@@ -115,14 +117,14 @@ export const Calendar = () => {
             <Col xs={8}>
               <Card size="small" style={{ borderTop: '3px solid #6366f1', textAlign: 'center' }}>
                 <div style={{ fontSize: 28, fontWeight: 700, color: '#6366f1' }}>{shows.length}</div>
-                <Text type="secondary" style={{ fontSize: 11 }}>今日更新</Text>
+                <Text type="secondary" style={{ fontSize: 11 }}>{t('calendar.todayUpdate')}</Text>
               </Card>
             </Col>
             <Col xs={8}>
               <Card size="small" style={{ borderTop: '3px solid #10b981', textAlign: 'center' }}>
                 <div style={{ fontSize: 28, fontWeight: 700, color: '#10b981' }}>{inLib.length}</div>
                 <Text type="secondary" style={{ fontSize: 11 }}>
-                  <CheckCircleOutlined /> 已入库
+                  <CheckCircleOutlined /> {t('calendar.inLibrary')}
                 </Text>
               </Card>
             </Col>
@@ -130,7 +132,7 @@ export const Calendar = () => {
               <Card size="small" style={{ borderTop: '3px solid #ef4444', textAlign: 'center' }}>
                 <div style={{ fontSize: 28, fontWeight: 700, color: '#ef4444' }}>{notInLib.length}</div>
                 <Text type="secondary" style={{ fontSize: 11 }}>
-                  <CloseCircleOutlined /> 未入库
+                  <CloseCircleOutlined /> {t('calendar.notInLibrary')}
                 </Text>
               </Card>
             </Col>
@@ -138,12 +140,12 @@ export const Calendar = () => {
 
           {/* 已入库 */}
           {inLib.length > 0 && (
-            <Card title={<Space><CheckCircleOutlined style={{ color: '#52c41a' }} />已入库更新 <Badge count={inLib.length} style={{ backgroundColor: '#52c41a' }} /></Space>}
+            <Card title={<Space><CheckCircleOutlined style={{ color: '#52c41a' }} />{t('calendar.inLibUpdate')} <Badge count={inLib.length} style={{ backgroundColor: '#52c41a' }} /></Space>}
               size="small" style={{ marginBottom: 16 }}>
               <Row gutter={[8, 8]}>
                 {inLib.map(s => (
                   <Col xs={12} sm={8} md={6} lg={4} key={s.tmdb_id}>
-                    <ShowCard show={s} />
+                    <ShowCard show={s} t={t} />
                   </Col>
                 ))}
               </Row>
@@ -152,12 +154,12 @@ export const Calendar = () => {
 
           {/* 未入库 */}
           {notInLib.length > 0 && (
-            <Card title={<Space><GlobalOutlined />未入库热播 <Badge count={notInLib.length} /></Space>}
+            <Card title={<Space><GlobalOutlined />{t('calendar.notInLibHot')} <Badge count={notInLib.length} /></Space>}
               size="small">
               <Row gutter={[8, 8]}>
                 {notInLib.map(s => (
                   <Col xs={12} sm={8} md={6} lg={4} key={s.tmdb_id}>
-                    <ShowCard show={s} />
+                    <ShowCard show={s} t={t} />
                   </Col>
                 ))}
               </Row>

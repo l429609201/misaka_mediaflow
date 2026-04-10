@@ -62,6 +62,8 @@
     "realtimeSubtitle": "Realtime Subtitle Subsetting",
     "classify": "Organize & Scrape",
     "tasks": "Task Center",
+    "gaps": "Gap Manager",
+    "calendar": "TV Calendar",
     "settings": "Settings"
   },
   "login": {
@@ -587,6 +589,58 @@
     "notifyTestSuccess": "Test notification sent",
     "notifyTestFail": "Failed to send, please check your config",
     "notifySaved": "Notification config saved"
+  },
+  "gaps": {
+    "title": "Gap Manager",
+    "scan": "Scan Gaps",
+    "scanning": "Scanning Emby library and comparing with TMDB, please wait...",
+    "scanDone": "Scan complete: {{series}} series, {{gaps}} with gaps",
+    "scanFail": "Scan failed",
+    "totalSeries": "Total Series",
+    "hasGaps": "Has Gaps",
+    "complete": "Complete",
+    "gapList": "Gap List",
+    "allComplete": "All series are complete, no gaps found",
+    "emptyHint": "Click \"Scan Gaps\" to compare Emby library with TMDB data",
+    "seasonMissing": "S{{season}} missing {{count}} ep"
+  },
+  "calendar": {
+    "title": "TV Calendar",
+    "refresh": "Refresh",
+    "loading": "Loading...",
+    "noData": "No data",
+    "todayUpdate": "Today's Updates",
+    "inLibrary": "In Library",
+    "notInLibrary": "Not in Library",
+    "inLibUpdate": "In Library Updates",
+    "notInLibHot": "Trending (Not in Library)"
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "movies": "Movies",
+    "series": "Series",
+    "episodes": "Episodes",
+    "strmFiles": "STRM Files",
+    "playing": "Now Playing",
+    "activeConn": "Active Connections",
+    "playMethod": "Play Method",
+    "clientDist": "Client Distribution",
+    "sysInfo": "System Info",
+    "version": "Version",
+    "timezone": "Timezone",
+    "time": "Time",
+    "mediaServer": "Media Server",
+    "connected": "Connected",
+    "disconnected": "Disconnected",
+    "activeSessions": "Active Sessions",
+    "noSessions": "No active sessions",
+    "paused": "Paused",
+    "playingStatus": "Playing",
+    "transcode": "Transcode",
+    "directPlay": "Direct Play",
+    "idle": "Idle",
+    "noPlay": "No playback",
+    "noConn": "No connections"
   }
 }
 

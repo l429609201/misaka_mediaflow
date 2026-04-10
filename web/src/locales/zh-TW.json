@@ -62,6 +62,8 @@
     "realtimeSubtitle": "即時字幕子集化",
     "classify": "整理分類刮削",
     "tasks": "任務中心",
+    "gaps": "缺集管理",
+    "calendar": "追劇日曆",
     "settings": "系統設定"
   },
   "login": {
@@ -597,6 +599,58 @@
     "notifyTestSuccess": "測試通知已發送",
     "notifyTestFail": "發送失敗，請檢查設定",
     "notifySaved": "通知設定已儲存"
+  },
+  "gaps": {
+    "title": "缺集管理",
+    "scan": "掃描缺集",
+    "scanning": "正在掃描 Emby 庫並與 TMDB 比對，請稍候...",
+    "scanDone": "掃描完成: {{series}} 部劇集, {{gaps}} 部有缺集",
+    "scanFail": "掃描失敗",
+    "totalSeries": "掃描劇集",
+    "hasGaps": "有缺集",
+    "complete": "完整",
+    "gapList": "缺集列表",
+    "allComplete": "所有劇集已完整，沒有缺集",
+    "emptyHint": "點擊「掃描缺集」開始比對 Emby 庫與 TMDB 數據",
+    "seasonMissing": "S{{season}} 缺 {{count}} 集"
+  },
+  "calendar": {
+    "title": "追劇日曆",
+    "refresh": "重新整理",
+    "loading": "載入中...",
+    "noData": "暫無資料",
+    "todayUpdate": "今日更新",
+    "inLibrary": "已入庫",
+    "notInLibrary": "未入庫",
+    "inLibUpdate": "已入庫更新",
+    "notInLibHot": "未入庫熱播"
+  },
+  "dashboard": {
+    "title": "儀表板",
+    "movies": "電影",
+    "series": "劇集",
+    "episodes": "單集",
+    "strmFiles": "STRM 檔案",
+    "playing": "正在播放",
+    "activeConn": "活躍連線",
+    "playMethod": "播放方式",
+    "clientDist": "用戶端分佈",
+    "sysInfo": "系統資訊",
+    "version": "版本",
+    "timezone": "時區",
+    "time": "時間",
+    "mediaServer": "媒體伺服器",
+    "connected": "已連線",
+    "disconnected": "未連線",
+    "activeSessions": "活躍會話",
+    "noSessions": "目前沒有活躍會話",
+    "paused": "已暫停",
+    "playingStatus": "播放中",
+    "transcode": "轉碼",
+    "directPlay": "直播",
+    "idle": "閒置",
+    "noPlay": "無播放",
+    "noConn": "無連線"
   }
 }
 
