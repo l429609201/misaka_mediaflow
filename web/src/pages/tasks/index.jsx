@@ -1,20 +1,22 @@
  // web/src/pages/tasks/index.jsx
  // 任务中心 — Tab1=任务历史 Tab2=工作流
- import { useState, useEffect, useRef, useCallback } from 'react'
+ import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react'
  import {
    Card, Table, Tag, Button, Space, Typography, Progress, Tabs,
    Tooltip, Popconfirm, message, Badge, Select, Empty, Input,
-   Statistic, Row, Col, Modal, List, Descriptions,
+   Statistic, Row, Col, Modal, List, Spin,
  } from 'antd'
  import {
    ReloadOutlined, DeleteOutlined, StopOutlined,
    ThunderboltOutlined, ClockCircleOutlined, CheckCircleOutlined,
    CloseCircleOutlined, SyncOutlined, ClearOutlined, ScissorOutlined,
    PlusOutlined, PlayCircleOutlined, EditOutlined, ApartmentOutlined,
-   UnorderedListOutlined,
+   UnorderedListOutlined, SaveOutlined, ArrowLeftOutlined,
  } from '@ant-design/icons'
  import { useTranslation } from 'react-i18next'
  import { tasksApi, workflowApi } from '@/apis/index.js'
+
+ const WorkflowEditor = lazy(() => import('@/components/WorkflowEditor.jsx'))
  
  const { Text, Title } = Typography
  
@@ -275,8 +277,8 @@
    const { t } = useTranslation()
    const [workflows, setWorkflows] = useState([])
    const [loading, setLoading] = useState(false)
-   const [editModal, setEditModal] = useState(false)
-   const [editData, setEditData] = useState(null)
+   const [editData, setEditData] = useState(null)  // null=列表模式, object=编辑模式
+   const [editorData, setEditorData] = useState({ nodes: [], edges: [] })
    const [executions, setExecutions] = useState([])
    const [nodeTypes, setNodeTypes] = useState([])
 
@@ -309,37 +311,46 @@
      fetchNodeTypes()
    }, [fetchWorkflows, fetchExecutions, fetchNodeTypes])
 
+   // 打开编辑器 — 新建
    const handleCreate = () => {
-     setEditData({
+     const data = {
        name: t('workflow.newWorkflow', '新工作流'),
        description: '',
        nodes: [
-         { id: 'start-1', type: 'default', position: { x: 250, y: 50 },
-           data: { type: 'start', label: t('workflow.nodeStart', '开始'), params: {} } },
-         { id: 'end-1', type: 'default', position: { x: 250, y: 300 },
-           data: { type: 'end', label: t('workflow.nodeEnd', '结束'), params: {} } },
+         { id: 'start-1', type: 'workflowNode', position: { x: 300, y: 50 },
+           data: { type: 'start', label: '开始', color: '#52c41a', params: {} } },
+         { id: 'end-1', type: 'workflowNode', position: { x: 300, y: 400 },
+           data: { type: 'end', label: '结束', color: '#ff4d4f', params: {} } },
        ],
        edges: [{ id: 'e-start-end', source: 'start-1', target: 'end-1' }],
-       enabled: 1,
-       cron: '',
-     })
-     setEditModal(true)
-   }
-
-   const handleEdit = (wf) => {
-     const data = { ...wf }
-     try { data.nodes = typeof data.nodes === 'string' ? JSON.parse(data.nodes) : data.nodes } catch { data.nodes = [] }
-     try { data.edges = typeof data.edges === 'string' ? JSON.parse(data.edges) : data.edges } catch { data.edges = [] }
+       enabled: 1, cron: '',
+     }
      setEditData(data)
-     setEditModal(true)
+     setEditorData({ nodes: data.nodes, edges: data.edges })
    }
 
+   // 打开编辑器 — 编辑已有
+   const handleEdit = (wf) => {
+     const d = { ...wf }
+     try { d.nodes = typeof d.nodes === 'string' ? JSON.parse(d.nodes) : d.nodes } catch { d.nodes = [] }
+     try { d.edges = typeof d.edges === 'string' ? JSON.parse(d.edges) : d.edges } catch { d.edges = [] }
+     // 确保所有节点 type 为 workflowNode
+     d.nodes = (d.nodes || []).map(n => {
+       const info = nodeTypes.find(nt => nt.type === n.data?.type) || {}
+       return { ...n, type: 'workflowNode', data: { ...n.data, color: info.color || n.data?.color || '#1677ff' } }
+     })
+     setEditData(d)
+     setEditorData({ nodes: d.nodes, edges: d.edges || [] })
+   }
+
+   // 保存
    const handleSave = async () => {
      if (!editData) return
+     const payload = { ...editData, nodes: editorData.nodes, edges: editorData.edges }
      try {
-       await workflowApi.save(editData)
+       await workflowApi.save(payload)
        message.success(t('common.success'))
-       setEditModal(false)
+       setEditData(null)
        fetchWorkflows()
      } catch { message.error(t('common.failed')) }
    }
@@ -368,9 +379,54 @@
      running: 'processing', completed: 'success', failed: 'error', cancelled: 'warning',
    }
 
+   // ── 编辑模式：全屏编辑器 ─────────────────────────────────────────
+   if (editData) {
+     return (
+       <div style={{ height: 'calc(100vh - 200px)', display: 'flex', flexDirection: 'column' }}>
+         {/* 顶部工具栏 */}
+         <div style={{
+           padding: '8px 16px', display: 'flex', justifyContent: 'space-between',
+           alignItems: 'center', borderBottom: '1px solid #f0f0f0', flexShrink: 0,
+         }}>
+           <Space>
+             <Button icon={<ArrowLeftOutlined />} onClick={() => setEditData(null)}>
+               {t('common.back')}
+             </Button>
+             <Input
+               value={editData.name}
+               onChange={e => setEditData(prev => ({ ...prev, name: e.target.value }))}
+               style={{ width: 200, fontWeight: 600 }}
+               placeholder={t('workflow.name', '工作流名称')}
+             />
+             <Input
+               value={editData.cron}
+               onChange={e => setEditData(prev => ({ ...prev, cron: e.target.value }))}
+               style={{ width: 180 }}
+               placeholder="Cron（留空=手动）"
+             />
+           </Space>
+           <Button type="primary" icon={<SaveOutlined />} onClick={handleSave}>
+             {t('common.save')}
+           </Button>
+         </div>
+         {/* React Flow 编辑器 */}
+         <div style={{ flex: 1 }}>
+           <Suspense fallback={<div style={{ display:'flex',justifyContent:'center',alignItems:'center',height:'100%' }}><Spin size="large" /></div>}>
+             <WorkflowEditor
+               initialNodes={editorData.nodes}
+               initialEdges={editorData.edges}
+               nodeTypes={nodeTypes}
+               onChange={({ nodes, edges }) => setEditorData({ nodes, edges })}
+             />
+           </Suspense>
+         </div>
+       </div>
+     )
+   }
+
+   // ── 列表模式 ─────────────────────────────────────────────────────
    return (
      <div>
-       {/* 工作流列表 */}
        <Card
          title={<Space><ApartmentOutlined /><span>{t('workflow.title', '工作流')}</span></Space>}
          extra={<Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>{t('workflow.create', '新建工作流')}</Button>}
@@ -402,7 +458,6 @@
          />
        </Card>
 
-       {/* 执行记录 */}
        <Card title={t('workflow.execHistory', '执行记录')} size="small"
          extra={<Button icon={<ReloadOutlined />} size="small" onClick={fetchExecutions}>{t('common.refresh')}</Button>}>
          <Table
@@ -424,88 +479,6 @@
            ]}
          />
        </Card>
-
-       {/* 工作流编辑弹窗 */}
-       <Modal
-         title={editData?.id ? t('workflow.editTitle', '编辑工作流') : t('workflow.createTitle', '新建工作流')}
-         open={editModal} onCancel={() => setEditModal(false)}
-         onOk={handleSave} width={700} destroyOnClose
-       >
-         {editData && (
-           <div>
-             <Space direction="vertical" style={{ width: '100%' }} size="middle">
-               <div>
-                 <Typography.Text strong>{t('workflow.name', '名称')}</Typography.Text>
-                 <Input value={editData.name} onChange={e => setEditData({ ...editData, name: e.target.value })}
-                   style={{ marginTop: 4 }} />
-               </div>
-               <div>
-                 <Typography.Text strong>{t('workflow.description', '描述')}</Typography.Text>
-                 <Input.TextArea value={editData.description}
-                   onChange={e => setEditData({ ...editData, description: e.target.value })}
-                   style={{ marginTop: 4 }} rows={2} />
-               </div>
-               <div>
-                 <Typography.Text strong>{t('workflow.cron', '定时表达式')}</Typography.Text>
-                 <Input value={editData.cron} placeholder="0 3 * * *（留空=手动触发）"
-                   onChange={e => setEditData({ ...editData, cron: e.target.value })}
-                   style={{ marginTop: 4 }} />
-               </div>
-               {/* 节点编排 — 简化版列表 */}
-               <div>
-                 <Typography.Text strong>{t('workflow.nodes', '执行节点')}</Typography.Text>
-                 <div style={{ marginTop: 8 }}>
-                   {(editData.nodes || []).map((node, idx) => (
-                     <Tag key={node.id} color={nodeTypes.find(n => n.type === node.data?.type)?.color || '#999'}
-                       closable={!['start', 'end'].includes(node.data?.type)}
-                       onClose={() => {
-                         const newNodes = editData.nodes.filter((_, i) => i !== idx)
-                         const newEdges = editData.edges.filter(e => e.source !== node.id && e.target !== node.id)
-                         setEditData({ ...editData, nodes: newNodes, edges: newEdges })
-                       }}
-                       style={{ marginBottom: 4 }}
-                     >
-                       {nodeTypes.find(n => n.type === node.data?.type)?.label || node.data?.type || '?'}
-                     </Tag>
-                   ))}
-                 </div>
-                 <Select
-                   placeholder={t('workflow.addNode', '添加节点')}
-                   style={{ width: 200, marginTop: 8 }}
-                   onChange={(type) => {
-                     const info = nodeTypes.find(n => n.type === type) || {}
-                     const newId = `${type}-${Date.now()}`
-                     const endNode = editData.nodes.find(n => n.data?.type === 'end')
-                     const lastNonEnd = [...editData.nodes].reverse().find(n => n.data?.type !== 'end')
-                     const newNode = {
-                       id: newId, type: 'default',
-                       position: { x: 250, y: (editData.nodes.length) * 80 + 50 },
-                       data: { type, label: info.label || type, params: {} },
-                     }
-                     // 插入到 end 之前
-                     const nodes = editData.nodes.filter(n => n.data?.type !== 'end')
-                     nodes.push(newNode)
-                     if (endNode) nodes.push(endNode)
-                     // 重建边
-                     const edges = []
-                     for (let i = 0; i < nodes.length - 1; i++) {
-                       edges.push({ id: `e-${nodes[i].id}-${nodes[i+1].id}`, source: nodes[i].id, target: nodes[i+1].id })
-                     }
-                     setEditData({ ...editData, nodes, edges })
-                   }}
-                   value={null}
-                 >
-                   {nodeTypes.filter(n => !['start', 'end'].includes(n.type)).map(n => (
-                     <Select.Option key={n.type} value={n.type}>
-                       <Space><span style={{ color: n.color }}>●</span>{n.label}</Space>
-                     </Select.Option>
-                   ))}
-                 </Select>
-               </div>
-             </Space>
-           </div>
-         )}
-       </Modal>
      </div>
    )
  }
