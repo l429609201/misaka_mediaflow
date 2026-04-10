@@ -48,7 +48,8 @@ class EmbyAdapter(MediaServerAdapter):
         params = {
             "ParentId": library_id,
             "Recursive": "true",
-            "Fields": "Path,MediaSources,ProviderIds",
+            "Fields": "Path,MediaSources,ProviderIds,IndexNumber,ParentIndexNumber",
+            "Limit": "10000",
         }
         if item_type:
             params["IncludeItemTypes"] = item_type

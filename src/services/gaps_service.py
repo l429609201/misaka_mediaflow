@@ -53,19 +53,25 @@ class GapsService:
 
         gaps = []
         scanned = 0
+        skipped_no_tmdb = 0
         for series in series_list:
             try:
                 result = await self._check_series(adapter, tmdb, series)
-                if result and result.get("missing"):
+                if result is None:
+                    # 可能无 TMDB ID 或无缺集
+                    if not (series.get("ProviderIds", {}).get("Tmdb") or series.get("ProviderIds", {}).get("tmdb")):
+                        skipped_no_tmdb += 1
+                elif result.get("missing"):
                     gaps.append(result)
                 scanned += 1
             except Exception as e:
                 logger.warning("[Gaps] 检查剧集失败 %s: %s", series.get("Name", ""), e)
 
-        logger.info("[Gaps] 扫描完成: %d 部剧集, %d 部有缺集", scanned, len(gaps))
+        logger.info("[Gaps] 扫描完成: %d 部剧集, %d 部有缺集, %d 部无TMDB ID跳过", scanned, len(gaps), skipped_no_tmdb)
         return {
             "total_series": scanned,
             "gaps_count": len(gaps),
+            "skipped_no_tmdb": skipped_no_tmdb,
             "gaps": gaps,
         }
 
@@ -84,6 +90,7 @@ class GapsService:
         # 从 TMDB 获取完整季/集信息
         tv_detail = await tmdb.get_tv(tmdb_id)
         if not tv_detail:
+            logger.debug("[Gaps] TMDB 详情为空, 跳过: %s (tmdb=%d)", series_name, tmdb_id)
             return None
 
         # 获取 Emby 中这个系列的所有集
@@ -94,6 +101,8 @@ class GapsService:
             e = ep.get("IndexNumber", 0)        # episode
             if s and e:
                 emby_ep_set.add((s, e))
+
+        logger.debug("[Gaps] %s: Emby有%d集, TMDB有%d季", series_name, len(emby_ep_set), len(tv_detail.get("seasons", [])))
 
         # 对比 TMDB 的每一季
         missing = []
