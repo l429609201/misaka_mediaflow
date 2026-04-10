@@ -121,7 +121,7 @@ class P115StrmSyncService:
         if strm_root:
             scan_paths = [Path(strm_root)]
         else:
-            sync_pairs = await resolve_sync_pairs(config)
+            sync_pairs = resolve_sync_pairs(config, "full")
             scan_paths = [Path(pair["strm_path"]) for pair in sync_pairs if pair.get("strm_path")]
 
         if not scan_paths:
@@ -186,7 +186,7 @@ class P115StrmSyncService:
         if strm_root:
             scan_paths = [Path(strm_root)]
         else:
-            sync_pairs = await resolve_sync_pairs(config)
+            sync_pairs = resolve_sync_pairs(config, "full")
             scan_paths = [Path(pair["strm_path"]) for pair in sync_pairs if pair.get("strm_path")]
 
         if not scan_paths:
@@ -264,7 +264,7 @@ class P115StrmSyncService:
         if strm_root:
             scan_paths = [Path(strm_root)]
         else:
-            sync_pairs = await resolve_sync_pairs(config)
+            sync_pairs = resolve_sync_pairs(config, "full")
             scan_paths = [Path(pair["strm_path"]) for pair in sync_pairs if pair.get("strm_path")]
 
         if not scan_paths:
