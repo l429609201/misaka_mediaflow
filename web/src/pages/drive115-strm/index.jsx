@@ -4,11 +4,11 @@
  
  import { useCallback, useEffect, useRef, useState } from 'react'
  import {
-   Alert, Button, Card, Col, Divider, Form, Input, Row,
+   Alert, Button, Card, Col, Form, Input, Row,
    Select, Space, Switch, Tag, Tooltip, Typography, message, theme,
  } from 'antd'
  import {
-   CodeOutlined, FolderOpenOutlined, NodeIndexOutlined,
+   CodeOutlined, FolderOpenOutlined,
    SaveOutlined, SyncOutlined,
  } from '@ant-design/icons'
  import { useTranslation } from 'react-i18next'
@@ -49,9 +49,6 @@
    const SYNC_DEFAULTS = { use_custom: false, cloud_path: '', strm_path: '' }
    const [fullSyncCfg,     setFullSyncCfg]     = useState({ ...SYNC_DEFAULTS })
    const [fullOverwriteMode, setFullOverwriteMode] = useState('skip')
-   const [scrapeEnabled,   setScrapeEnabled]   = useState(false)
-   const [scrapeDownloadImg, setScrapeDownloadImg] = useState(true)
-   const [episodeGroupId,  setEpisodeGroupId]  = useState('')
    const [urlTemplate,     setUrlTemplate]     = useState('')
    const templateRef = useRef(null)
  
@@ -70,11 +67,7 @@
        const cfg = cfgRes.data || {}
        if (cfg.full_sync_cfg)         setFullSyncCfg(c => ({ ...c, ...cfg.full_sync_cfg }))
        if (cfg.full_overwrite_mode)   setFullOverwriteMode(cfg.full_overwrite_mode)
-       if (cfg.enable_scrape         !== undefined) setScrapeEnabled(cfg.enable_scrape)
-       if (cfg.scrape_download_image !== undefined) setScrapeDownloadImg(cfg.scrape_download_image)
-       if (cfg.episode_group_id      !== undefined) setEpisodeGroupId(cfg.episode_group_id)
      } catch { /* ignore */ }
-   }, [])
   const [fullSyncCron, setFullSyncCron] = useState('')
 
   // 在 fetchAll 中恢复 cron
@@ -90,9 +83,6 @@
       const cfg = cfgRes.data || {}
       if (cfg.full_sync_cfg)         setFullSyncCfg(c => ({ ...c, ...cfg.full_sync_cfg }))
       if (cfg.full_overwrite_mode)   setFullOverwriteMode(cfg.full_overwrite_mode)
-      if (cfg.enable_scrape         !== undefined) setScrapeEnabled(cfg.enable_scrape)
-      if (cfg.scrape_download_image !== undefined) setScrapeDownloadImg(cfg.scrape_download_image)
-      if (cfg.episode_group_id      !== undefined) setEpisodeGroupId(cfg.episode_group_id)
       if (cfg.full_sync_cron        !== undefined) setFullSyncCron(cfg.full_sync_cron || '')
     } catch { /* ignore */ }
   }, [])
@@ -114,19 +104,6 @@
      } catch { message.error(t('common.failed')) }
      finally { setStrmSyncing(false) }
    }
- 
-   // ── 增量同步（纯触发，无路径配置）────────────────────────────────────
-   const handleIncSync = async () => {
-     setStrmSyncing(true)
-     try {
-       const r = await p115StrmApi.incSync()
-       r.data?.success
-         ? message.success(t('p115.syncStarted'))
-         : message.warning(r.data?.message || t('p115.syncStartFailed'))
-      setTimeout(fetchAllWithCron, 1500)
-     } catch { message.error(t('common.failed')) }
-     finally { setStrmSyncing(false) }
-   }
 
 
    // ── 保存配置 ─────────────────────────────────────────────────────────
@@ -136,9 +113,6 @@
        await p115StrmApi.saveSyncConfig({
          full_sync_cfg:         fullSyncCfg,
          full_overwrite_mode:   fullOverwriteMode,
-         enable_scrape:         scrapeEnabled,
-         scrape_download_image: scrapeDownloadImg,
-         episode_group_id:      episodeGroupId,
         full_sync_cron:        fullSyncCron.trim(),
        })
        await strmApi.saveUrlTemplate(urlTemplate)
@@ -166,16 +140,15 @@
  
    const strmProgress = strmStatus.progress || {}
    const fullStats    = strmStatus.last_full_sync_stats || {}
-   const incStats     = strmStatus.last_inc_sync_stats  || {}
- 
+
    return (
      <div style={{ padding: 24 }}>
        <Title level={4} style={{ marginBottom: 16 }}>
          <Space><SyncOutlined />{t('menu.drive115Strm')}</Space>
        </Title>
        <Row gutter={[24, 24]}>
- 
-         {/* 左列：全量同步 + 刮削 + 覆盖模式 */}
+
+         {/* 左列：全量同步 + 覆盖模式 */}
          <Col xs={24} lg={12}>
            <Card
              title={<Space><SyncOutlined />{t('p115.strmGeneration')}</Space>}
@@ -245,36 +218,6 @@
                  />
                </Form.Item>
              </Form>
-             {/* 刮削配置 */}
-             <Divider orientation="left" orientationMargin={0} style={{ margin: '4px 0 10px', fontSize: 13, fontWeight: 600 }}>
-               <Space size={6}><NodeIndexOutlined />{t('p115.scrapeTitle')}</Space>
-             </Divider>
-             <div style={{ background: '#f6ffed', border: '1px solid #b7eb8f', borderRadius: 8, padding: '10px 14px', marginBottom: 10 }}>
-               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: scrapeEnabled ? 10 : 0 }}>
-                 <div>
-                   <Text strong style={{ fontSize: 12 }}>{t('p115.scrapeEnabled')}</Text>
-                   <div style={{ fontSize: 11, color: '#888' }}>{t('p115.scrapeEnabledHint')}</div>
-                 </div>
-                 <Switch checked={scrapeEnabled} onChange={setScrapeEnabled} size="small" />
-               </div>
-               {scrapeEnabled && (
-                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                     <Text style={{ fontSize: 12 }}>{t('p115.scrapeParamTitle')}</Text>
-                     <Switch checked={scrapeDownloadImg} onChange={setScrapeDownloadImg} size="small" />
-                   </div>
-                   <div>
-                     <Text style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
-                       {t('p115.scrapeParamSeasonEpisode')}
-                       <Tooltip title={t('p115.scrapeTvFormatHint')}>
-                         <span style={{ marginLeft: 4, color: '#999', cursor: 'help' }}>(?)</span>
-                       </Tooltip>
-                     </Text>
-                     <Input size="small" value={episodeGroupId} onChange={e => setEpisodeGroupId(e.target.value)} allowClear />
-                   </div>
-                 </div>
-               )}
-             </div>
              {/* 覆盖模式 */}
              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#f9f0ff', border: '1px solid #d3adf7', borderRadius: 8, padding: '7px 12px', marginBottom: 12 }}>
                <div>
@@ -316,25 +259,6 @@
                {t('p115.fullSync')}
              </Button>
  
-             <Divider style={{ margin: '4px 0 12px' }} />
- 
-             {/* ── 增量同步（纯触发按钮）── */}
-             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-               <div>
-                 <Text strong style={{ fontSize: 13 }}>{t('p115.incSync')}</Text>
-                 <div style={{ fontSize: 11, color: '#888' }}>
-                   {t('p115.lastIncSync')}：{strmStatus.last_inc_sync
-                     ? new Date(strmStatus.last_inc_sync * 1000).toLocaleString() : '—'}
-                 </div>
-               </div>
-               <Space size={4} wrap>
-                 <StatTag value={incStats.created} label={t('p115.statGenerated')} color="green" />
-                 <StatTag value={incStats.errors}  label={t('p115.statFailed')}    color="red" />
-               </Space>
-             </div>
-             <Button block loading={strmSyncing || strmStatus.running} onClick={handleIncSync}>
-               {t('p115.incSync')}
-             </Button>
            </Card>
          </Col>
  
