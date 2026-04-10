@@ -38,3 +38,21 @@ class MediaServerAdapter(ABC):
         """测试连接"""
         ...
 
+    # ── 仪表盘扩展（子类可选覆盖） ─────────────────────────────────────
+
+    async def get_system_info(self) -> dict:
+        """获取服务器系统信息"""
+        return {}
+
+    async def get_active_sessions(self) -> list[dict]:
+        """获取当前活跃会话（正在播放）"""
+        return []
+
+    async def get_item_counts(self) -> dict:
+        """获取媒体条目统计（电影/剧集/单集总数）"""
+        return {}
+
+    async def get_activity_log(self, limit: int = 30) -> list[dict]:
+        """获取最近活动日志"""
+        return []
+

@@ -76,3 +76,82 @@ class EmbyAdapter(MediaServerAdapter):
         except Exception:
             return False
 
+    # ── 仪表盘扩展 ───────────────────────────────────────────────────
+
+    async def get_system_info(self) -> dict:
+        client = await self._ensure_client()
+        resp = await client.get("/emby/System/Info")
+        return resp.json() if resp.status_code == 200 else {}
+
+    async def get_active_sessions(self) -> list[dict]:
+        client = await self._ensure_client()
+        resp = await client.get("/emby/Sessions")
+        if resp.status_code != 200:
+            return []
+        sessions = resp.json()
+        result = []
+        for s in sessions:
+            now_playing = s.get("NowPlayingItem")
+            result.append({
+                "id": s.get("Id", ""),
+                "user_name": s.get("UserName", ""),
+                "client": s.get("Client", ""),
+                "device_name": s.get("DeviceName", ""),
+                "remote_end_point": s.get("RemoteEndPoint", ""),
+                "is_playing": now_playing is not None,
+                "now_playing": {
+                    "name": now_playing.get("Name", "") if now_playing else "",
+                    "series_name": now_playing.get("SeriesName", "") if now_playing else "",
+                    "type": now_playing.get("Type", "") if now_playing else "",
+                } if now_playing else None,
+                "play_state": {
+                    "position_ticks": s.get("PlayState", {}).get("PositionTicks", 0),
+                    "is_paused": s.get("PlayState", {}).get("IsPaused", False),
+                    "is_muted": s.get("PlayState", {}).get("IsMuted", False),
+                    "play_method": s.get("PlayState", {}).get("PlayMethod", ""),
+                } if now_playing else None,
+                "transcoding_info": {
+                    "is_transcoding": bool(s.get("TranscodingInfo")),
+                    "video_codec": s.get("TranscodingInfo", {}).get("VideoCodec", "") if s.get("TranscodingInfo") else "",
+                    "audio_codec": s.get("TranscodingInfo", {}).get("AudioCodec", "") if s.get("TranscodingInfo") else "",
+                    "completion_pct": s.get("TranscodingInfo", {}).get("CompletionPercentage", 0) if s.get("TranscodingInfo") else 0,
+                } if s.get("TranscodingInfo") else None,
+                "last_activity": s.get("LastActivityDate", ""),
+            })
+        return result
+
+    async def get_item_counts(self) -> dict:
+        client = await self._ensure_client()
+        resp = await client.get("/emby/Items/Counts")
+        if resp.status_code != 200:
+            return {}
+        data = resp.json()
+        return {
+            "movie_count": data.get("MovieCount", 0),
+            "series_count": data.get("SeriesCount", 0),
+            "episode_count": data.get("EpisodeCount", 0),
+            "album_count": data.get("AlbumCount", 0),
+            "song_count": data.get("SongCount", 0),
+            "total": data.get("MovieCount", 0) + data.get("SeriesCount", 0) + data.get("EpisodeCount", 0),
+        }
+
+    async def get_activity_log(self, limit: int = 30) -> list[dict]:
+        client = await self._ensure_client()
+        resp = await client.get("/emby/System/ActivityLog/Entries", params={
+            "StartIndex": 0, "Limit": limit
+        })
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+        return [
+            {
+                "id": e.get("Id", 0),
+                "name": e.get("Name", ""),
+                "type": e.get("Type", ""),
+                "date": e.get("Date", ""),
+                "severity": e.get("Severity", ""),
+                "user_id": e.get("UserId", ""),
+            }
+            for e in data.get("Items", [])
+        ]
+

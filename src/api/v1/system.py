@@ -51,6 +51,58 @@ async def health_check():
     }
 
 
+# ==================== 仪表盘 ====================
+
+@router.get("/dashboard", dependencies=[Depends(verify_token)])
+async def get_dashboard():
+    """全景仪表盘：活跃会话、资源统计、系统信息"""
+    from src.services.media_server_service import media_server_service
+    adapter = await media_server_service.get_adapter()
+
+    # 基础统计
+    from src.db.models import StrmFile
+    async with get_async_session_local() as db:
+        strm_count = (await db.execute(select(func.count()).select_from(StrmFile))).scalar() or 0
+
+    result = {
+        "strm_count": strm_count,
+        "media_server_connected": adapter is not None,
+    }
+
+    if adapter:
+        try:
+            counts = await adapter.get_item_counts()
+            result.update(counts)
+        except Exception:
+            pass
+        try:
+            sessions = await adapter.get_active_sessions()
+            playing = [s for s in sessions if s.get("is_playing")]
+            result["active_sessions"] = sessions
+            result["playing_count"] = len(playing)
+            result["session_count"] = len(sessions)
+        except Exception:
+            result["active_sessions"] = []
+            result["playing_count"] = 0
+            result["session_count"] = 0
+        try:
+            sys_info = await adapter.get_system_info()
+            result["server_name"] = sys_info.get("ServerName", "")
+            result["server_version"] = sys_info.get("Version", "")
+            result["os"] = sys_info.get("OperatingSystemDisplayName", "")
+        except Exception:
+            pass
+    else:
+        result["movie_count"] = 0
+        result["series_count"] = 0
+        result["episode_count"] = 0
+        result["playing_count"] = 0
+        result["session_count"] = 0
+        result["active_sessions"] = []
+
+    return result
+
+
 # ==================== 系统配置 ====================
 
 @router.get("/config", dependencies=[Depends(verify_token)])
