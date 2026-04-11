@@ -309,6 +309,13 @@ class TMDBProvider(MetadataProvider):
             params={"append_to_response": "credits,external_ids,content_ratings"},
         )
 
+    async def get_tv_seasons(self, media_id: int | str) -> dict | None:
+        """实现 base 的标准化接口，直接代理 get_tv"""
+        try:
+            return await self.get_tv(int(media_id))
+        except Exception:
+            return None
+
     async def search_movie(self, query: str, year: int = 0) -> list[dict]:
         """搜索电影，返回原始 results 列表（刮削模块自行解析）"""
         params: dict = {"query": query}

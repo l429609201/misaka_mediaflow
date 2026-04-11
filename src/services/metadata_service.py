@@ -134,6 +134,66 @@ class MetadataService:
         """检查指定 Provider 是否已配置且可用。"""
         return (await self.get_provider(name)) is not None
 
+    async def get_enabled_provider_names(self) -> list[str]:
+        """获取所有已启用的搜索源名称列表（按 discover 顺序）"""
+        from src.adapters.metadata.factory import MetadataFactory
+        all_providers = MetadataFactory.list_providers()
+
+        async with get_async_session_local() as db:
+            row = await db.execute(
+                select(SystemConfig).where(SystemConfig.key == "search_source_enabled")
+            )
+            cfg = row.scalars().first()
+            enabled_map = {}
+            if cfg and cfg.value:
+                enabled_map = json.loads(cfg.value)
+
+        names = []
+        for p in all_providers:
+            name = p["name"]
+            if enabled_map.get(name, True):  # 默认启用
+                names.append(name)
+        return names
+
+    async def get_tv_seasons_dynamic(self, provider_ids: dict) -> tuple[dict | None, str]:
+        """
+        根据已启用的搜索源动态获取剧集季/集信息。
+
+        按优先级尝试各 Provider 的 get_tv_seasons()，返回第一个有结果的。
+
+        Args:
+            provider_ids: {"tmdb": 12345, "tvdb": 67890, "bgm": 111, ...}
+
+        Returns:
+            (tv_detail_dict, provider_name) 或 (None, "")
+        """
+        # provider name → provider_ids 中对应的 ID key
+        id_mapping = {
+            "tmdb": "tmdb",
+            "tvdb": "tvdb",
+            "bangumi": "bgm",
+        }
+
+        enabled = await self.get_enabled_provider_names()
+        for pname in enabled:
+            id_key = id_mapping.get(pname)
+            if not id_key:
+                continue
+            media_id = provider_ids.get(id_key)
+            if not media_id:
+                continue
+            provider = await self.get_provider(pname)
+            if not provider:
+                continue
+            try:
+                result = await provider.get_tv_seasons(media_id)
+                if result and result.get("seasons"):
+                    logger.info("[MetadataService] get_tv_seasons 成功: %s (id=%s)", pname, media_id)
+                    return result, pname
+            except Exception as e:
+                logger.debug("[MetadataService] %s.get_tv_seasons 失败: %s", pname, e)
+        return None, ""
+
     def invalidate_cache(self, name: str = None) -> None:
         """
         清除 Provider 实例缓存（配置更新后调用）。

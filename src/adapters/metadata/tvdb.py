@@ -125,3 +125,34 @@ class TVDBProvider(MetadataProvider):
             return bool(token)
         except Exception:
             return False
+
+    async def get_tv_seasons(self, media_id: int | str) -> dict | None:
+        """获取 TVDB 剧集的季/集信息"""
+        try:
+            data = await self._get(f"/series/{media_id}/extended", params={"meta": "episodes"})
+            item = data.get("data", {})
+            if not item:
+                return None
+            seasons_raw = item.get("seasons", [])
+            seasons = []
+            for s in seasons_raw:
+                stype = s.get("type", {}).get("type", "")
+                if stype == "official":
+                    seasons.append({
+                        "season_number": s.get("number", 0),
+                        "episode_count": len(s.get("episodes", [])),
+                        "name": s.get("name", ""),
+                        "overview": "",
+                        "poster_path": s.get("image", ""),
+                        "air_date": "",
+                    })
+            return {
+                "name": item.get("name", ""),
+                "overview": item.get("overview", ""),
+                "poster_path": item.get("image", ""),
+                "status": item.get("status", {}).get("name", ""),
+                "seasons": seasons,
+            }
+        except Exception as e:
+            logger.warning("[TVDB] get_tv_seasons 失败: %s", e)
+            return None

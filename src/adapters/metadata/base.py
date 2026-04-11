@@ -114,6 +114,39 @@ class MetadataProvider(ABC):
 
     # ── 可选方法（子类按需覆盖）──
 
+    async def get_tv_seasons(self, media_id: int | str) -> dict | None:
+        """
+        获取剧集的季/集信息，用于缺集比对等场景。
+
+        返回标准化格式:
+        {
+            "name": "剧名",
+            "overview": "简介",
+            "poster_path": "/xxx.jpg",
+            "backdrop_path": "/xxx.jpg",
+            "status": "Ended",
+            "vote_average": 8.5,
+            "vote_count": 100,
+            "original_name": "原始名",
+            "original_language": "ja",
+            "origin_country": ["JP"],
+            "genres": [{"name": "动画"}],
+            "seasons": [
+                {
+                    "season_number": 1,
+                    "episode_count": 12,
+                    "name": "第1季",
+                    "overview": "",
+                    "poster_path": "",
+                    "air_date": "2020-01-01",
+                },
+            ],
+        }
+
+        子类不支持则返回 None（默认行为）。
+        """
+        return None
+
     async def get_images(self, media_id: int | str, media_type: str = "movie") -> dict:
         """获取图片（海报、背景等），默认返回空"""
         return {"posters": [], "backdrops": []}

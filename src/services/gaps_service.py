@@ -153,29 +153,37 @@ class GapsService:
         logger.info("[Gaps] 阶段1完成: 同步 %d, 跳过 %d", synced, skipped)
         return {"synced": synced, "skipped_no_tmdb": skipped, "total": len(all_series)}
 
-    # ── 阶段2: 从 DB 读取 → 比对 TMDB ────────────────────────────────
+    # ── 阶段2: 从 DB 读取 → 动态选择搜索源比对 ──────────────────────
 
     async def scan_gaps(self, library_id: str = "") -> dict:
-        """先同步 Emby→DB，再从 DB 读取比对 TMDB"""
+        """先同步 Emby→DB，再从 DB 读取，动态选择已启用的搜索源比对"""
         from src.services.metadata_service import metadata_service
 
         sync_result = await self.sync_emby(library_id)
         if sync_result.get("error"):
             return sync_result
 
-        tmdb = await metadata_service.get_provider("tmdb")
-        if not tmdb:
-            return {"error": "TMDB 未配置"}
-
-        logger.info("[Gaps] 阶段2: 从 DB 读取比对 TMDB...")
+        logger.info("[Gaps] 阶段2: 从 DB 读取，动态选择搜索源比对...")
         async with get_async_session_local() as db:
             series_rows = (await db.execute(
-                select(MetaSeries).where(MetaSeries.tmdb_id > 0, MetaSeries.media_type == "Series")
+                select(MetaSeries).where(MetaSeries.media_type == "Series")
             )).scalars().all()
 
         gaps = []
         scanned = 0
+        skipped_no_id = 0
         for s_row in series_rows:
+            # 构建该剧的 provider_ids
+            provider_ids = {}
+            if s_row.tmdb_id:
+                provider_ids["tmdb"] = s_row.tmdb_id
+            if s_row.tvdb_id:
+                provider_ids["tvdb"] = s_row.tvdb_id
+
+            if not provider_ids:
+                skipped_no_id += 1
+                continue
+
             try:
                 # 从 DB 读取该剧已有集数
                 async with get_async_session_local() as db:
@@ -187,8 +195,14 @@ class GapsService:
                     )).scalars().all()
                 emby_ep_set = {(ep.season_number, ep.episode_number) for ep in ep_rows}
 
-                result = await self._compare_with_tmdb(
-                    tmdb, s_row.title, s_row.tmdb_id, emby_ep_set, s_row.id,
+                # 动态获取 TV 季/集信息
+                tv_detail, used_provider = await metadata_service.get_tv_seasons_dynamic(provider_ids)
+                if not tv_detail:
+                    scanned += 1
+                    continue
+
+                result = await self._compare_with_provider(
+                    tv_detail, used_provider, s_row.title, emby_ep_set, s_row.id,
                 )
                 scanned += 1
                 if result and result.get("missing"):
@@ -197,39 +211,41 @@ class GapsService:
                 logger.warning("[Gaps] 比对失败 %s: %s", s_row.title, e)
 
         logger.info("[Gaps] 完成: %d 部, %d 部缺集, 跳过 %d",
-                    scanned, len(gaps), sync_result.get("skipped_no_tmdb", 0))
+                    scanned, len(gaps), skipped_no_id)
         return {
             "total_series": scanned,
             "gaps_count": len(gaps),
-            "skipped_no_tmdb": sync_result.get("skipped_no_tmdb", 0),
+            "skipped_no_tmdb": skipped_no_id,
             "gaps": gaps,
         }
 
-    # ── TMDB 比对 + 将 TMDB 信息回写 DB ──────────────────────────────
+    # ── 动态 Provider 比对 + 回写 DB ──────────────────────────────
 
-    async def _compare_with_tmdb(self, tmdb, series_name: str, tmdb_id: int,
-                                  emby_ep_set: set, series_pk: int = 0) -> Optional[dict]:
-        """与 TMDB 比对 + 回写 TMDB 元信息到 DB"""
-        tv_detail = await tmdb.get_tv(tmdb_id)
-        if not tv_detail:
-            return None
+    async def _compare_with_provider(self, tv_detail: dict, provider_name: str,
+                                      series_name: str, emby_ep_set: set,
+                                      series_pk: int = 0) -> Optional[dict]:
+        """与搜索源返回的 tv_detail 比对 + 回写元信息到 DB"""
 
-        # 回写 TMDB 信息到 meta_series
+        # 回写搜索源信息到 meta_series
         if series_pk:
             async with get_async_session_local() as db:
                 s_row = await db.get(MetaSeries, series_pk)
                 if s_row:
-                    s_row.original_title = tv_detail.get("original_name", "")
+                    s_row.original_title = tv_detail.get("original_name", "") or s_row.original_title
                     s_row.overview = tv_detail.get("overview", "") or s_row.overview
-                    s_row.poster_path = tv_detail.get("poster_path", "")
-                    s_row.backdrop_path = tv_detail.get("backdrop_path", "")
-                    s_row.status = tv_detail.get("status", "")
-                    s_row.vote_average = tv_detail.get("vote_average", 0)
-                    s_row.vote_count = tv_detail.get("vote_count", 0)
-                    s_row.origin_country = ",".join(tv_detail.get("origin_country", []))
-                    s_row.original_lang = tv_detail.get("original_language", "")
-                    genres = [g.get("name", "") for g in tv_detail.get("genres", [])]
-                    s_row.genres = json.dumps(genres, ensure_ascii=False)
+                    s_row.poster_path = tv_detail.get("poster_path", "") or s_row.poster_path
+                    s_row.backdrop_path = tv_detail.get("backdrop_path", "") or s_row.backdrop_path
+                    s_row.status = tv_detail.get("status", "") or s_row.status
+                    s_row.vote_average = tv_detail.get("vote_average", 0) or s_row.vote_average
+                    s_row.vote_count = tv_detail.get("vote_count", 0) or s_row.vote_count
+                    oc = tv_detail.get("origin_country")
+                    if oc:
+                        s_row.origin_country = ",".join(oc) if isinstance(oc, list) else str(oc)
+                    s_row.original_lang = tv_detail.get("original_language", "") or s_row.original_lang
+                    genres = tv_detail.get("genres", [])
+                    if genres:
+                        genre_names = [g.get("name", "") if isinstance(g, dict) else str(g) for g in genres]
+                        s_row.genres = json.dumps(genre_names, ensure_ascii=False)
                     s_row.scraped_at = tm.now()
                     s_row.scraped = 1
                 await db.commit()
@@ -249,7 +265,7 @@ class GapsService:
             total_seasons += 1
             tmdb_detail_parts.append(f"S{season_num}:{ep_count}集")
 
-            # 回写 TMDB 季信息到 meta_season
+            # 回写季信息到 meta_season
             if series_pk:
                 async with get_async_session_local() as db:
                     s_season = (await db.execute(
@@ -288,17 +304,20 @@ class GapsService:
                     s_row.total_episodes = total_tmdb
                 await db.commit()
 
-        logger.debug("[Gaps] %s TMDB: %s | 缺%d集", series_name, " ".join(tmdb_detail_parts), len(missing))
+        logger.debug("[Gaps] %s [%s]: %s | 缺%d集", series_name, provider_name, " ".join(tmdb_detail_parts), len(missing))
 
         if not missing:
             return None
 
         poster = tv_detail.get("poster_path", "")
-        poster_url = f"https://image.tmdb.org/t/p/w300{poster}" if poster else ""
+        if poster and poster.startswith("/"):
+            poster_url = f"https://image.tmdb.org/t/p/w300{poster}"
+        else:
+            poster_url = poster or ""
 
         return {
             "series_name": series_name,
-            "tmdb_id": tmdb_id,
+            "source": provider_name,
             "poster_url": poster_url,
             "total_episodes": total_tmdb,
             "owned_episodes": len(emby_ep_set),
