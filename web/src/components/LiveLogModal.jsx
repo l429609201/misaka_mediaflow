@@ -47,13 +47,19 @@ const highlightSearch = (text, keyword, isDark) => {
   )
 }
 
-// 单条日志行（对齐 HistoryLogModal 的 LogRow）
+// 去掉日志文本中的级别标签 [DEBUG] [INFO] [WARNING] [ERROR] [CRITICAL] [WARN]
+const stripLevel = (line) => {
+  return line.replace(/\s*\[(DEBUG|INFO|WARNING|ERROR|CRITICAL|WARN)\]\s*/g, ' ').trim()
+}
+
+// 单条日志行 — 只用左侧彩色竖条区分级别，不显示 Tag
 const LogRow = ({ line, search, isDark }) => {
   const [hovered, setHovered] = useState(false)
   const level = parseLevel(line)
   const color = getLevelColor(level, isDark)
   const bg    = getLevelBg(level, isDark)
   const border = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'
+  const displayText = stripLevel(line)
 
   return (
     <div
@@ -64,32 +70,18 @@ const LogRow = ({ line, search, isDark }) => {
         borderLeft: `3px solid ${color}`,
         background: hovered ? (isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)') : bg,
         borderBottom: `1px solid ${border}`,
-        borderRadius: 4, marginBottom: 4, padding: '5px 10px 5px 10px',
-        transition: 'background 0.15s',
-        minHeight: 28,
+        borderRadius: 4, marginBottom: 4, padding: '5px 10px',
+        transition: 'background 0.15s', minHeight: 28,
       }}
     >
-      {/* 级别标签 */}
-      <Tag
-        color={color}
-        style={{ flexShrink: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px', marginRight: 8, marginTop: 1, border: 'none' }}
-      >
-        {level}
-      </Tag>
-
-      {/* 日志内容 */}
       <Text style={{ fontFamily: 'monospace', fontSize: 12, flex: 1, wordBreak: 'break-all', color: isDark ? '#d4d4d4' : '#222', whiteSpace: 'pre-wrap' }}>
-        {highlightSearch(line, search, isDark)}
+        {highlightSearch(displayText, search, isDark)}
       </Text>
-
-      {/* hover 时显示复制按钮 */}
       {hovered && (
         <Tooltip title="复制">
-          <Button
-            type="text" size="small" icon={<CopyOutlined />}
+          <Button type="text" size="small" icon={<CopyOutlined />}
             style={{ flexShrink: 0, color: isDark ? '#888' : '#aaa', marginLeft: 4 }}
-            onClick={() => { navigator.clipboard.writeText(line); message.success('已复制') }}
-          />
+            onClick={() => { navigator.clipboard.writeText(line); message.success('已复制') }} />
         </Tooltip>
       )}
     </div>
@@ -103,7 +95,7 @@ export default function LiveLogModal({ open, onClose }) {
   const [logs, setLogs] = useState([])
   const [connected, setConnected] = useState(false)
   const [autoScroll, setAutoScroll] = useState(true)
-  // 三档滑动选择器，默认 INFO（显示 INFO + WARNING）
+  // 三档滑动选择器，默认 INFO（显示 INFO + ERROR）
   const [levelSlider, setLevelSlider] = useState('INFO')
   const [searchText, setSearchText] = useState('')
   const containerRef = useRef(null)

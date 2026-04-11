@@ -140,6 +140,7 @@ export default function HistoryLogModal({ open, onClose }) {
             const clr     = getLevelColor(level, isDark)
             const bg      = getLevelBg(level, isDark)
             const isHover = hoveredIdx === i
+            const displayText = line.replace(/\s*\[(DEBUG|INFO|WARNING|ERROR|CRITICAL|WARN)\]\s*/g, ' ').trim()
             return (
               <div key={i}
                 onMouseEnter={() => setHoveredIdx(i)} onMouseLeave={() => setHoveredIdx(null)}
@@ -152,11 +153,7 @@ export default function HistoryLogModal({ open, onClose }) {
                 }}
               >
                 <span style={{ color: textClr, whiteSpace: 'pre-wrap', wordBreak: 'break-all', flex: 1 }}>
-                  {line.split(new RegExp(`(\\[${level}\\]|\\[WARN\\])`, 'g')).map((part, pi) =>
-                    (part === `[${level}]` || part === '[WARN]')
-                      ? <span key={pi} style={{ color: clr, fontWeight: 700 }}>{part}</span>
-                      : (search ? highlight(part, search, isDark) : part)
-                  )}
+                  {search ? highlight(displayText, search, isDark) : displayText}
                 </span>
                 <Tooltip title={t('common.copy', '复制')}>
                   <Button type="text" size="small" icon={<CopyOutlined />} onClick={() => copyLine(line)}
