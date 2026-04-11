@@ -29,7 +29,22 @@ class BangumiProvider(MetadataProvider):
             type="password",
             secret=True,
             placeholder="请输入 Bangumi Access Token",
-            hint="在 next.bgm.tv/demo/access-token 获取，有效期最长1年",
+            hint="Token 模式: 在 next.bgm.tv/demo/access-token 获取，有效期最长1年",
+        ),
+        MetaFieldSpec(
+            key="client_id",
+            label="App ID (OAuth)",
+            type="text",
+            placeholder="OAuth 模式填写，Token 模式留空",
+            hint="OAuth 模式: 在 bgm.tv/dev/app 创建应用后获取",
+        ),
+        MetaFieldSpec(
+            key="client_secret",
+            label="App Secret (OAuth)",
+            type="password",
+            secret=True,
+            placeholder="OAuth 模式填写，Token 模式留空",
+            hint="OAuth 模式: 应用密钥，请妥善保管",
         ),
         MetaFieldSpec(
             key="api_url",

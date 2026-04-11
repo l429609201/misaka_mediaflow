@@ -46,6 +46,11 @@ export const systemApi = {
   discoverSources: () => api.get('/search-source/discover'),
   saveSource: (payload) => api.post('/search-source/save', payload),
   testSource: (name) => api.post(`/search-source/test/${name}`),
+  // BGM OAuth
+  bgmAuthUrl: (payload) => api.post('/search-source/bangumi/auth-url', payload),
+  bgmExchangeCode: (payload) => api.post('/search-source/bangumi/exchange-code', payload),
+  bgmAuthState: () => api.get('/search-source/bangumi/auth-state'),
+  bgmLogout: () => api.post('/search-source/bangumi/logout'),
   // 通知渠道
   getNotifyConfig: () => api.get('/system/notify/config'),
   saveNotifyConfig: (payload) => api.post('/system/notify/config', payload),

@@ -25,6 +25,7 @@ import AIPage from '@/pages/ai/index.jsx'
 import Gaps from '@/pages/gaps/index.jsx'
 import Calendar from '@/pages/calendar/index.jsx'
 import Setting from '@/pages/setting/index.jsx'
+import BgmOAuthCallback from '@/pages/bgm-oauth-callback/index.jsx'
 
 // Auth guard — 调 /auth/verify 验证凭证（JWT / IP白名单自动登录）
 const authLoader = async () => {
@@ -69,7 +70,11 @@ export const router = createBrowserRouter(
       ],
     },
     {
-      // 管理页面（需要认证，带侧边栏）
+      // BGM OAuth 回调页（弹窗中打开，不需要认证布局）
+      path: '/bgm-oauth-callback',
+      element: <BgmOAuthCallback />,
+    },
+    {
       path: '/',
       element: <Layout />,
       loader: authLoader,

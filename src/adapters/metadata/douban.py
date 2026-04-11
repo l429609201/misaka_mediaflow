@@ -23,6 +23,9 @@ class DoubanProvider(MetadataProvider):
     DISPLAY_NAME  = "豆瓣"
     CONFIG_KEY    = "metadata_douban"
 
+    # 固定 API Key，不暴露给前端配置
+    _DOUBAN_API_KEY = "0ac44ae016490db2204ce0a042db2916"
+
     CONFIG_FIELDS = [
         MetaFieldSpec(
             key="cookie",
@@ -31,20 +34,11 @@ class DoubanProvider(MetadataProvider):
             placeholder="bid=xxx; dbcl2=xxx; ...",
             hint="在浏览器中登录豆瓣后，打开开发者工具(F12)，在 Network 标签页中找到任意请求，复制 Cookie 值",
         ),
-        MetaFieldSpec(
-            key="api_key",
-            label="API Key",
-            type="password",
-            secret=True,
-            placeholder="豆瓣 frodo API Key (可选)",
-            hint="frodo API 的 apikey，留空使用默认值",
-            default="0ac44ae016490db2204ce0a042db2916",
-        ),
     ]
 
-    def __init__(self, cookie: str = "", api_key: str = "", **kwargs):
+    def __init__(self, cookie: str = "", **kwargs):
         self._cookie = cookie
-        self._api_key = api_key or "0ac44ae016490db2204ce0a042db2916"
+        self._api_key = self._DOUBAN_API_KEY
 
     @property
     def available(self) -> bool:

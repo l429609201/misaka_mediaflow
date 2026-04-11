@@ -1,6 +1,6 @@
 ﻿// src/pages/search-source/index.jsx
 // 搜索源配置 — 参照弹幕库风格，每个源独立 Alert + 配置表单
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Card, Tabs, Table, Button, Form, Input, Switch, Space,
   Tag, Modal, Spin, Alert, Tooltip, Typography, message, Divider,
@@ -9,6 +9,7 @@ import {
   EditOutlined, ReloadOutlined, SearchOutlined,
   CheckCircleOutlined, CloseCircleOutlined, ExperimentOutlined,
   LinkOutlined, KeyOutlined, QuestionCircleOutlined,
+  LoginOutlined, LogoutOutlined, UserOutlined,
 } from '@ant-design/icons'
 import { systemApi } from '@/apis'
 
@@ -84,6 +85,8 @@ const MetaSourceTab = ({ refreshKey }) => {
   const [editingRecord, setEditingRecord] = useState(null)
   const [testing, setTesting] = useState('')
   const [form] = Form.useForm()
+  const [bgmAuth, setBgmAuth] = useState({})
+  const oauthPopupRef = useRef(null)
 
   const discover = useCallback(async () => {
     setLoading(true)
@@ -98,6 +101,57 @@ const MetaSourceTab = ({ refreshKey }) => {
   }, [])
 
   useEffect(() => { discover() }, [refreshKey, discover])
+
+  // ── BGM OAuth ──
+  const loadBgmAuth = useCallback(async () => {
+    try {
+      const { data } = await systemApi.bgmAuthState()
+      setBgmAuth(data || {})
+    } catch {}
+  }, [])
+
+  useEffect(() => {
+    loadBgmAuth()
+    const handleMsg = (e) => {
+      if (e.data === 'BANGUMI-OAUTH-COMPLETE') {
+        if (oauthPopupRef.current) oauthPopupRef.current.close()
+        loadBgmAuth()
+        discover()
+      }
+    }
+    window.addEventListener('message', handleMsg)
+    return () => window.removeEventListener('message', handleMsg)
+  }, [loadBgmAuth, discover])
+
+  const handleBgmOAuth = async () => {
+    if (oauthPopupRef.current && !oauthPopupRef.current.closed) {
+      oauthPopupRef.current.focus()
+      return
+    }
+    const redirectUri = `${window.location.origin}/web/bgm-oauth-callback`
+    try {
+      const { data } = await systemApi.bgmAuthUrl({ redirect_uri: redirectUri })
+      if (data.error) { message.error(data.error); return }
+      const w = 600, h = 700
+      const left = window.screen.width / 2 - w / 2, top = window.screen.height / 2 - h / 2
+      oauthPopupRef.current = window.open(
+        data.url, 'BangumiAuth',
+        `width=${w},height=${h},top=${top},left=${left},resizable=yes,scrollbars=yes`
+      )
+      if (!oauthPopupRef.current || oauthPopupRef.current.closed) {
+        message.error('弹窗被浏览器拦截，请允许弹窗后重试')
+      }
+    } catch { message.error('获取授权链接失败') }
+  }
+
+  const handleBgmLogout = async () => {
+    try {
+      await systemApi.bgmLogout()
+      setBgmAuth({})
+      discover()
+      message.success('已注销 Bangumi 授权')
+    } catch { message.error('注销失败') }
+  }
 
   const handleToggle = async (record, enabled) => {
     setSources(prev => prev.map(s => s.key === record.key ? { ...s, enabled } : s))
@@ -217,6 +271,46 @@ const MetaSourceTab = ({ refreshKey }) => {
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
           {(editingRecord?.fields || []).map(f => <DynamicField key={f.key} field={f} />)}
         </Form>
+
+        {/* BGM OAuth 区域 */}
+        {editingRecord?.key === 'bangumi' && (
+          <>
+            <Divider>OAuth 授权（可选）</Divider>
+            <Alert type="info" showIcon style={{ marginBottom: 12 }}
+              message="OAuth 与 Token 二选一"
+              description="如果使用 OAuth 授权登录，上方 Access Token 可留空。OAuth 授权后系统会自动填入 Token。" />
+            {bgmAuth.isAuthenticated ? (
+              <Card size="small" style={{ marginBottom: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  {bgmAuth.avatarUrl && (
+                    <img src={bgmAuth.avatarUrl} alt="" style={{ width: 48, height: 48, borderRadius: '50%', objectFit: 'cover' }}
+                      onError={e => { e.target.style.display = 'none' }} />
+                  )}
+                  <div style={{ flex: 1 }}>
+                    <div><Text strong>{bgmAuth.nickname}</Text></div>
+                    {bgmAuth.username && (
+                      <a href={`https://bgm.tv/user/${bgmAuth.username}`} target="_blank" rel="noopener noreferrer"
+                        style={{ fontSize: 12 }}>@{bgmAuth.username}</a>
+                    )}
+                  </div>
+                  <Tag color="success">已授权</Tag>
+                </div>
+                {bgmAuth.sign && <div style={{ fontSize: 12, color: '#888', marginTop: 8, borderTop: '1px solid #f0f0f0', paddingTop: 8 }}>{bgmAuth.sign}</div>}
+                <div style={{ marginTop: 8 }}>
+                  <Button size="small" danger icon={<LogoutOutlined />} onClick={handleBgmLogout}>注销授权</Button>
+                </div>
+              </Card>
+            ) : (
+              <div style={{ textAlign: 'center', padding: '16px 0' }}>
+                <div style={{ marginBottom: 12, color: '#888' }}>当前未通过 OAuth 授权</div>
+                <Button type="primary" icon={<LoginOutlined />} onClick={handleBgmOAuth}>
+                  通过 Bangumi 登录
+                </Button>
+                <div style={{ fontSize: 12, color: '#999', marginTop: 8 }}>需要先填写上方的 App ID 和 App Secret 并保存</div>
+              </div>
+            )}
+          </>
+        )}
       </Modal>
     </>
   )
