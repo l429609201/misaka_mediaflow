@@ -46,11 +46,10 @@ export const systemApi = {
   discoverSources: () => api.get('/search-source/discover'),
   saveSource: (payload) => api.post('/search-source/save', payload),
   testSource: (name) => api.post(`/search-source/test/${name}`),
-  // BGM OAuth — 走 /api/private 路由
-  bgmAuthUrl: (payload) => api.post('/api/private/bangumi/actions/get_auth_url', payload, { baseURL: '' }),
-  bgmExchangeCode: (payload) => api.post('/api/private/bangumi/actions/exchange_code', payload, { baseURL: '' }),
-  bgmAuthState: () => api.post('/api/private/bangumi/actions/get_auth_state', {}, { baseURL: '' }),
-  bgmLogout: () => api.post('/api/private/bangumi/actions/logout', {}, { baseURL: '' }),
+  // BGM OAuth — 走 /api/private 动态路由
+  bgmAuthUrl: (payload) => api.post('/api/private/bangumi/auth-url', payload, { baseURL: '' }),
+  bgmAuthState: () => api.post('/api/private/bangumi/auth-state', {}, { baseURL: '' }),
+  bgmLogout: () => api.post('/api/private/bangumi/logout', {}, { baseURL: '' }),
   // 通知渠道
   getNotifyConfig: () => api.get('/system/notify/config'),
   saveNotifyConfig: (payload) => api.post('/system/notify/config', payload),

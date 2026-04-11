@@ -173,22 +173,32 @@ class MetadataProvider(ABC):
             return await self.get_detail(media_id, media_type)
         return first
 
-    # ── 动态 Action（子类按需覆盖，供 /api/private/{provider}/actions/{action} 调用）──
+    # ── 动态私有路由（子类按需覆盖）──────────────────────────────────
+    #
+    # 子类声明 PRIVATE_ROUTES 列表，框架自动路由到 handle_private_route()。
+    # 前端调用: POST/GET /api/private/{provider}/{自定义路径}
+    #
+    # 示例:
+    #   PRIVATE_ROUTES = [
+    #       {"method": "POST", "path": "auth-url",      "summary": "获取授权链接"},
+    #       {"method": "POST", "path": "exchange-code",  "summary": "换码"},
+    #       {"method": "GET",  "path": "auth-state",     "summary": "授权状态"},
+    #       {"method": "POST", "path": "logout",         "summary": "注销"},
+    #   ]
 
-    # 子类覆盖此属性声明支持的 action 列表，用于前端展示和校验
-    SUPPORTED_ACTIONS: list[str] = []
+    PRIVATE_ROUTES: list[dict] = []
 
-    async def execute_action(self, action: str, payload: dict, **kwargs) -> dict:
+    async def handle_private_route(self, path: str, method: str, payload: dict, **kwargs) -> dict:
         """
-        执行自定义操作。子类根据 action 名分发。
+        处理私有路由请求。子类按 path 分发。
 
         Args:
-            action: 操作名称（如 'get_auth_url', 'exchange_code', 'logout'）
-            payload: 前端传入的参数
-            **kwargs: 额外上下文（如 request 对象）
+            path:    请求路径（如 'auth-url', 'exchange-code'）
+            method:  HTTP 方法（'GET', 'POST'）
+            payload: POST body / GET query params
 
         Returns:
-            操作结果 dict
+            响应 dict
         """
-        return {"error": f"Provider {self.PROVIDER_NAME} 不支持操作: {action}"}
+        return {"error": f"Provider {self.PROVIDER_NAME} 不支持路由: {method} /{path}"}
 

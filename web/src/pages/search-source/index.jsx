@@ -114,7 +114,7 @@ const MetaSourceTab = ({ refreshKey }) => {
   useEffect(() => {
     loadBgmAuth()
     const handleMsg = (e) => {
-      if (e.data === 'BANGUMI-OAUTH-COMPLETE') {
+      if (e.data === 'SUCCESS_OAUTH_COMPLETE') {
         if (oauthPopupRef.current) oauthPopupRef.current.close()
         loadBgmAuth()
         discover()
@@ -129,9 +129,8 @@ const MetaSourceTab = ({ refreshKey }) => {
       oauthPopupRef.current.focus()
       return
     }
-    const redirectUri = `${window.location.origin}/web/bgm-oauth-callback`
     try {
-      const { data } = await systemApi.bgmAuthUrl({ redirect_uri: redirectUri })
+      const { data } = await systemApi.bgmAuthUrl({ origin_url: window.location.origin })
       if (data.error) { message.error(data.error); return }
       const w = 600, h = 700
       const left = window.screen.width / 2 - w / 2, top = window.screen.height / 2 - h / 2

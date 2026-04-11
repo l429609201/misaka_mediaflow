@@ -128,20 +128,25 @@ class BangumiProvider(MetadataProvider):
         except Exception:
             return False
 
-    # ── OAuth Actions ─────────────────────────────────────────────
+    # ── OAuth 动态路由 ─────────────────────────────────────────────
 
-    SUPPORTED_ACTIONS = ["get_auth_url", "exchange_code", "get_auth_state", "logout"]
+    PRIVATE_ROUTES = [
+        {"method": "POST", "path": "auth-url",       "summary": "获取 OAuth 授权链接"},
+        {"method": "GET",  "path": "oauth-callback",  "summary": "OAuth 回调（bgm.tv 重定向）"},
+        {"method": "POST", "path": "auth-state",      "summary": "获取授权状态"},
+        {"method": "POST", "path": "logout",          "summary": "注销 OAuth 授权"},
+    ]
 
-    async def execute_action(self, action: str, payload: dict, **kwargs) -> dict:
-        if action == "get_auth_url":
+    async def handle_private_route(self, path: str, method: str, payload: dict, **kwargs) -> dict:
+        if path == "auth-url":
             return await self._action_auth_url(payload)
-        elif action == "exchange_code":
+        elif path == "oauth-callback":
             return await self._action_exchange_code(payload)
-        elif action == "get_auth_state":
+        elif path == "auth-state":
             return await self._action_auth_state()
-        elif action == "logout":
+        elif path == "logout":
             return await self._action_logout()
-        return {"error": f"不支持的操作: {action}"}
+        return {"error": f"不支持的路由: {method} /{path}"}
 
     @staticmethod
     async def _load_oauth() -> dict:
@@ -187,11 +192,15 @@ class BangumiProvider(MetadataProvider):
         oauth_data = await self._load_oauth()
         oauth_data["pending_state"] = state
         await self._save_oauth(oauth_data)
-        redirect_uri = payload.get("redirect_uri", "")
+        # redirect_uri 指向后端回调路由，不走前端 /web/
+        origin = payload.get("origin_url", "").rstrip("/")
+        redirect_uri = f"{origin}/api/private/bangumi/oauth-callback"
         url = f"{_BGM_AUTH_URL}?client_id={client_id}&response_type=code&redirect_uri={redirect_uri}&state={state}"
         return {"url": url}
 
     async def _action_exchange_code(self, payload: dict) -> dict:
+        """用授权码换取 token — payload 来自 bgm.tv 回调的 query params (code, state)
+        或来自 oauth_callback 路由传入的 dict，需自带 origin_url 以重建 redirect_uri"""
         from src.api.v1.search_source import _load_json, _save_json, _OVERRIDE_KEY
         from src.core.timezone import tm
         from src.db import get_async_session_local
@@ -202,6 +211,14 @@ class BangumiProvider(MetadataProvider):
         client_secret = bgm_cfg.get("client_secret", "")
         if not client_id or not client_secret:
             return {"success": False, "message": "App ID 或 App Secret 未配置"}
+
+        # 重建 redirect_uri — 必须和 auth-url 时完全一致
+        redirect_uri = payload.get("redirect_uri", "")
+        if not redirect_uri:
+            origin = payload.get("origin_url", "").rstrip("/")
+            if origin:
+                redirect_uri = f"{origin}/api/private/bangumi/oauth-callback"
+
         try:
             async with proxy_client(target_url=_BGM_TOKEN_URL, timeout=15) as client:
                 resp = await client.post(_BGM_TOKEN_URL, data={
