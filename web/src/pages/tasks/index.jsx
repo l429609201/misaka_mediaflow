@@ -48,6 +48,7 @@
      actor:     t('tasks.categoryActor', '演员管理'),
      workflow:  t('tasks.categoryWorkflow', '工作流'),
      strm_replace: t('tasks.categoryStrmReplace', 'STRM替换'),
+     gaps:         t('tasks.categoryGaps', '缺集扫描'),
    }
    const stats = task.live_stats || {}
    const total = (stats.created || 0) + (stats.skipped || 0) + (stats.errors || 0)
@@ -108,8 +109,9 @@
      actor:     t('tasks.categoryActor', '演员管理'),
      workflow:  t('tasks.categoryWorkflow', '工作流'),
      strm_replace: t('tasks.categoryStrmReplace', 'STRM替换'),
+     gaps:         t('tasks.categoryGaps', '缺集扫描'),
    }
- 
+
    const fetchRunning = useCallback(async () => {
      try {
        const { data } = await tasksApi.running()
@@ -250,6 +252,7 @@
              <Select.Option value="actor">{t('tasks.categoryActor', '演员管理')}</Select.Option>
              <Select.Option value="workflow">{t('tasks.categoryWorkflow', '工作流')}</Select.Option>
              <Select.Option value="strm_replace">{t('tasks.categoryStrmReplace', 'STRM替换')}</Select.Option>
+             <Select.Option value="gaps">{t('tasks.categoryGaps', '缺集扫描')}</Select.Option>
            </Select>
            <Button icon={<ReloadOutlined />} onClick={() => { fetchTasks(); fetchRunning() }}>
              {t('common.refresh')}
