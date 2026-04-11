@@ -101,3 +101,18 @@ async def save_source(payload: SavePayload):
 
     return {"success": True}
 
+
+@router.post("/test/{name}", dependencies=[Depends(verify_token)])
+async def test_source(name: str):
+    """测试搜索源连接"""
+    from src.services.metadata_service import metadata_service
+
+    try:
+        provider = await metadata_service.get_provider(name)
+        if not provider:
+            return {"success": False, "message": f"搜索源 {name} 未配置或不存在"}
+        ok = await provider.test_connection()
+        return {"success": ok, "message": "连接成功" if ok else "连接失败"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+

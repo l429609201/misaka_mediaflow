@@ -45,6 +45,7 @@ export const systemApi = {
   // 搜索源
   discoverSources: () => api.get('/search-source/discover'),
   saveSource: (payload) => api.post('/search-source/save', payload),
+  testSource: (name) => api.post(`/search-source/test/${name}`),
   // 通知渠道
   getNotifyConfig: () => api.get('/system/notify/config'),
   saveNotifyConfig: (payload) => api.post('/system/notify/config', payload),
