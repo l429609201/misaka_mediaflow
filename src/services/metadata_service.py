@@ -100,9 +100,8 @@ class MetadataService:
                     # 合并：专属 key 优先，搜索源作为补充
                     cfg_data = {**source_vals, **cfg_data}
 
-            if not cfg_data:
-                logger.debug("[MetadataService] Provider %s 未配置", name)
-                return None
+            # cfg_data 为空也允许通过（有些 Provider 不需要配置，如 IMDB）
+            # 只有声明了 required 字段且未填写时才拦截
 
             # 检查必填字段（CONFIG_FIELDS 中 required=True 的字段）
             for field_spec in provider_cls.CONFIG_FIELDS:

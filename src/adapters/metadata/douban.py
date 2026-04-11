@@ -42,7 +42,7 @@ class DoubanProvider(MetadataProvider):
 
     @property
     def available(self) -> bool:
-        return bool(self._cookie)
+        return True  # Cookie 可选，有内置 API Key 即可搜索
 
     def _headers(self) -> dict:
         h = {
