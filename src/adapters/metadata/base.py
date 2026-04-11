@@ -173,3 +173,22 @@ class MetadataProvider(ABC):
             return await self.get_detail(media_id, media_type)
         return first
 
+    # ── 动态 Action（子类按需覆盖，供 /api/private/{provider}/actions/{action} 调用）──
+
+    # 子类覆盖此属性声明支持的 action 列表，用于前端展示和校验
+    SUPPORTED_ACTIONS: list[str] = []
+
+    async def execute_action(self, action: str, payload: dict, **kwargs) -> dict:
+        """
+        执行自定义操作。子类根据 action 名分发。
+
+        Args:
+            action: 操作名称（如 'get_auth_url', 'exchange_code', 'logout'）
+            payload: 前端传入的参数
+            **kwargs: 额外上下文（如 request 对象）
+
+        Returns:
+            操作结果 dict
+        """
+        return {"error": f"Provider {self.PROVIDER_NAME} 不支持操作: {action}"}
+

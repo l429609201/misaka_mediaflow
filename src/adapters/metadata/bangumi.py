@@ -1,10 +1,9 @@
 # src/adapters/metadata/bangumi.py
-# Bangumi (BGM) 元数据源适配器
-#
-# Bangumi 是 ACG 作品数据库，提供动画、漫画、游戏等作品的元数据信息。
-# API 文档: https://bangumi.github.io/api/
+# Bangumi (BGM) 元数据源适配器（含 OAuth action）
 
+import json
 import logging
+import secrets
 from typing import Any
 
 from src.adapters.metadata.base import MetadataProvider, MetadataResult, MetaFieldSpec
@@ -13,6 +12,9 @@ from src.core.http_proxy import proxy_client
 logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://api.bgm.tv"
+_BGM_AUTH_URL = "https://bgm.tv/oauth/authorize"
+_BGM_TOKEN_URL = "https://bgm.tv/oauth/access_token"
+_BGM_OAUTH_KEY = "bangumi_oauth"
 
 
 class BangumiProvider(MetadataProvider):
@@ -125,3 +127,153 @@ class BangumiProvider(MetadataProvider):
             return bool(data.get("id"))
         except Exception:
             return False
+
+    # ── OAuth Actions ─────────────────────────────────────────────
+
+    SUPPORTED_ACTIONS = ["get_auth_url", "exchange_code", "get_auth_state", "logout"]
+
+    async def execute_action(self, action: str, payload: dict, **kwargs) -> dict:
+        if action == "get_auth_url":
+            return await self._action_auth_url(payload)
+        elif action == "exchange_code":
+            return await self._action_exchange_code(payload)
+        elif action == "get_auth_state":
+            return await self._action_auth_state()
+        elif action == "logout":
+            return await self._action_logout()
+        return {"error": f"不支持的操作: {action}"}
+
+    @staticmethod
+    async def _load_oauth() -> dict:
+        from sqlalchemy import select
+        from src.db import get_async_session_local
+        from src.db.models import SystemConfig
+        async with get_async_session_local() as db:
+            row = (await db.execute(
+                select(SystemConfig).where(SystemConfig.key == _BGM_OAUTH_KEY)
+            )).scalars().first()
+            if row and row.value:
+                try:
+                    return json.loads(row.value)
+                except Exception:
+                    pass
+        return {}
+
+    @staticmethod
+    async def _save_oauth(data: dict):
+        from sqlalchemy import select
+        from src.db import get_async_session_local
+        from src.db.models import SystemConfig
+        async with get_async_session_local() as db:
+            row = (await db.execute(
+                select(SystemConfig).where(SystemConfig.key == _BGM_OAUTH_KEY)
+            )).scalars().first()
+            val = json.dumps(data, ensure_ascii=False)
+            if row:
+                row.value = val
+            else:
+                db.add(SystemConfig(key=_BGM_OAUTH_KEY, value=val, description="Bangumi OAuth"))
+            await db.commit()
+
+    async def _action_auth_url(self, payload: dict) -> dict:
+        from src.api.v1.search_source import _load_json, _OVERRIDE_KEY
+        from src.db import get_async_session_local
+        async with get_async_session_local() as db:
+            override_map = await _load_json(db, _OVERRIDE_KEY)
+        client_id = override_map.get("bangumi", {}).get("client_id", "")
+        if not client_id:
+            return {"error": "请先在 Bangumi 配置中填写 App ID"}
+        state = secrets.token_urlsafe(16)
+        oauth_data = await self._load_oauth()
+        oauth_data["pending_state"] = state
+        await self._save_oauth(oauth_data)
+        redirect_uri = payload.get("redirect_uri", "")
+        url = f"{_BGM_AUTH_URL}?client_id={client_id}&response_type=code&redirect_uri={redirect_uri}&state={state}"
+        return {"url": url}
+
+    async def _action_exchange_code(self, payload: dict) -> dict:
+        from src.api.v1.search_source import _load_json, _save_json, _OVERRIDE_KEY
+        from src.core.timezone import tm
+        from src.db import get_async_session_local
+        async with get_async_session_local() as db:
+            override_map = await _load_json(db, _OVERRIDE_KEY)
+        bgm_cfg = override_map.get("bangumi", {})
+        client_id = bgm_cfg.get("client_id", "")
+        client_secret = bgm_cfg.get("client_secret", "")
+        if not client_id or not client_secret:
+            return {"success": False, "message": "App ID 或 App Secret 未配置"}
+        try:
+            async with proxy_client(target_url=_BGM_TOKEN_URL, timeout=15) as client:
+                resp = await client.post(_BGM_TOKEN_URL, data={
+                    "grant_type": "authorization_code",
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "code": payload.get("code", ""),
+                    "redirect_uri": payload.get("redirect_uri", ""),
+                }, headers={"Content-Type": "application/x-www-form-urlencoded"})
+                resp.raise_for_status()
+                token_data = resp.json()
+        except Exception as e:
+            return {"success": False, "message": f"换码失败: {e}"}
+        access_token = token_data.get("access_token", "")
+        if not access_token:
+            return {"success": False, "message": "未获取到 access_token"}
+        # 获取用户信息
+        user_info = {}
+        try:
+            me_url = f"{_BASE_URL}/v0/me"
+            async with proxy_client(target_url=me_url, timeout=10) as client:
+                resp2 = await client.get(me_url,
+                    headers={"Authorization": f"Bearer {access_token}", "User-Agent": "MisakaMediaFlow/1.0"})
+                if resp2.status_code == 200:
+                    user_info = resp2.json()
+        except Exception:
+            pass
+        await self._save_oauth({
+            "access_token": access_token,
+            "refresh_token": token_data.get("refresh_token", ""),
+            "expires_in": token_data.get("expires_in", 0),
+            "authorized_at": tm.now(),
+            "user_id": token_data.get("user_id") or user_info.get("id", 0),
+            "nickname": user_info.get("nickname", ""),
+            "username": user_info.get("username", ""),
+            "avatar_url": user_info.get("avatar", {}).get("large", ""),
+            "sign": user_info.get("sign", ""),
+        })
+        # 同步 token 到搜索源配置
+        bgm_cfg["access_token"] = access_token
+        override_map["bangumi"] = bgm_cfg
+        async with get_async_session_local() as db:
+            await _save_json(db, _OVERRIDE_KEY, override_map)
+        from src.services.metadata_service import metadata_service
+        metadata_service.invalidate_cache("bangumi")
+        return {"success": True, "message": "授权成功"}
+
+    async def _action_auth_state(self) -> dict:
+        data = await self._load_oauth()
+        if not data.get("access_token"):
+            return {"isAuthenticated": False}
+        return {
+            "isAuthenticated": True,
+            "bangumiUserId": data.get("user_id", 0),
+            "nickname": data.get("nickname", ""),
+            "username": data.get("username", ""),
+            "avatarUrl": data.get("avatar_url", ""),
+            "sign": data.get("sign", ""),
+            "authorizedAt": data.get("authorized_at", ""),
+        }
+
+    async def _action_logout(self) -> dict:
+        await self._save_oauth({})
+        from src.api.v1.search_source import _load_json, _save_json, _OVERRIDE_KEY
+        from src.db import get_async_session_local
+        async with get_async_session_local() as db:
+            override_map = await _load_json(db, _OVERRIDE_KEY)
+        bgm_cfg = override_map.get("bangumi", {})
+        bgm_cfg.pop("access_token", None)
+        override_map["bangumi"] = bgm_cfg
+        async with get_async_session_local() as db:
+            await _save_json(db, _OVERRIDE_KEY, override_map)
+        from src.services.metadata_service import metadata_service
+        metadata_service.invalidate_cache("bangumi")
+        return {"success": True}
