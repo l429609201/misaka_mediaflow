@@ -19,7 +19,6 @@ const PROVIDERS = [
   { value: 'openai', label: 'OpenAI' },
   { value: 'deepseek', label: 'DeepSeek' },
   { value: 'siliconflow', label: '硅基流动' },
-  { value: 'claude', label: 'Claude' },
   { value: 'compatible', label: 'OpenAI 兼容' },
 ]
 

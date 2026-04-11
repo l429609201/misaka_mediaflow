@@ -1,5 +1,5 @@
 # src/services/ai_service.py
-# AI 服务层 — 支持 OpenAI / Claude / 兼容模型
+# AI 服务层 — 支持 OpenAI / DeepSeek / 硅基流动 / 兼容模型
 #
 # 功能:
 #   - 演员名翻译（带内存缓存 + 持久化统计）
@@ -216,10 +216,7 @@ class AIService:
             return {"success": False, "message": "AI 未配置 API Key"}
 
         try:
-            if provider == "claude":
-                return await self._call_claude(base_url, api_key, model, messages)
-            else:
-                return await self._call_openai(base_url, api_key, model, messages)
+            return await self._call_openai(base_url, api_key, model, messages)
         except Exception as e:
             logger.exception("AI 调用失败: %s", e)
             return {"success": False, "message": str(e)}
@@ -254,52 +251,6 @@ class AIService:
                 "prompt_tokens": usage.get("prompt_tokens", 0),
                 "completion_tokens": usage.get("completion_tokens", 0),
                 "total_tokens": usage.get("total_tokens", 0),
-            },
-        }
-
-    async def _call_claude(self, base_url: str, api_key: str,
-                           model: str, messages: list[dict]) -> dict:
-        """Claude API"""
-        url = (base_url.rstrip("/") if base_url else "https://api.anthropic.com")
-        url = f"{url}/v1/messages"
-
-        # Claude 格式: system 单独传，messages 不含 system
-        system_content = ""
-        claude_msgs = []
-        for m in messages:
-            if m["role"] == "system":
-                system_content = m["content"]
-            else:
-                claude_msgs.append(m)
-
-        async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(url, json={
-                "model": model or "claude-sonnet-4-20250514",
-                "max_tokens": 2000,
-                "system": system_content,
-                "messages": claude_msgs,
-            }, headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "Content-Type": "application/json",
-            })
-
-        if resp.status_code != 200:
-            return {"success": False, "message": f"API 错误: HTTP {resp.status_code}"}
-
-        data = resp.json()
-        content = ""
-        for block in data.get("content", []):
-            if block.get("type") == "text":
-                content += block.get("text", "")
-        usage = data.get("usage", {})
-        return {
-            "success": True,
-            "content": content,
-            "usage": {
-                "prompt_tokens": usage.get("input_tokens", 0),
-                "completion_tokens": usage.get("output_tokens", 0),
-                "total_tokens": usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
             },
         }
 
