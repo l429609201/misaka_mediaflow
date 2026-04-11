@@ -58,6 +58,7 @@
     "drive115Strm":     "STRM Sync",
     "drive115Monitor":  "Live Monitor",
     "mediaProxy": "Media & 302 Proxy",
+    "mediaConfig": "Media Config",
     "searchSource": "Search Sources",
     "realtimeSubtitle": "Realtime Subtitle Subsetting",
     "classify": "Organize & Scrape",

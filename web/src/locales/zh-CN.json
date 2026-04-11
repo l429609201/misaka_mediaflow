@@ -58,6 +58,7 @@
     "drive115Strm":     "STRM 同步",
     "drive115Monitor":  "实时监控",
     "mediaProxy": "媒体库与 302 反代",
+    "mediaConfig": "媒体库配置",
     "searchSource": "搜索源",
     "realtimeSubtitle": "实时字幕子集化",
     "classify": "整理分类刮削",

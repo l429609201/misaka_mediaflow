@@ -14,12 +14,14 @@ export const RoutePaths = {
   P115_TOOLS: '/115-tools',
   SEARCH_SOURCE: '/search-source',
   REALTIME_SUBTITLE: '/realtime-subtitle',
-  MEDIA_PROXY: '/media-proxy',
+  // 媒体库与302反代 — 父级 + 子页面
+  MEDIA_PROXY:    '/media-proxy',
+  MEDIA_CONFIG:   '/media/config',
+  MEDIA_ACTOR:    '/media/actor',
+  MEDIA_GAPS:     '/media/gaps',
+  MEDIA_CALENDAR: '/media/calendar',
   TASKS: '/tasks',
-  ACTOR: '/actor',
   AI: '/ai',
-  GAPS: '/gaps',
-  CALENDAR: '/calendar',
   SETTING: '/setting',
 }
 

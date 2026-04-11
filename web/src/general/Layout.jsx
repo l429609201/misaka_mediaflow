@@ -70,19 +70,32 @@ export const Layout = () => {
       ],
     },
     { key: RoutePaths.CLASSIFY,          icon: <FolderAddOutlined />,    label: t('menu.classify') },
-    { key: RoutePaths.MEDIA_PROXY,       icon: <CloudServerOutlined />,  label: t('menu.mediaProxy') },
+    {
+      key: 'menu-media',
+      icon: <CloudServerOutlined />,
+      label: t('menu.mediaProxy'),
+      children: [
+        { key: RoutePaths.MEDIA_CONFIG,   icon: <SettingOutlined />,      label: t('menu.mediaConfig') },
+        { key: RoutePaths.MEDIA_ACTOR,    icon: <TeamOutlined />,         label: t('menu.actor') },
+        { key: RoutePaths.MEDIA_GAPS,     icon: <AlertOutlined />,        label: t('menu.gaps') },
+        { key: RoutePaths.MEDIA_CALENDAR, icon: <CalendarOutlined />,     label: t('menu.calendar') },
+      ],
+    },
     { key: RoutePaths.REALTIME_SUBTITLE, icon: <FontSizeOutlined />,     label: t('menu.realtimeSubtitle') },
     { key: RoutePaths.SEARCH_SOURCE,     icon: <SearchOutlined />,       label: t('menu.searchSource') },
     { key: RoutePaths.TASKS,             icon: <UnorderedListOutlined />, label: t('menu.tasks') },
-    { key: RoutePaths.ACTOR,             icon: <TeamOutlined />,          label: t('menu.actor') },
     { key: RoutePaths.AI,                icon: <RobotOutlined />,         label: t('menu.ai') },
-    { key: RoutePaths.GAPS,              icon: <AlertOutlined />,        label: t('menu.gaps') },
-    { key: RoutePaths.CALENDAR,          icon: <CalendarOutlined />,     label: t('menu.calendar') },
     { key: RoutePaths.SETTING,           icon: <SettingOutlined />,      label: t('menu.settings') },
   ]
 
   // 计算当前展开的父菜单 key
-  const openKeys = location.pathname.startsWith('/115') ? ['menu-115'] : []
+  const openKeys = (() => {
+    const p = location.pathname
+    const keys = []
+    if (p.startsWith('/115')) keys.push('menu-115')
+    if (p.startsWith('/media')) keys.push('menu-media')
+    return keys
+  })()
 
   const handleLogout = () => {
     Modal.confirm({
