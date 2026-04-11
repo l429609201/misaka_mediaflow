@@ -260,7 +260,7 @@ class AIService:
             "role": "user",
             "content": f"请将以下文本翻译为{target_lang}，只返回翻译结果:\n\n{text}",
         }]
-        return await self.chat(messages)
+        return await self._call_llm(messages)
 
 
 # ── 全局单例 ──────────────────────────────────────────────────────────
