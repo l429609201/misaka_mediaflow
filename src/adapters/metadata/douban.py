@@ -55,9 +55,10 @@ class DoubanProvider(MetadataProvider):
         return h
 
     async def _get(self, url: str, params: dict = None) -> Any:
-        resp = await proxy_client.get(url, params=params, headers=self._headers(), timeout=15)
-        resp.raise_for_status()
-        return resp.json()
+        async with proxy_client(target_url=url, timeout=15) as client:
+            resp = await client.get(url, params=params, headers=self._headers())
+            resp.raise_for_status()
+            return resp.json()
 
     async def search(self, query: str, media_type: str = "movie", year: int = 0) -> list[MetadataResult]:
         try:

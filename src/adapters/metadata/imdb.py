@@ -62,14 +62,11 @@ class ImdbProvider(MetadataProvider):
     async def _api_search(self, query: str, media_type: str) -> list[MetadataResult]:
         """通过第三方 API 搜索"""
         try:
-            resp = await proxy_client.get(
-                f"{_API_URL}/search",
-                params={"query": query},
-                headers=self._headers(),
-                timeout=15,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+            url = f"{_API_URL}/search"
+            async with proxy_client(target_url=url, timeout=15) as client:
+                resp = await client.get(url, params={"query": query}, headers=self._headers())
+                resp.raise_for_status()
+                data = resp.json()
             items = data.get("results", [])
             results = []
             for item in items[:20]:
@@ -100,13 +97,11 @@ class ImdbProvider(MetadataProvider):
 
     async def get_detail(self, media_id: int | str, media_type: str = "movie") -> MetadataResult | None:
         try:
-            resp = await proxy_client.get(
-                f"{_API_URL}/title/{media_id}",
-                headers=self._headers(),
-                timeout=15,
-            )
-            resp.raise_for_status()
-            item = resp.json()
+            url = f"{_API_URL}/title/{media_id}"
+            async with proxy_client(target_url=url, timeout=15) as client:
+                resp = await client.get(url, headers=self._headers())
+                resp.raise_for_status()
+                item = resp.json()
             genres = item.get("genres", [])
             return MetadataResult(
                 provider="imdb",

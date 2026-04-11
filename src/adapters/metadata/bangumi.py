@@ -72,9 +72,10 @@ class BangumiProvider(MetadataProvider):
 
     async def _get(self, path: str, params: dict = None) -> Any:
         url = f"{self._base}{path}"
-        resp = await proxy_client.get(url, params=params, headers=self._headers(), timeout=15)
-        resp.raise_for_status()
-        return resp.json()
+        async with proxy_client(target_url=url, timeout=15) as client:
+            resp = await client.get(url, params=params, headers=self._headers())
+            resp.raise_for_status()
+            return resp.json()
 
     async def search(self, query: str, media_type: str = "movie", year: int = 0) -> list[MetadataResult]:
         # Bangumi subject types: 1=book, 2=anime, 3=music, 4=game, 6=real

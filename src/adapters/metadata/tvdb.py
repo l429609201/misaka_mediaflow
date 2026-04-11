@@ -46,16 +46,14 @@ class TVDBProvider(MetadataProvider):
         if self._token:
             return self._token
         try:
-            resp = await proxy_client.post(
-                f"{_BASE_URL}/login",
-                json={"apikey": self._api_key},
-                headers={"Content-Type": "application/json"},
-                timeout=15,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            self._token = data.get("data", {}).get("token", "")
-            return self._token
+            url = f"{_BASE_URL}/login"
+            async with proxy_client(target_url=url, timeout=15) as client:
+                resp = await client.post(url, json={"apikey": self._api_key},
+                                          headers={"Content-Type": "application/json"})
+                resp.raise_for_status()
+                data = resp.json()
+                self._token = data.get("data", {}).get("token", "")
+                return self._token
         except Exception as e:
             logger.warning("[TVDB] 登录失败: %s", e)
             return ""
@@ -64,14 +62,12 @@ class TVDBProvider(MetadataProvider):
         token = await self._login()
         if not token:
             return {}
-        resp = await proxy_client.get(
-            f"{_BASE_URL}{path}",
-            params=params,
-            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        return resp.json()
+        url = f"{_BASE_URL}{path}"
+        async with proxy_client(target_url=url, timeout=15) as client:
+            resp = await client.get(url, params=params,
+                                     headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
+            resp.raise_for_status()
+            return resp.json()
 
     async def search(self, query: str, media_type: str = "movie", year: int = 0) -> list[MetadataResult]:
         try:

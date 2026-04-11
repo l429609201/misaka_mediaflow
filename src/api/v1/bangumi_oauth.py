@@ -109,15 +109,16 @@ async def exchange_code(payload: ExchangeCodePayload):
         return {"success": False, "message": "App ID 或 App Secret 未配置"}
 
     try:
-        resp = await proxy_client.post(_BGM_TOKEN_URL, data={
-            "grant_type": "authorization_code",
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "code": payload.code,
-            "redirect_uri": payload.redirect_uri,
-        }, headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=15)
-        resp.raise_for_status()
-        token_data = resp.json()
+        async with proxy_client(target_url=_BGM_TOKEN_URL, timeout=15) as client:
+            resp = await client.post(_BGM_TOKEN_URL, data={
+                "grant_type": "authorization_code",
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "code": payload.code,
+                "redirect_uri": payload.redirect_uri,
+            }, headers={"Content-Type": "application/x-www-form-urlencoded"})
+            resp.raise_for_status()
+            token_data = resp.json()
     except Exception as e:
         logger.warning("[BGM OAuth] 换码失败: %s", e)
         return {"success": False, "message": f"换码失败: {e}"}
@@ -129,13 +130,12 @@ async def exchange_code(payload: ExchangeCodePayload):
     # 获取用户信息
     user_info = {}
     try:
-        resp2 = await proxy_client.get(
-            f"{_BGM_API_URL}/v0/me",
-            headers={"Authorization": f"Bearer {access_token}", "User-Agent": "MisakaMediaFlow/1.0"},
-            timeout=10,
-        )
-        if resp2.status_code == 200:
-            user_info = resp2.json()
+        me_url = f"{_BGM_API_URL}/v0/me"
+        async with proxy_client(target_url=me_url, timeout=10) as client:
+            resp2 = await client.get(me_url,
+                headers={"Authorization": f"Bearer {access_token}", "User-Agent": "MisakaMediaFlow/1.0"})
+            if resp2.status_code == 200:
+                user_info = resp2.json()
     except Exception:
         pass
 
