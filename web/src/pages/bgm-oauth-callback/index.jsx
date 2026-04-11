@@ -19,7 +19,7 @@ export default function BgmOAuthCallback() {
       return
     }
 
-    const redirectUri = `${window.location.origin}/bgm-oauth-callback`
+    const redirectUri = `${window.location.origin}/web/bgm-oauth-callback`
 
     systemApi.bgmExchangeCode({ code, state: state || '', redirect_uri: redirectUri })
       .then(({ data }) => {
