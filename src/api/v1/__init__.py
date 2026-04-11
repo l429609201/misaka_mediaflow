@@ -21,7 +21,6 @@ from src.api.v1.workflow import router as workflow_router   # 工作流
 from src.api.v1.actor import router as actor_router         # 演员管理
 from src.api.v1.ai import router as ai_router               # AI 助手
 from src.api.v1.bangumi_oauth import router as bangumi_oauth_router  # BGM OAuth
-from src.api.redirect_url import router as redirect_url_router
 
 v1_router = APIRouter(prefix="/api/v1")
 v1_router.include_router(auth_router)
@@ -42,9 +41,6 @@ v1_router.include_router(workflow_router)   # 工作流
 v1_router.include_router(actor_router)      # 演员管理
 v1_router.include_router(ai_router)         # AI 助手
 v1_router.include_router(bangumi_oauth_router)  # BGM OAuth
-
-
-v1_router.include_router(redirect_url_router)
 
 __all__ = ["v1_router"]
 
