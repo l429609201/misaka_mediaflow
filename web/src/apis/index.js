@@ -109,6 +109,8 @@ export const strmApi = {
   getTask: (id) => api.get(`/strm/tasks/${id}`),
   listFiles: (params) => api.get('/strm/files', { params }),
   purgeStaleFiles: () => api.post('/strm/files/purge'),
+  updateFileContent: (id, content) => api.post(`/strm/files/${id}/update`, { content }),
+  batchReplace: (find, replace, dry_run = true) => api.post('/strm/files/batch-replace', { find, replace, dry_run }),
   getUrlTemplate: () => api.get('/strm/url-template'),
   saveUrlTemplate: (template) => api.post('/strm/url-template', { template }),
 }

@@ -281,14 +281,18 @@ class StrmService:
                 "size": size,
             }
 
-    async def list_files(self, task_id: int = 0, page: int = 1, size: int = 20) -> dict:
-        """分页查询 STRM 文件列表"""
+    async def list_files(self, task_id: int = 0, page: int = 1, size: int = 20, search: str = "") -> dict:
+        """分页查询 STRM 文件列表（支持搜索）"""
         async with get_async_session_local() as db:
             query = select(StrmFile)
             count_query = select(func.count()).select_from(StrmFile)
             if task_id > 0:
                 query = query.where(StrmFile.task_id == task_id)
                 count_query = count_query.where(StrmFile.task_id == task_id)
+            if search:
+                like = f"%{search}%"
+                query = query.where(StrmFile.strm_path.like(like) | StrmFile.strm_content.like(like))
+                count_query = count_query.where(StrmFile.strm_path.like(like) | StrmFile.strm_content.like(like))
 
             count_result = await db.execute(count_query)
             total = count_result.scalar() or 0
@@ -305,6 +309,50 @@ class StrmService:
                 "page": page,
                 "size": size,
             }
+
+    async def update_strm_content(self, file_id: int, new_content: str) -> dict:
+        """更新单个 STRM 文件内容（数据库 + 本地文件）"""
+        async with get_async_session_local() as db:
+            f = await db.get(StrmFile, file_id)
+            if not f:
+                return {"success": False, "message": "记录不存在"}
+            old_content = f.strm_content
+            f.strm_content = new_content
+            # 同步写本地文件
+            try:
+                p = Path(f.strm_path)
+                if p.exists():
+                    p.write_text(new_content, encoding="utf-8")
+            except Exception as e:
+                logger.warning("写本地 STRM 文件失败: %s", e)
+            await db.commit()
+        return {"success": True, "old_content": old_content, "new_content": new_content}
+
+    async def batch_replace_strm_content(self, find: str, replace: str, dry_run: bool = True) -> dict:
+        """批量替换 STRM 文件内容"""
+        if not find:
+            return {"success": False, "message": "查找内容不能为空"}
+        matched = 0
+        replaced = 0
+        async with get_async_session_local() as db:
+            result = await db.execute(
+                select(StrmFile).where(StrmFile.strm_content.like(f"%{find}%"))
+            )
+            files = result.scalars().all()
+            matched = len(files)
+            if not dry_run:
+                for f in files:
+                    new_content = f.strm_content.replace(find, replace)
+                    f.strm_content = new_content
+                    try:
+                        p = Path(f.strm_path)
+                        if p.exists():
+                            p.write_text(new_content, encoding="utf-8")
+                    except Exception as e:
+                        logger.warning("批量替换写文件失败 %s: %s", f.strm_path, e)
+                    replaced += 1
+                await db.commit()
+        return {"success": True, "matched": matched, "replaced": replaced, "dry_run": dry_run}
 
 
     async def purge_stale_files(self) -> dict:

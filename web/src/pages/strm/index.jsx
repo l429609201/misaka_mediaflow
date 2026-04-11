@@ -3,14 +3,15 @@
  
  import { useState, useEffect, useCallback } from 'react'
  import {
-   Card, Button, Space, Row, Col, Statistic, Typography, message,
-   Table, Tabs, Tag, Tooltip, Progress, Popconfirm, Empty, Badge
+   Card, Button, Space, Row, Col, Statistic, Typography, message, Input,
+   Table, Tabs, Tag, Tooltip, Progress, Popconfirm, Empty, Badge, Modal, Form
  } from 'antd'
  import {
    ScanOutlined, DeleteOutlined, FileTextOutlined,
    CheckCircleOutlined, CloseCircleOutlined, WarningOutlined,
    ReloadOutlined, ExperimentOutlined, FolderOpenOutlined,
-   SafetyCertificateOutlined, ClearOutlined,
+   SafetyCertificateOutlined, ClearOutlined, EditOutlined,
+   SearchOutlined, SwapOutlined,
  } from '@ant-design/icons'
  import { useTranslation } from 'react-i18next'
  import { p115StrmApi, strmApi } from '@/apis'
@@ -81,11 +82,22 @@
    const [files,      setFiles]      = useState([])
    const [fileLoading,setFileLoading] = useState(false)
    const [filePagination, setFilePagination] = useState({ current: 1, pageSize: 20, total: 0 })
- 
-   const fetchFiles = useCallback(async (page = 1, size = 20) => {
+   const [fileSearch, setFileSearch] = useState('')
+   // 编辑弹窗
+   const [editOpen, setEditOpen] = useState(false)
+   const [editFile, setEditFile] = useState(null)
+   const [editContent, setEditContent] = useState('')
+   // 批量替换
+   const [replaceOpen, setReplaceOpen] = useState(false)
+   const [replaceFind, setReplaceFind] = useState('')
+   const [replaceWith, setReplaceWith] = useState('')
+   const [replaceResult, setReplaceResult] = useState(null)
+   const [replaceLoading, setReplaceLoading] = useState(false)
+
+   const fetchFiles = useCallback(async (page = 1, size = 20, search) => {
      setFileLoading(true)
      try {
-       const { data } = await strmApi.listFiles({ page, size })
+       const { data } = await strmApi.listFiles({ page, size, search: search ?? fileSearch })
        setFiles(data.items || [])
        setFilePagination({ current: data.page || page, pageSize: data.size || size, total: data.total || 0 })
      } catch {
@@ -93,7 +105,7 @@
      } finally {
        setFileLoading(false)
      }
-   }, [t])
+   }, [t, fileSearch])
  
    useEffect(() => { fetchFiles() }, [fetchFiles])
  
@@ -153,8 +165,13 @@
        render: (v) => <Text type="secondary" style={{ fontSize: 12 }}>{v}</Text> },
      { title: '模式', dataIndex: 'strm_mode', width: 80,
        render: (v) => <Tag>{v || '-'}</Tag> },
-     { title: '创建时间', dataIndex: 'created_at', width: 150,
-       render: (v) => <Text type="secondary" style={{ fontSize: 12 }}>{v || '-'}</Text> },
+     { title: '操作', key: 'action', width: 70, fixed: 'right',
+       render: (_, row) => (
+         <Button type="text" size="small" icon={<EditOutlined />} onClick={() => {
+           setEditFile(row); setEditContent(row.strm_content || ''); setEditOpen(true)
+         }} />
+       ),
+     },
    ]
  
    const tabItems = [
@@ -258,30 +275,59 @@
        label: <Space><FileTextOutlined />文件列表<Badge count={filePagination.total} overflowCount={99999} style={{ backgroundColor: '#6366f1' }} /></Space>,
        children: (
          <div style={{ paddingTop: 16 }}>
-           <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12, gap: 8 }}>
-             <Popconfirm title="将删除数据库中本地文件已不存在的记录，确定继续？" onConfirm={handlePurge} okText="确定" cancelText="取消">
-               <Button icon={<DeleteOutlined />} danger size="small" loading={purgeLoading}>
-                 清理失效记录
-               </Button>
-             </Popconfirm>
-             <Button icon={<ReloadOutlined />} size="small" onClick={() => fetchFiles()}>
-               刷新
-             </Button>
+           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
+             <Input.Search placeholder="搜索路径或内容..." allowClear style={{ width: 300 }}
+               enterButton={<SearchOutlined />}
+               onSearch={(val) => { setFileSearch(val); fetchFiles(1, filePagination.pageSize, val) }} />
+             <Space>
+               <Button icon={<SwapOutlined />} onClick={() => setReplaceOpen(true)}>批量替换</Button>
+               <Popconfirm title="删除本地已不存在的记录？" onConfirm={handlePurge} okText="确定" cancelText="取消">
+                 <Button icon={<DeleteOutlined />} danger size="small" loading={purgeLoading}>清理失效</Button>
+               </Popconfirm>
+               <Button icon={<ReloadOutlined />} size="small" onClick={() => fetchFiles()}>刷新</Button>
+             </Space>
            </div>
-           <Table
-             rowKey="id"
-             columns={fileColumns}
-             dataSource={files}
-             loading={fileLoading}
-             size="small"
-             scroll={{ x: 800 }}
-             pagination={{
-               ...filePagination,
-               onChange: (p, s) => fetchFiles(p, s),
-               showTotal: (total) => `共 ${total} 条`,
-               showSizeChanger: true,
-             }}
-           />
+           <Table rowKey="id" columns={fileColumns} dataSource={files} loading={fileLoading} size="small" scroll={{ x: 800 }}
+             pagination={{ ...filePagination, onChange: (p, s) => fetchFiles(p, s), showTotal: (total) => `共 ${total} 条`, showSizeChanger: true }} />
+           <Modal title="编辑 STRM 内容" open={editOpen} onCancel={() => setEditOpen(false)} width={640} destroyOnClose
+             onOk={async () => {
+               if (!editFile) return
+               try { await strmApi.updateFileContent(editFile.id, editContent); message.success('已更新'); setEditOpen(false); fetchFiles(filePagination.current, filePagination.pageSize) }
+               catch { message.error('更新失败') }
+             }}>
+             {editFile && (<div>
+               <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>路径: {editFile.strm_path}</Text>
+               <Input.TextArea value={editContent} onChange={e => setEditContent(e.target.value)} rows={4} style={{ fontFamily: 'monospace', fontSize: 13 }} />
+             </div>)}
+           </Modal>
+           <Modal title={<Space><SwapOutlined />批量替换 STRM 内容</Space>} open={replaceOpen}
+             onCancel={() => { setReplaceOpen(false); setReplaceResult(null) }} width={560} destroyOnClose
+             footer={[
+               <Button key="close" onClick={() => { setReplaceOpen(false); setReplaceResult(null) }}>关闭</Button>,
+               <Button key="dry" loading={replaceLoading} onClick={async () => {
+                 setReplaceLoading(true)
+                 try { const { data } = await strmApi.batchReplace(replaceFind, replaceWith, true); setReplaceResult(data) }
+                 catch { message.error('失败') } finally { setReplaceLoading(false) }
+               }}>试运行</Button>,
+               <Popconfirm key="exec" title={`确定替换 ${replaceResult?.matched || '?'} 个文件？`}
+                 onConfirm={async () => {
+                   setReplaceLoading(true)
+                   try { const { data } = await strmApi.batchReplace(replaceFind, replaceWith, false); setReplaceResult(data); message.success(`已替换 ${data?.replaced || 0} 个`); fetchFiles(filePagination.current, filePagination.pageSize) }
+                   catch { message.error('失败') } finally { setReplaceLoading(false) }
+                 }}>
+                 <Button type="primary" danger disabled={!replaceResult || replaceResult.matched === 0} loading={replaceLoading}>执行替换</Button>
+               </Popconfirm>,
+             ]}>
+             <Space direction="vertical" style={{ width: '100%' }} size="middle">
+               <div><Text strong>查找内容</Text><Input value={replaceFind} onChange={e => setReplaceFind(e.target.value)} placeholder="http://old-host:5244" style={{ marginTop: 4, fontFamily: 'monospace' }} /></div>
+               <div><Text strong>替换为</Text><Input value={replaceWith} onChange={e => setReplaceWith(e.target.value)} placeholder="http://new-host:5244" style={{ marginTop: 4, fontFamily: 'monospace' }} /></div>
+               {replaceResult && (<Card size="small" style={{ background: '#fafafa' }}><Row gutter={16}>
+                 <Col span={8}><Statistic title="匹配" value={replaceResult.matched || 0} valueStyle={{ color: '#1677ff' }} /></Col>
+                 <Col span={8}><Statistic title="已替换" value={replaceResult.replaced || 0} valueStyle={{ color: '#52c41a' }} /></Col>
+                 <Col span={8}><Tag color={replaceResult.dry_run ? 'orange' : 'green'} style={{ marginTop: 8 }}>{replaceResult.dry_run ? '试运行' : '已执行'}</Tag></Col>
+               </Row></Card>)}
+             </Space>
+           </Modal>
          </div>
        ),
      },
