@@ -237,6 +237,8 @@ export const aiApi = {
   getConfig: () => api.get('/ai/config'),
   saveConfig: (payload) => api.post('/ai/config', payload),
   testConnection: () => api.post('/ai/test'),
+  getBalance: () => api.get('/ai/balance'),
+  getModels: () => api.get('/ai/models'),
   // 统计
   getStats: () => api.get('/ai/stats'),
   resetStats: () => api.post('/ai/stats/reset'),
