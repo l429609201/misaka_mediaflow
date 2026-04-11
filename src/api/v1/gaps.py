@@ -1,5 +1,7 @@
 # src/api/v1/gaps.py
-# 缺集管理 API — 接入 TaskManager
+# 缺集管理 API — 后台异步执行 + 实时进度
+
+import asyncio
 
 from fastapi import APIRouter, Depends
 
@@ -11,16 +13,11 @@ router = APIRouter(prefix="/gaps", tags=["缺集管理"])
 _gaps_svc = GapsService()
 
 
-@router.get("/scan", dependencies=[Depends(verify_token)])
-async def scan_gaps(library_id: str = ""):
-    """扫描缺集：先同步 Emby 再批量比对 TMDB — 记录任务"""
+async def _run_scan(task_id: int, library_id: str):
+    """后台执行缺集扫描，实时更新进度"""
     tm = get_task_manager()
-    task_id = await tm.create_task("缺集扫描", task_category="gaps", task_type="manual")
-
     try:
-        tm.update_progress(task_id, "扫描中", {})
-        result = await _gaps_svc.scan_gaps(library_id)
-
+        result = await _gaps_svc.scan_gaps(library_id, task_id=task_id)
         if result.get("error"):
             await tm.complete_task(task_id, {"created": 0, "skipped": 0, "errors": 1}, result["error"])
         else:
@@ -29,9 +26,18 @@ async def scan_gaps(library_id: str = ""):
                 "skipped": result.get("skipped_no_tmdb", 0),
                 "errors": 0,
             })
-
-        result["task_id"] = task_id
-        return result
     except Exception as e:
         await tm.complete_task(task_id, {"created": 0, "skipped": 0, "errors": 1}, str(e))
-        return {"error": str(e), "task_id": task_id}
+
+
+@router.get("/scan", dependencies=[Depends(verify_token)])
+async def scan_gaps(library_id: str = ""):
+    """扫描缺集 — 后台异步执行，立即返回 task_id"""
+    tm = get_task_manager()
+    task_id = await tm.create_task("缺集扫描", task_category="gaps", task_type="manual")
+    tm.update_progress(task_id, "启动中", {})
+
+    bg_task = asyncio.create_task(_run_scan(task_id, library_id))
+    tm.register_task(task_id, bg_task)
+
+    return {"task_id": task_id, "message": "缺集扫描已启动"}

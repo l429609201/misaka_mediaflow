@@ -19,9 +19,11 @@ class GapsService:
 
     # ── 阶段1: 同步 Emby → DB ────────────────────────────────────────
 
-    async def sync_emby(self, library_id: str = "") -> dict:
+    async def sync_emby(self, library_id: str = "", task_id: int = 0) -> dict:
         """从 Emby 拉取 Series/Season/Episode 写入 meta_ 表"""
         from src.services.media_server_service import media_server_service
+        from src.services.task_manager import get_task_manager
+        tm = get_task_manager()
 
         adapter = await media_server_service.get_adapter()
         if not adapter:
@@ -47,10 +49,17 @@ class GapsService:
         logger.info("[Gaps] 阶段1: 同步 %d 部剧集...", len(all_series))
         synced = 0
         skipped = 0
+        total = len(all_series)
 
-        for series in all_series:
+        for idx, series in enumerate(all_series):
             emby_sid = series.get("Id", "")
             name = series.get("Name", "")
+
+            if task_id:
+                tm.update_progress(task_id, f"同步 {idx+1}/{total}: {name}", {
+                    "created": synced, "skipped": skipped, "errors": 0,
+                })
+
             pids = series.get("ProviderIds", {})
             tmdb_id = int(pids.get("Tmdb") or pids.get("tmdb") or 0)
             imdb_id = pids.get("Imdb") or pids.get("imdb") or ""
@@ -155,13 +164,22 @@ class GapsService:
 
     # ── 阶段2: 从 DB 读取 → 动态选择搜索源比对 ──────────────────────
 
-    async def scan_gaps(self, library_id: str = "") -> dict:
+    async def scan_gaps(self, library_id: str = "", task_id: int = 0) -> dict:
         """先同步 Emby→DB，再从 DB 读取，动态选择已启用的搜索源比对"""
         from src.services.metadata_service import metadata_service
+        from src.services.task_manager import get_task_manager
+        tm = get_task_manager()
 
-        sync_result = await self.sync_emby(library_id)
+        # 阶段1: 同步
+        if task_id:
+            tm.update_progress(task_id, "阶段1: 同步 Emby", {"created": 0, "skipped": 0, "errors": 0})
+        sync_result = await self.sync_emby(library_id, task_id=task_id)
         if sync_result.get("error"):
             return sync_result
+
+        # 阶段2: 比对
+        if task_id:
+            tm.update_progress(task_id, "阶段2: 比对搜索源", {"created": 0, "skipped": sync_result.get("skipped_no_tmdb", 0), "errors": 0})
 
         logger.info("[Gaps] 阶段2: 从 DB 读取，动态选择搜索源比对...")
         async with get_async_session_local() as db:
@@ -169,10 +187,11 @@ class GapsService:
                 select(MetaSeries).where(MetaSeries.media_type == "Series")
             )).scalars().all()
 
+        total = len(series_rows)
         gaps = []
         scanned = 0
         skipped_no_id = 0
-        for s_row in series_rows:
+        for idx, s_row in enumerate(series_rows):
             # 构建该剧的 provider_ids
             provider_ids = {}
             if s_row.tmdb_id:
@@ -182,9 +201,18 @@ class GapsService:
 
             if not provider_ids:
                 skipped_no_id += 1
+                if task_id:
+                    tm.update_progress(task_id, f"比对中 {idx+1}/{total}: {s_row.title}", {
+                        "created": len(gaps), "skipped": skipped_no_id, "errors": 0,
+                    })
                 continue
 
             try:
+                if task_id:
+                    tm.update_progress(task_id, f"比对中 {idx+1}/{total}: {s_row.title}", {
+                        "created": len(gaps), "skipped": skipped_no_id, "errors": 0,
+                    })
+
                 # 从 DB 读取该剧已有集数
                 async with get_async_session_local() as db:
                     ep_rows = (await db.execute(
