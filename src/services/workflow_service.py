@@ -244,7 +244,7 @@ class WorkflowEngine:
         if not wf_data:
             return {"success": False, "message": "工作流不存在"}
 
-        # 创建执行记录
+        # 创建执行记录（WorkflowExecution 表）
         async with get_async_session_local() as db:
             exe = WorkflowExecution(
                 workflow_id=wf_id,
@@ -258,12 +258,19 @@ class WorkflowEngine:
             await db.refresh(exe)
             exe_id = exe.id
 
-        # 异步执行
-        task = asyncio.create_task(self._run(exe_id, wf_data))
-        self._running[exe_id] = task
-        return {"success": True, "execution_id": exe_id}
+        # 同时记录到 TaskManager（任务中心可见）
+        from src.services.task_manager import get_task_manager
+        task_mgr = get_task_manager()
+        task_id = await task_mgr.create_task(
+            f"工作流: {wf_data['name']}", task_category="workflow", task_type=triggered_by,
+        )
 
-    async def _run(self, exe_id: int, wf_data: dict):
+        # 异步执行
+        task = asyncio.create_task(self._run(exe_id, wf_data, task_id))
+        self._running[exe_id] = task
+        return {"success": True, "execution_id": exe_id, "task_id": task_id}
+
+    async def _run(self, exe_id: int, wf_data: dict, task_id: int = 0):
         nodes = json.loads(wf_data.get("nodes", "[]")) if isinstance(wf_data.get("nodes"), str) else wf_data.get("nodes", [])
         edges = json.loads(wf_data.get("edges", "[]")) if isinstance(wf_data.get("edges"), str) else wf_data.get("edges", [])
         node_map = {n["id"]: n for n in nodes}
@@ -272,6 +279,7 @@ class WorkflowEngine:
         ctx = {"workflow_id": wf_data["id"], "prev_result": {}}
         node_results = {}
         error_msg = ""
+        completed_nodes = 0
 
         try:
             for node_id in sorted_ids:
@@ -290,6 +298,11 @@ class WorkflowEngine:
                         exe.node_results = json.dumps(node_results, ensure_ascii=False)
                         await db.commit()
 
+                # 同步更新 TaskManager 进度
+                if task_id:
+                    from src.services.task_manager import get_task_manager
+                    get_task_manager().update_progress(task_id, f"节点: {node_type}", {"created": completed_nodes})
+
                 if not handler:
                     node_results[node_id] = {"status": "skipped", "message": f"未知节点类型: {node_type}"}
                     continue
@@ -298,6 +311,7 @@ class WorkflowEngine:
                 result = await handler(ctx, params)
                 node_results[node_id] = result
                 ctx["prev_result"] = result
+                completed_nodes += 1
 
                 if result.get("status") == "error":
                     error_msg = f"节点 {node_id}({node_type}) 失败: {result.get('message', '')}"
@@ -319,6 +333,13 @@ class WorkflowEngine:
                     exe.finished_at = tm.now()
                     await db.commit()
             self._running.pop(exe_id, None)
+            # 同步完成 TaskManager
+            if task_id:
+                from src.services.task_manager import get_task_manager
+                await get_task_manager().complete_task(task_id, {
+                    "created": completed_nodes, "skipped": 0,
+                    "errors": 1 if error_msg else 0,
+                }, error_msg)
 
     # ── 查询执行记录 ──────────────────────────────────────────────────
 

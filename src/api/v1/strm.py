@@ -100,9 +100,25 @@ async def update_strm_content(file_id: int, payload: dict):
 
 @router.post("/files/batch-replace", dependencies=[Depends(verify_token)])
 async def batch_replace(payload: dict):
-    """批量替换 STRM 文件内容"""
-    return await _strm_service.batch_replace_strm_content(
-        find=payload.get("find", ""),
-        replace=payload.get("replace", ""),
-        dry_run=payload.get("dry_run", True),
-    )
+    """批量替换 STRM 文件内容 — 非试运行时记录任务"""
+    find = payload.get("find", "")
+    replace = payload.get("replace", "")
+    dry_run = payload.get("dry_run", True)
+
+    result = await _strm_service.batch_replace_strm_content(find=find, replace=replace, dry_run=dry_run)
+
+    if not dry_run and result.get("replaced", 0) > 0:
+        from src.services.task_manager import get_task_manager
+        tm = get_task_manager()
+        task_id = await tm.create_task(
+            f"STRM批量替换", task_category="strm_replace", task_type="manual",
+            extra_info={"find": find, "replace": replace},
+        )
+        await tm.complete_task(task_id, {
+            "created": result.get("replaced", 0),
+            "skipped": result.get("matched", 0) - result.get("replaced", 0),
+            "errors": 0,
+        })
+        result["task_id"] = task_id
+
+    return result

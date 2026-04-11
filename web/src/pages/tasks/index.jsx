@@ -45,6 +45,9 @@
      p115_strm: t('tasks.categoryP115Strm'),
      organize:  t('tasks.categoryOrganize'),
      manual:    t('tasks.categoryManual'),
+     actor:     t('tasks.categoryActor', '演员管理'),
+     workflow:  t('tasks.categoryWorkflow', '工作流'),
+     strm_replace: t('tasks.categoryStrmReplace', 'STRM替换'),
    }
    const stats = task.live_stats || {}
    const total = (stats.created || 0) + (stats.skipped || 0) + (stats.errors || 0)
@@ -102,6 +105,9 @@
      p115_strm: t('tasks.categoryP115Strm'),
      organize:  t('tasks.categoryOrganize'),
      manual:    t('tasks.categoryManual'),
+     actor:     t('tasks.categoryActor', '演员管理'),
+     workflow:  t('tasks.categoryWorkflow', '工作流'),
+     strm_replace: t('tasks.categoryStrmReplace', 'STRM替换'),
    }
  
    const fetchRunning = useCallback(async () => {
@@ -241,6 +247,9 @@
              value={filterCategory || undefined} onChange={(v) => setFilterCategory(v || '')}>
              <Select.Option value="p115_strm">{t('tasks.categoryP115Strm')}</Select.Option>
              <Select.Option value="organize">{t('tasks.categoryOrganize')}</Select.Option>
+             <Select.Option value="actor">{t('tasks.categoryActor', '演员管理')}</Select.Option>
+             <Select.Option value="workflow">{t('tasks.categoryWorkflow', '工作流')}</Select.Option>
+             <Select.Option value="strm_replace">{t('tasks.categoryStrmReplace', 'STRM替换')}</Select.Option>
            </Select>
            <Button icon={<ReloadOutlined />} onClick={() => { fetchTasks(); fetchRunning() }}>
              {t('common.refresh')}
