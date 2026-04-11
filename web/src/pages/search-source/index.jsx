@@ -86,6 +86,7 @@ const MetaSourceTab = ({ refreshKey }) => {
   const [testing, setTesting] = useState('')
   const [form] = Form.useForm()
   const [bgmAuth, setBgmAuth] = useState({})
+  const [bgmMode, setBgmMode] = useState('token') // 'token' | 'oauth'
   const oauthPopupRef = useRef(null)
 
   const discover = useCallback(async () => {
@@ -164,6 +165,11 @@ const MetaSourceTab = ({ refreshKey }) => {
     setEditingRecord(record)
     form.resetFields()
     form.setFieldsValue(record.values || {})
+    // BGM: 根据已有配置自动选择模式
+    if (record.key === 'bangumi') {
+      const v = record.values || {}
+      setBgmMode(v.client_id ? 'oauth' : 'token')
+    }
     setEditOpen(true)
   }
 
@@ -269,48 +275,69 @@ const MetaSourceTab = ({ refreshKey }) => {
           />
         )}
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
-          {(editingRecord?.fields || []).map(f => <DynamicField key={f.key} field={f} />)}
-        </Form>
+          {/* BGM: 按模式分别渲染字段 */}
+          {editingRecord?.key === 'bangumi' ? (
+            <>
+              <Form.Item label="认证方式" style={{ marginBottom: 16 }}>
+                <Switch
+                  checkedChildren="OAuth 授权"
+                  unCheckedChildren="Access Token"
+                  checked={bgmMode === 'oauth'}
+                  onChange={(checked) => setBgmMode(checked ? 'oauth' : 'token')}
+                />
+              </Form.Item>
 
-        {/* BGM OAuth 区域 */}
-        {editingRecord?.key === 'bangumi' && (
-          <>
-            <Divider>OAuth 授权（可选）</Divider>
-            <Alert type="info" showIcon style={{ marginBottom: 12 }}
-              message="OAuth 与 Token 二选一"
-              description="如果使用 OAuth 授权登录，上方 Access Token 可留空。OAuth 授权后系统会自动填入 Token。" />
-            {bgmAuth.isAuthenticated ? (
-              <Card size="small" style={{ marginBottom: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  {bgmAuth.avatarUrl && (
-                    <img src={bgmAuth.avatarUrl} alt="" style={{ width: 48, height: 48, borderRadius: '50%', objectFit: 'cover' }}
-                      onError={e => { e.target.style.display = 'none' }} />
+              {bgmMode === 'token' && (
+                (editingRecord.fields || [])
+                  .filter(f => f.key === 'access_token' || f.key === 'api_url')
+                  .map(f => <DynamicField key={f.key} field={f} />)
+              )}
+
+              {bgmMode === 'oauth' && (
+                <>
+                  {(editingRecord.fields || [])
+                    .filter(f => f.key === 'client_id' || f.key === 'client_secret' || f.key === 'api_url')
+                    .map(f => <DynamicField key={f.key} field={f} />)}
+
+                  <Divider style={{ margin: '12px 0' }}>授权状态</Divider>
+                  {bgmAuth.isAuthenticated ? (
+                    <Card size="small" style={{ marginBottom: 12 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        {bgmAuth.avatarUrl && (
+                          <img src={bgmAuth.avatarUrl} alt="" style={{ width: 48, height: 48, borderRadius: '50%', objectFit: 'cover' }}
+                            onError={e => { e.target.style.display = 'none' }} />
+                        )}
+                        <div style={{ flex: 1 }}>
+                          <div><Text strong>{bgmAuth.nickname}</Text></div>
+                          {bgmAuth.username && (
+                            <a href={`https://bgm.tv/user/${bgmAuth.username}`} target="_blank" rel="noopener noreferrer"
+                              style={{ fontSize: 12 }}>@{bgmAuth.username}</a>
+                          )}
+                        </div>
+                        <Tag color="success">已授权</Tag>
+                      </div>
+                      {bgmAuth.sign && <div style={{ fontSize: 12, color: '#888', marginTop: 8, borderTop: '1px solid #f0f0f0', paddingTop: 8 }}>{bgmAuth.sign}</div>}
+                      <div style={{ marginTop: 8 }}>
+                        <Button size="small" danger icon={<LogoutOutlined />} onClick={handleBgmLogout}>注销授权</Button>
+                      </div>
+                    </Card>
+                  ) : (
+                    <div style={{ textAlign: 'center', padding: '16px 0' }}>
+                      <div style={{ marginBottom: 12, color: '#888' }}>当前未通过 OAuth 授权</div>
+                      <Button type="primary" icon={<LoginOutlined />} onClick={handleBgmOAuth}>
+                        通过 Bangumi 登录
+                      </Button>
+                      <div style={{ fontSize: 12, color: '#999', marginTop: 8 }}>需要先填写 App ID 和 App Secret 并保存后，再点击授权</div>
+                    </div>
                   )}
-                  <div style={{ flex: 1 }}>
-                    <div><Text strong>{bgmAuth.nickname}</Text></div>
-                    {bgmAuth.username && (
-                      <a href={`https://bgm.tv/user/${bgmAuth.username}`} target="_blank" rel="noopener noreferrer"
-                        style={{ fontSize: 12 }}>@{bgmAuth.username}</a>
-                    )}
-                  </div>
-                  <Tag color="success">已授权</Tag>
-                </div>
-                {bgmAuth.sign && <div style={{ fontSize: 12, color: '#888', marginTop: 8, borderTop: '1px solid #f0f0f0', paddingTop: 8 }}>{bgmAuth.sign}</div>}
-                <div style={{ marginTop: 8 }}>
-                  <Button size="small" danger icon={<LogoutOutlined />} onClick={handleBgmLogout}>注销授权</Button>
-                </div>
-              </Card>
-            ) : (
-              <div style={{ textAlign: 'center', padding: '16px 0' }}>
-                <div style={{ marginBottom: 12, color: '#888' }}>当前未通过 OAuth 授权</div>
-                <Button type="primary" icon={<LoginOutlined />} onClick={handleBgmOAuth}>
-                  通过 Bangumi 登录
-                </Button>
-                <div style={{ fontSize: 12, color: '#999', marginTop: 8 }}>需要先填写上方的 App ID 和 App Secret 并保存</div>
-              </div>
-            )}
-          </>
-        )}
+                </>
+              )}
+            </>
+          ) : (
+            /* 其他源: 通用渲染所有字段 */
+            (editingRecord?.fields || []).map(f => <DynamicField key={f.key} field={f} />)
+          )}
+        </Form>
       </Modal>
     </>
   )
