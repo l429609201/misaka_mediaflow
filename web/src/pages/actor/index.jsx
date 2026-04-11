@@ -108,11 +108,11 @@ const ActorPage = () => {
     finally { setL('orphans', false) }
   }
 
-  const fetchGhosts = async () => {
-    setL('ghosts', true)
-    try { const { data } = await actorApi.findGhosts(100); setGhosts(data?.items || []) }
+  const fetchNoId = async () => {
+    setL('noId', true)
+    try { const { data } = await actorApi.findNoId(); setGhosts(data?.items || []) }
     catch { message.error(t('common.failed')) }
-    finally { setL('ghosts', false) }
+    finally { setL('noId', false) }
   }
 
   // 表格列
@@ -172,12 +172,12 @@ const ActorPage = () => {
             </Card>
           </div>
         )},
-        { key: 'orphan', label: <Space><UserDeleteOutlined />{t('actor.tabOrphan', '黑户清理')}</Space>, children: (
+        { key: 'orphan', label: <Space><UserDeleteOutlined />{t('actor.tabOrphan', '无关联演员清理')}</Space>, children: (
           <div>
             <Card size="small" style={{ marginBottom: 12 }}>
               <Space direction="vertical">
-                <Text>{t('actor.orphanDesc')}</Text>
-                <Button type="primary" icon={<SearchOutlined />} onClick={fetchOrphans} loading={loading.orphans}>{t('actor.scanOrphans', '扫描黑户')}</Button>
+                <Text>{t('actor.orphanDesc', '无关联演员：在 Emby 中存在但没有出现在任何电影或剧集 People 列表里的演员记录。')}</Text>
+                <Button type="primary" icon={<SearchOutlined />} onClick={fetchOrphans} loading={loading.orphans}>{t('actor.scanOrphans', '扫描无关联演员')}</Button>
               </Space>
             </Card>
             {orphans.length > 0 && <Card size="small"><Table rowKey="id" columns={simpleCols} dataSource={orphans} size="small"
@@ -187,12 +187,12 @@ const ActorPage = () => {
                 <Button danger icon={<DeleteOutlined />}>删除 ({selectedKeys.length})</Button></Popconfirm> : null} /></Card>}
           </div>
         )},
-        { key: 'ghost', label: <Space><ExclamationCircleOutlined />{t('actor.tabGhost', '幽灵检测')}</Space>, children: (
+        { key: 'no_id', label: <Space><ExclamationCircleOutlined />{t('actor.tabNoId', '无关联ID演员清理')}</Space>, children: (
           <div>
             <Card size="small" style={{ marginBottom: 12 }}>
               <Space direction="vertical">
-                <Text>{t('actor.ghostDesc')}</Text>
-                <Button type="primary" icon={<SearchOutlined />} onClick={fetchGhosts} loading={loading.ghosts}>{t('actor.scanGhosts', '扫描幽灵')}</Button>
+                <Text>{t('actor.noIdDesc', '无关联ID演员：没有 TMDB ID 和 IMDB ID 的演员，可能是手动添加或数据异常。')}</Text>
+                <Button type="primary" icon={<SearchOutlined />} onClick={fetchNoId} loading={loading.noId}>{t('actor.scanNoId', '扫描无关联ID演员')}</Button>
               </Space>
             </Card>
             {ghosts.length > 0 && <Card size="small"><Table rowKey="id" columns={simpleCols} dataSource={ghosts} size="small"
@@ -202,7 +202,7 @@ const ActorPage = () => {
                 <Button danger icon={<DeleteOutlined />}>删除 ({selectedKeys.length})</Button></Popconfirm> : null} /></Card>}
           </div>
         )},
-        { key: 'translate', label: <Space><TranslationOutlined />{t('actor.tabTranslate', '中文化')}</Space>, children: (
+        { key: 'translate', label: <Space><TranslationOutlined />{t('actor.tabTranslate', '演员信息中文化')}</Space>, children: (
           <div>
             <Card size="small" style={{ marginBottom: 12 }}>
               <Space direction="vertical">

@@ -122,7 +122,7 @@ async def _handle_actor_cleanup(ctx: dict, params: dict) -> dict:
     """演员清理"""
     try:
         from src.services.actor_service import actor_service
-        mode = params.get("mode", "ghost")
+        mode = params.get("mode", "orphan")
         result = await actor_service.cleanup(mode=mode)
         return {"status": "ok", "result": result}
     except Exception as e:
@@ -381,8 +381,8 @@ class WorkflowEngine:
             "organize": {"label": "整理分类", "category": "task", "color": "#eb2f96"},
             "refresh_library": {"label": "刷新媒体库", "category": "task", "color": "#2f54eb"},
             "notify": {"label": "发送通知", "category": "task", "color": "#fa8c16"},
-            "actor_cleanup": {"label": "演员清理", "category": "actor", "color": "#a0d911"},
-            "actor_translate": {"label": "演员中文化", "category": "actor", "color": "#a0d911"},
+            "actor_cleanup": {"label": "无关联演员清理", "category": "actor", "color": "#a0d911"},
+            "actor_translate": {"label": "演员信息中文化", "category": "actor", "color": "#a0d911"},
         }
         result = []
         for ntype in _NODE_HANDLERS:

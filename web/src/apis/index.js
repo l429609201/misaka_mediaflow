@@ -224,7 +224,7 @@ export const workflowApi = {
 export const actorApi = {
   listPersons: (params) => api.get('/actor/persons', { params }),
   findOrphans: () => api.get('/actor/orphans'),
-  findGhosts: (limit = 100) => api.get('/actor/ghosts', { params: { limit } }),
+  findNoId: () => api.get('/actor/no-id'),
   translate: (limit = 200) => api.post('/actor/translate', null, { params: { limit } }),
   deletePerson: (id) => api.delete(`/actor/person/${id}`),
   updatePerson: (id, payload) => api.post(`/actor/person/${id}/update`, payload),

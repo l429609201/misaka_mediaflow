@@ -96,57 +96,53 @@ class ActorService:
         data = resp.json()
         return data.get("Items", [])
 
-    # ── 黑户演员清理 ──────────────────────────────────────────────────
+    async def _fetch_all_persons_raw(self) -> list[dict]:
+        """内部方法：全量拉取 Emby 所有演员（不生成头像URL，用于批量操作）"""
+        _, client = await self._get_emby()
+        resp = await client.get("/emby/Persons", params={
+            "Fields": "ProviderIds,PrimaryImageTag",
+            "Limit": "100000",
+        })
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+        items = data.get("Items", []) if isinstance(data, dict) else data
+        return [{
+            "id": p.get("Id", ""),
+            "name": p.get("Name", ""),
+            "provider_ids": p.get("ProviderIds", {}),
+            "has_image": bool(p.get("PrimaryImageTag")),
+        } for p in items]
+
+    # ── 无关联演员清理 ────────────────────────────────────────────────
+    # 参考 emby-toolkit: Persons 中存在但没有出现在任何媒体 People 里的
 
     async def find_orphan_actors(self) -> list[dict]:
-        """找出没有关联任何媒体的"黑户"演员"""
-        result = await self.get_all_persons(page=1, size=50000)
-        persons = result.get("items", [])
+        """找出没有关联任何媒体的演员"""
+        persons = await self._fetch_all_persons_raw()
         media_items = await self.get_media_with_people()
 
-        # 收集所有媒体中出现的演员名
+        # 收集所有媒体中出现的演员名（用 Name 匹配，参考 emby-toolkit）
         used_names = set()
         for item in media_items:
             for p in item.get("People", []):
-                used_names.add(p.get("Name", ""))
+                name = p.get("Name", "").strip()
+                if name:
+                    used_names.add(name)
 
-        orphans = [p for p in persons if p["name"] not in used_names]
+        orphans = [p for p in persons if p["name"].strip() not in used_names]
         return orphans
 
-    # ── 幽灵演员检测 ──────────────────────────────────────────────────
+    # ── 无关联ID演员清理 ──────────────────────────────────────────────
+    # 参考 emby-toolkit: 没有 TMDB Person ID 的演员（不需要在线搜索验证）
 
-    async def find_ghost_actors(self, limit: int = 100) -> list[dict]:
-        """找出 TMDB 上查不到的演员"""
-        result = await self.get_all_persons(page=1, size=50000)
-        persons = result.get("items", [])
-        tmdb = await self._get_tmdb()
-        ghosts = []
-        checked = 0
-
-        for p in persons:
-            if checked >= limit:
-                break
-            tmdb_id = p.get("provider_ids", {}).get("Tmdb", "")
-            if tmdb_id:
-                continue  # 有 TMDB ID 的不算幽灵
-            # 通过名字搜索
-            if tmdb:
-                try:
-                    result = await tmdb.search_multi(p["name"])
-                    found_person = any(
-                        r.get("media_type") == "person"
-                        for r in result.get("raw", [])
-                    )
-                    if not found_person:
-                        ghosts.append(p)
-                except Exception:
-                    pass
-            else:
-                # 没有 TMDB 配置，无 TMDB ID 的都算幽灵
-                ghosts.append(p)
-            checked += 1
-
-        return ghosts
+    async def find_no_id_actors(self) -> list[dict]:
+        """找出没有 TMDB ID 的演员"""
+        persons = await self._fetch_all_persons_raw()
+        no_id = [p for p in persons
+                 if not p.get("provider_ids", {}).get("Tmdb")
+                 and not p.get("provider_ids", {}).get("Imdb")]
+        return no_id
 
     # ── 中文化演员名 ──────────────────────────────────────────────────
 
@@ -231,12 +227,12 @@ class ActorService:
 
     # ── 演员清理(统一入口，供工作流调用) ─────────────────────────────────
 
-    async def cleanup(self, mode: str = "ghost") -> dict:
-        """清理演员 mode=orphan(黑户) / ghost(幽灵)"""
+    async def cleanup(self, mode: str = "orphan") -> dict:
+        """清理演员 mode=orphan(无关联演员) / no_id(无关联ID演员)"""
         if mode == "orphan":
             actors = await self.find_orphan_actors()
-        elif mode == "ghost":
-            actors = await self.find_ghost_actors()
+        elif mode == "no_id":
+            actors = await self.find_no_id_actors()
         else:
             return {"success": False, "message": f"未知模式: {mode}"}
 

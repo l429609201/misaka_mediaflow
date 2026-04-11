@@ -24,10 +24,10 @@ async def list_persons(
 
 @router.get("/orphans", dependencies=[Depends(verify_token)])
 async def find_orphans():
-    """查找黑户演员 — 后台任务"""
+    """无关联演员清理 — 后台任务"""
     tm = get_task_manager()
     svc = get_actor_service()
-    task_id = await tm.create_task("黑户演员扫描", task_category="actor", task_type="manual")
+    task_id = await tm.create_task("无关联演员扫描", task_category="actor", task_type="manual")
 
     async def _run():
         try:
@@ -43,25 +43,25 @@ async def find_orphans():
     return {"items": orphans, "total": len(orphans), "task_id": task_id}
 
 
-@router.get("/ghosts", dependencies=[Depends(verify_token)])
-async def find_ghosts(limit: int = Query(100, ge=1, le=500)):
-    """查找幽灵演员 — 后台任务"""
+@router.get("/no-id", dependencies=[Depends(verify_token)])
+async def find_no_id():
+    """无关联ID演员清理 — 找出没有 TMDB/IMDB ID 的演员"""
     tm = get_task_manager()
     svc = get_actor_service()
-    task_id = await tm.create_task("幽灵演员扫描", task_category="actor", task_type="manual")
+    task_id = await tm.create_task("无关联ID演员扫描", task_category="actor", task_type="manual")
 
     async def _run():
         try:
             tm.update_progress(task_id, "扫描中", {})
-            ghosts = await svc.find_ghost_actors(limit=limit)
-            await tm.complete_task(task_id, {"created": len(ghosts), "skipped": 0, "errors": 0})
-            return ghosts
+            actors = await svc.find_no_id_actors()
+            await tm.complete_task(task_id, {"created": len(actors), "skipped": 0, "errors": 0})
+            return actors
         except Exception as e:
             await tm.complete_task(task_id, {"created": 0, "skipped": 0, "errors": 1}, str(e))
             return []
 
-    ghosts = await _run()
-    return {"items": ghosts, "total": len(ghosts), "task_id": task_id}
+    actors = await _run()
+    return {"items": actors, "total": len(actors), "task_id": task_id}
 
 
 @router.post("/translate", dependencies=[Depends(verify_token)])
@@ -69,7 +69,7 @@ async def translate_actor_names(limit: int = Query(200, ge=1, le=1000)):
     """演员名中文化 — 后台任务"""
     tm = get_task_manager()
     svc = get_actor_service()
-    task_id = await tm.create_task("演员名中文化", task_category="actor", task_type="manual")
+    task_id = await tm.create_task("演员信息中文化", task_category="actor", task_type="manual")
 
     async def _run():
         try:
@@ -125,7 +125,7 @@ async def batch_delete(payload: BatchDeletePayload):
 
 
 @router.post("/cleanup", dependencies=[Depends(verify_token)])
-async def cleanup_actors(mode: str = Query("ghost", description="orphan/ghost")):
+async def cleanup_actors(mode: str = Query("orphan", description="orphan/no_id")):
     svc = get_actor_service()
     return await svc.cleanup(mode=mode)
 
