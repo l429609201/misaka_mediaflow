@@ -21,12 +21,9 @@ router = APIRouter(prefix="/ai", tags=["AI 服务"])
 async def get_config():
     config = await get_ai_config()
     safe = {**config}
-    if safe.get("api_key"):
-        key = safe["api_key"]
-        safe["api_key"] = key[:8] + "****" + key[-4:] if len(key) > 12 else "****"
-        safe["api_key_set"] = True
-    else:
-        safe["api_key_set"] = False
+    # 不返回 api_key 值，只返回是否已设置
+    safe["api_key_set"] = bool(safe.get("api_key"))
+    safe.pop("api_key", None)
     return safe
 
 
@@ -42,7 +39,8 @@ class AIConfigPayload(BaseModel):
 @router.post("/config", dependencies=[Depends(verify_token)])
 async def update_config(payload: AIConfigPayload):
     data = payload.model_dump()
-    if "****" in data.get("api_key", ""):
+    # api_key 为空则保留旧值
+    if not data.get("api_key"):
         old = await get_ai_config()
         data["api_key"] = old.get("api_key", "")
     invalidate_ai_cache()

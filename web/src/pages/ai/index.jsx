@@ -34,8 +34,14 @@ const AIPage = () => {
 
   const setL = (k, v) => setLoading(p => ({ ...p, [k]: v }))
 
+  const [apiKeySet, setApiKeySet] = useState(false)
+
   const loadConfig = useCallback(async () => {
-    try { const { data } = await aiApi.getConfig(); form.setFieldsValue(data || {}) } catch {}
+    try {
+      const { data } = await aiApi.getConfig()
+      setApiKeySet(data?.api_key_set || false)
+      form.setFieldsValue(data || {})
+    } catch {}
   }, [form])
 
   const loadStats = useCallback(async () => {
@@ -97,8 +103,10 @@ const AIPage = () => {
                 <Form.Item name="provider" label="AI 提供商">
                   <Select options={PROVIDERS} />
                 </Form.Item>
-                <Form.Item name="api_key" label="API 密钥" rules={[{ required: true }]}>
-                  <Input.Password placeholder="sk-..." />
+                <Form.Item name="api_key" label="API 密钥"
+                  extra={apiKeySet ? '已配置，留空保持不变' : ''}
+                  rules={apiKeySet ? [] : [{ required: true, message: '请输入 API Key' }]}>
+                  <Input.Password placeholder={apiKeySet ? '已配置（留空保持不变）' : 'sk-...'} />
                 </Form.Item>
                 <Form.Item name="base_url" label="Base URL" extra="留空使用官方默认地址，自定义部署填写完整地址">
                   <Input placeholder="https://api.openai.com/v1" />
