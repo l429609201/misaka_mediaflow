@@ -100,7 +100,8 @@ class ActorService:
 
     async def find_orphan_actors(self) -> list[dict]:
         """找出没有关联任何媒体的"黑户"演员"""
-        persons = await self.get_all_persons()
+        result = await self.get_all_persons(page=1, size=50000)
+        persons = result.get("items", [])
         media_items = await self.get_media_with_people()
 
         # 收集所有媒体中出现的演员名
@@ -116,7 +117,8 @@ class ActorService:
 
     async def find_ghost_actors(self, limit: int = 100) -> list[dict]:
         """找出 TMDB 上查不到的演员"""
-        persons = await self.get_all_persons()
+        result = await self.get_all_persons(page=1, size=50000)
+        persons = result.get("items", [])
         tmdb = await self._get_tmdb()
         ghosts = []
         checked = 0
