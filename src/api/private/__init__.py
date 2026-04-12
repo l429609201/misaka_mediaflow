@@ -40,9 +40,9 @@ async def oauth_callback(provider: str, request: Request):
     try:
         instance = MetadataFactory.create(provider)
         payload = dict(request.query_params)
-        # 注入 origin_url 供 Provider 重建 redirect_uri
-        origin = f"{request.url.scheme}://{request.url.netloc}"
-        payload["origin_url"] = origin
+        # 直接从回调 URL 截取 redirect_uri（去掉 query string），保证和授权时完全一致
+        redirect_uri = str(request.url).split("?")[0]
+        payload["redirect_uri"] = redirect_uri
         result = await instance.handle_private_route("oauth-callback", "GET", payload)
 
         if result.get("success"):

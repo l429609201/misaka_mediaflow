@@ -189,18 +189,19 @@ class BangumiProvider(MetadataProvider):
         if not client_id:
             return {"error": "请先在 Bangumi 配置中填写 App ID"}
         state = secrets.token_urlsafe(16)
-        oauth_data = await self._load_oauth()
-        oauth_data["pending_state"] = state
-        await self._save_oauth(oauth_data)
-        # redirect_uri 指向后端回调路由，不走前端 /web/
+        # redirect_uri 指向后端回调路由
         origin = payload.get("origin_url", "").rstrip("/")
         redirect_uri = f"{origin}/api/private/bangumi/oauth-callback"
+        # 保存 state + redirect_uri，换码时直接取用，避免不一致
+        oauth_data = await self._load_oauth()
+        oauth_data["pending_state"] = state
+        oauth_data["redirect_uri"] = redirect_uri
+        await self._save_oauth(oauth_data)
         url = f"{_BGM_AUTH_URL}?client_id={client_id}&response_type=code&redirect_uri={redirect_uri}&state={state}"
         return {"url": url}
 
     async def _action_exchange_code(self, payload: dict) -> dict:
-        """用授权码换取 token — payload 来自 bgm.tv 回调的 query params (code, state)
-        或来自 oauth_callback 路由传入的 dict，需自带 origin_url 以重建 redirect_uri"""
+        """用授权码换取 token — redirect_uri 从 DB 取授权时保存的值"""
         from src.api.v1.search_source import _load_json, _save_json, _OVERRIDE_KEY
         from src.core.timezone import tm
         from src.db import get_async_session_local
@@ -212,12 +213,9 @@ class BangumiProvider(MetadataProvider):
         if not client_id or not client_secret:
             return {"success": False, "message": "App ID 或 App Secret 未配置"}
 
-        # 重建 redirect_uri — 必须和 auth-url 时完全一致
-        redirect_uri = payload.get("redirect_uri", "")
-        if not redirect_uri:
-            origin = payload.get("origin_url", "").rstrip("/")
-            if origin:
-                redirect_uri = f"{origin}/api/private/bangumi/oauth-callback"
+        # redirect_uri 从 DB 取授权时保存的值，确保和 auth-url 完全一致
+        oauth_data = await self._load_oauth()
+        redirect_uri = oauth_data.get("redirect_uri", "") or payload.get("redirect_uri", "")
 
         try:
             async with proxy_client(target_url=_BGM_TOKEN_URL, timeout=15) as client:
@@ -226,7 +224,7 @@ class BangumiProvider(MetadataProvider):
                     "client_id": client_id,
                     "client_secret": client_secret,
                     "code": payload.get("code", ""),
-                    "redirect_uri": payload.get("redirect_uri", ""),
+                    "redirect_uri": redirect_uri,
                 }, headers={"Content-Type": "application/x-www-form-urlencoded"})
                 resp.raise_for_status()
                 token_data = resp.json()
