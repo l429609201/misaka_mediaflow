@@ -104,15 +104,34 @@ async def save_source(payload: SavePayload):
 
 @router.post("/test/{name}", dependencies=[Depends(verify_token)])
 async def test_source(name: str):
-    """测试搜索源连接"""
-    from src.services.metadata_service import metadata_service
+    """测试搜索源连接 — 绕过 available 检查，直接创建实例测试"""
+    from src.adapters.metadata.factory import MetadataFactory
+    import inspect as _inspect
 
+    provider_cls = MetadataFactory.get_provider_class(name)
+    if not provider_cls:
+        return {"success": False, "message": f"未知的搜索源: {name}"}
+
+    # 从 DB 读配置（和 _build_provider 一样的逻辑，但不做 available 检查）
     try:
-        provider = await metadata_service.get_provider(name)
-        if not provider:
-            return {"success": False, "message": f"搜索源 {name} 未配置或不存在"}
+        async with get_async_session_local() as db:
+            cfg_data = {}
+            config_key = provider_cls.CONFIG_KEY
+            if config_key:
+                row = await db.execute(select(SystemConfig).where(SystemConfig.key == config_key))
+                cfg_row = row.scalars().first()
+                if cfg_row and cfg_row.value:
+                    cfg_data = json.loads(cfg_row.value)
+
+            override_map = await _load_json(db, _OVERRIDE_KEY)
+            source_vals = override_map.get(name, {})
+            cfg_data = {**source_vals, **cfg_data}
+
+        valid_keys = set(_inspect.signature(provider_cls.__init__).parameters) - {"self"}
+        filtered = {k: v for k, v in cfg_data.items() if k in valid_keys}
+        provider = MetadataFactory.create(name, **filtered)
         ok = await provider.test_connection()
-        return {"success": ok, "message": "连接成功" if ok else "连接失败"}
+        return {"success": ok, "message": "连接成功" if ok else "连接失败，请检查配置"}
     except Exception as e:
         return {"success": False, "message": str(e)}
 

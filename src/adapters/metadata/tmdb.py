@@ -158,8 +158,11 @@ class TMDBProvider(MetadataProvider):
         return bool(self._api_key)
 
     async def test_connection(self) -> bool:
-        data = await self._get("/configuration")
-        return bool(data.get("images"))
+        try:
+            data = await self._get("/configuration")
+            return bool(data.get("images"))
+        except Exception:
+            return False
 
     async def search(self, query: str, media_type: str = "movie", year: int = 0) -> list[MetadataResult]:
         """搜索电影或电视剧，自动语言回退"""

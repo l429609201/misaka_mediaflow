@@ -122,9 +122,22 @@ class BangumiProvider(MetadataProvider):
             return None
 
     async def test_connection(self) -> bool:
+        # 如果没有 token，尝试从 OAuth 存储取
+        token = self._token
+        if not token:
+            oauth_data = await self._load_oauth()
+            token = oauth_data.get("access_token", "")
+        if not token:
+            return False
         try:
-            data = await self._get("/v0/me")
-            return bool(data.get("id"))
+            url = f"{self._base}/v0/me"
+            async with proxy_client(target_url=url, timeout=10) as client:
+                resp = await client.get(url, headers={
+                    "Authorization": f"Bearer {token}",
+                    "User-Agent": "MisakaMediaFlow/1.0",
+                    "Accept": "application/json",
+                })
+                return resp.status_code == 200
         except Exception:
             return False
 
