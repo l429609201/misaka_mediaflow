@@ -59,7 +59,14 @@ async def discover_sources():
         name = p["name"]
         saved = override_map.get(name, {})
         # 把 fields 默认值和已保存值合并，返回给前端当作表单初始值
-        field_values = {f["key"]: saved.get(f["key"], f.get("default", "")) for f in p["fields"]}
+        field_values = {}
+        for f in p["fields"]:
+            val = saved.get(f["key"], f.get("default", ""))
+            # switch 类型转 boolean
+            if f.get("type") == "switch":
+                if isinstance(val, str):
+                    val = val.lower() in ("true", "1", "yes")
+            field_values[f["key"]] = val
         result.append({
             "key": name,
             "name": p["label"],

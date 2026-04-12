@@ -22,7 +22,7 @@ class MetaFieldSpec:
     """
     key: str                                              # 配置 JSON 中的键名
     label: str                                            # 前端显示标签
-    type: Literal['text', 'password', 'textarea'] = 'text'
+    type: Literal['text', 'password', 'textarea', 'switch'] = 'text'
     required: bool = False
     secret: bool = False
     placeholder: str = ""

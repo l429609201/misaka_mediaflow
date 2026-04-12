@@ -63,6 +63,16 @@ const DynamicField = ({ field }) => {
   const rules = field.required ? [{ required: true, message: `请输入 ${field.label}` }] : []
   const extra = field.hint ? <span style={{ fontSize: 12, color: '#888' }}>{field.hint}</span> : null
 
+  // switch 类型
+  if (field.type === 'switch') {
+    return (
+      <Form.Item key={field.key} name={field.key} label={field.label}
+        valuePropName="checked" extra={extra}>
+        <Switch />
+      </Form.Item>
+    )
+  }
+
   // 为 secret 类型字段加锁图标
   const prefix = field.secret ? <KeyOutlined style={{ color: '#bbb' }} /> : undefined
 

@@ -27,25 +27,30 @@ class ImdbProvider(MetadataProvider):
     CONFIG_FIELDS = [
         MetaFieldSpec(
             key="use_api",
-            label="数据源",
-            type="text",
-            placeholder="true",
-            hint="true=第三方API, false=IMDB官方Suggestion接口(更稳定)",
+            label="使用第三方 API",
+            type="switch",
+            hint="开启=第三方API (api.imdbapi.dev), 关闭=IMDB官方Suggestion接口(更稳定)",
             default="true",
         ),
         MetaFieldSpec(
             key="enable_fallback",
             label="启用兜底",
-            type="text",
-            placeholder="true",
-            hint="true=主方式失败时自动尝试另一种方式",
+            type="switch",
+            hint="主方式失败时自动尝试另一种方式",
             default="true",
         ),
     ]
 
-    def __init__(self, use_api: str = "true", enable_fallback: str = "true", **kwargs):
-        self._use_api = use_api.lower() in ("true", "1", "yes")
-        self._enable_fallback = enable_fallback.lower() in ("true", "1", "yes")
+    def __init__(self, use_api="true", enable_fallback="true", **kwargs):
+        # switch 类型前端传 True/False (bool) 或 "true"/"false" (str)
+        if isinstance(use_api, bool):
+            self._use_api = use_api
+        else:
+            self._use_api = str(use_api).lower() in ("true", "1", "yes")
+        if isinstance(enable_fallback, bool):
+            self._enable_fallback = enable_fallback
+        else:
+            self._enable_fallback = str(enable_fallback).lower() in ("true", "1", "yes")
 
     @property
     def available(self) -> bool:
