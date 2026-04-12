@@ -85,6 +85,8 @@ const MetaSourceTab = ({ refreshKey }) => {
   const [editingRecord, setEditingRecord] = useState(null)
   const [testing, setTesting] = useState('')
   const [form] = Form.useForm()
+  // 连接状态: { sourceKey: 'ok' | 'error' | 'checking' | 'unknown' }
+  const [healthMap, setHealthMap] = useState({})
   const [bgmAuth, setBgmAuth] = useState({})
   const [bgmMode, setBgmMode] = useState('token') // 'token' | 'oauth'
   const oauthPopupRef = useRef(null)
@@ -93,13 +95,35 @@ const MetaSourceTab = ({ refreshKey }) => {
     setLoading(true)
     try {
       const { data } = await systemApi.discoverSources()
-      setSources(data.sources || [])
+      const list = data.sources || []
+      setSources(list)
+      // 自动并行检测所有源的连接状态
+      checkAllHealth(list)
     } catch {
       message.error('发现搜索源失败')
     } finally {
       setLoading(false)
     }
   }, [])
+
+  const checkAllHealth = useCallback((list) => {
+    const names = (list || sources).map(s => s.key)
+    // 先全部设为 checking
+    setHealthMap(prev => {
+      const next = { ...prev }
+      names.forEach(n => { next[n] = 'checking' })
+      return next
+    })
+    // 并行检测
+    names.forEach(async (name) => {
+      try {
+        const { data } = await systemApi.testSource(name)
+        setHealthMap(prev => ({ ...prev, [name]: data.success ? 'ok' : 'error' }))
+      } catch {
+        setHealthMap(prev => ({ ...prev, [name]: 'error' }))
+      }
+    })
+  }, [sources])
 
   useEffect(() => { discover() }, [refreshKey, discover])
 
@@ -174,24 +198,30 @@ const MetaSourceTab = ({ refreshKey }) => {
 
   const handleEditOk = async () => {
     const values = await form.validateFields()
-    setSources(prev => prev.map(s => s.key === editingRecord.key ? { ...s, values } : s))
+    const name = editingRecord.key
+    setSources(prev => prev.map(s => s.key === name ? { ...s, values } : s))
     try {
-      await systemApi.saveSource({ name: editingRecord.key, enabled: editingRecord.enabled, values })
+      await systemApi.saveSource({ name, enabled: editingRecord.enabled, values })
       message.success('已保存')
+      // 保存后重新检测该源
+      setTimeout(() => handleTest(name), 500)
     } catch { message.error('保存失败') }
     setEditOpen(false)
   }
 
   const handleTest = async (name) => {
     setTesting(name)
+    setHealthMap(prev => ({ ...prev, [name]: 'checking' }))
     try {
       const { data } = await systemApi.testSource(name)
+      setHealthMap(prev => ({ ...prev, [name]: data.success ? 'ok' : 'error' }))
       if (data.success) {
         message.success(`${name}: ${data.message}`)
       } else {
         message.error(`${name}: ${data.message}`)
       }
     } catch {
+      setHealthMap(prev => ({ ...prev, [name]: 'error' }))
       message.error(`${name}: 连接测试失败`)
     } finally {
       setTesting('')
@@ -212,9 +242,15 @@ const MetaSourceTab = ({ refreshKey }) => {
             const configured = hasSecret
               ? (source.fields || []).filter(f => f.secret || f.type === 'password').some(f => (source.values || {})[f.key])
               : true
+            // 左侧边框颜色 = 连接状态
+            const health = healthMap[source.key] || 'unknown'
+            const borderColor = health === 'ok' ? '#52c41a'
+              : health === 'error' ? '#ff4d4f'
+              : health === 'checking' ? '#faad14'
+              : '#d9d9d9'
             return (
               <Card key={source.key} size="small"
-                style={{ borderLeft: `3px solid ${si.color || '#1677ff'}` }}
+                style={{ borderLeft: `3px solid ${borderColor}`, transition: 'border-color 0.3s' }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
