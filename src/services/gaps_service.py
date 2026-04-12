@@ -6,7 +6,7 @@ import logging
 from typing import Optional
 from collections import defaultdict
 
-from sqlalchemy import select, func
+from sqlalchemy import select
 
 from src.core.timezone import tm
 from src.db import get_async_session_local
@@ -351,4 +351,77 @@ class GapsService:
             "owned_episodes": len(emby_ep_set),
             "missing_count": len(missing),
             "missing": missing,
+        }
+
+
+    # ── 从 DB 读取已同步的缺集数据（不触发扫描） ──────────────────
+
+    async def get_gaps_from_db(self) -> dict:
+        """直接从 meta_series/season 表读取缺集数据，前端打开页面时调用"""
+        async with get_async_session_local() as db:
+            series_rows = (await db.execute(
+                select(MetaSeries).where(
+                    MetaSeries.media_type == "Series",
+                    MetaSeries.scraped == 1,  # 只取已刮削的
+                )
+            )).scalars().all()
+
+        if not series_rows:
+            return {"total_series": 0, "gaps_count": 0, "gaps": [], "synced": False}
+
+        gaps = []
+        for s in series_rows:
+            if not s.total_episodes or not s.emby_episodes:
+                continue
+            missing_count = s.total_episodes - s.emby_episodes
+            if missing_count <= 0:
+                continue
+
+            # 从 season 表取每季的缺集详情
+            async with get_async_session_local() as db:
+                seasons = (await db.execute(
+                    select(MetaSeason).where(MetaSeason.series_id == s.id).order_by(MetaSeason.season_number)
+                )).scalars().all()
+
+            missing = []
+            for sn in seasons:
+                if sn.tmdb_episodes and sn.emby_episodes is not None:
+                    diff = sn.tmdb_episodes - (sn.emby_episodes or 0)
+                    if diff > 0:
+                        # 找出该季缺失的具体集号
+                        async with get_async_session_local() as db:
+                            owned_eps = (await db.execute(
+                                select(MetaEpisode.episode_number).where(
+                                    MetaEpisode.series_id == s.id,
+                                    MetaEpisode.season_number == sn.season_number,
+                                    MetaEpisode.source == "emby",
+                                )
+                            )).scalars().all()
+                        owned_set = set(owned_eps)
+                        for ep in range(1, sn.tmdb_episodes + 1):
+                            if ep not in owned_set:
+                                missing.append({"season": sn.season_number, "episode": ep})
+
+            if not missing:
+                continue
+
+            poster_url = ""
+            if s.poster_path:
+                poster_url = f"https://image.tmdb.org/t/p/w300{s.poster_path}" if s.poster_path.startswith("/") else s.poster_path
+
+            gaps.append({
+                "series_name": s.title,
+                "tmdb_id": s.tmdb_id,
+                "poster_url": poster_url,
+                "total_episodes": s.total_episodes,
+                "owned_episodes": s.emby_episodes,
+                "missing_count": len(missing),
+                "missing": missing,
+            })
+
+        return {
+            "total_series": len(series_rows),
+            "gaps_count": len(gaps),
+            "gaps": gaps,
+            "synced": True,
         }

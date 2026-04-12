@@ -1,7 +1,7 @@
 // web/src/pages/gaps/index.jsx
 // 缺集管理 — TMDB vs Emby 比对
 
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import {
   Card, Button, Space, Row, Col, Typography, Tag, Badge,
   Spin, Empty, Collapse, message, Tooltip, Progress, Image,
@@ -69,22 +69,37 @@ function GapCard({ gap }) {
 export const Gaps = () => {
   const { t } = useTranslation()
   const [loading, setLoading] = useState(false)
+  const [scanning, setScanning] = useState(false)
   const [result, setResult] = useState(null)
 
-  const handleScan = async () => {
+  // 打开页面时从 DB 读取缓存数据
+  const loadFromDB = useCallback(async () => {
     setLoading(true)
+    try {
+      const { data } = await gapsApi.list()
+      if (data && !data.error) {
+        setResult(data)
+      }
+    } catch { /* ignore */ }
+    finally { setLoading(false) }
+  }, [])
+
+  useEffect(() => { loadFromDB() }, [loadFromDB])
+
+  // 手动触发扫描（后台异步）
+  const handleScan = async () => {
+    setScanning(true)
     try {
       const { data } = await gapsApi.scan()
       if (data?.error) {
         message.error(data.error)
       } else {
-        setResult(data)
-        message.success(t('gaps.scanDone', { series: data.total_series, gaps: data.gaps_count }))
+        message.success('缺集扫描已启动，请在任务中心查看进度')
       }
     } catch {
       message.error(t('gaps.scanFail'))
     } finally {
-      setLoading(false)
+      setScanning(false)
     }
   }
 
@@ -96,18 +111,27 @@ export const Gaps = () => {
         <Title level={4} style={{ margin: 0 }}>
           <Space><AlertOutlined />{t('gaps.title')}</Space>
         </Title>
-        <Button icon={<ScanOutlined />} type="primary" loading={loading} onClick={handleScan}>
-          {t('gaps.scan')}
-        </Button>
+        <Space>
+          <Button icon={<ReloadOutlined />} onClick={loadFromDB} loading={loading}>
+            刷新
+          </Button>
+          <Button icon={<ScanOutlined />} type="primary" loading={scanning} onClick={handleScan}>
+            {t('gaps.scan')}
+          </Button>
+        </Space>
       </div>
 
       {loading && (
         <div style={{ textAlign: 'center', padding: 60 }}>
-          <Spin size="large" tip={t('gaps.scanning')} />
+          <Spin size="large" />
         </div>
       )}
 
-      {!loading && result && (
+      {!loading && result && result.synced === false && (
+        <Empty description="暂无数据，请先点击「扫描缺集」同步 Emby 数据" style={{ padding: 60 }} />
+      )}
+
+      {!loading && result && result.synced !== false && (
         <>
           <Row gutter={[12, 12]} style={{ marginBottom: 20 }}>
             <Col xs={8}>

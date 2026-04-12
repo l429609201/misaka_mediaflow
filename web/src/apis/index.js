@@ -202,6 +202,7 @@ export const tasksApi = {
 
 // ==================== 缺集管理 ====================
 export const gapsApi = {
+  list: () => api.get('/gaps/list'),
   scan: (libraryId) => api.get('/gaps/scan', { params: { library_id: libraryId || '' } }),
 }
 

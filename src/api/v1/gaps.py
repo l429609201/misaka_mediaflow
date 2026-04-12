@@ -41,3 +41,9 @@ async def scan_gaps(library_id: str = ""):
     tm.register_task(task_id, bg_task)
 
     return {"task_id": task_id, "message": "缺集扫描已启动"}
+
+
+@router.get("/list", dependencies=[Depends(verify_token)])
+async def list_gaps():
+    """查询缺集数据 — 直接从 DB 读取，不触发扫描"""
+    return await _gaps_svc.get_gaps_from_db()
