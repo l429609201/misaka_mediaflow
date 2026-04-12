@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from src.db import get_async_session_local
 from src.services.p115.modules import (
     load_strm_config, save_strm_config,
     load_strm_status, save_strm_status,
@@ -97,27 +98,20 @@ class P115StrmSyncService:
 
     # ── 本地 STRM 扫描与管理 ──────────────────────────────────────────────────
 
-    async def scan_local_strm(self, strm_root: str = None) -> dict:
+    async def scan_local_strm(self, strm_root: str = None, task_id: int = 0) -> dict:
         """
-        扫描本地 STRM 文件，统计数量和状态。
+        扫描本地 STRM 文件，统计数量和状态，并写入 StrmFile 表。
 
         Args:
             strm_root: 指定扫描目录，为空则扫描所有配置的 sync_pairs
-
-        Returns:
-            {
-                "total": 总文件数,
-                "valid": 有效文件数,
-                "invalid": 无效文件数（对应网盘文件已删除）,
-                "missing_nfo": 缺失 NFO 的文件数,
-                "paths": [扫描的路径列表]
-            }
+            task_id: 任务ID，用于实时进度更新
         """
         from src.services.p115.modules import resolve_sync_pairs
+        from src.db.models.strm import StrmFile
+        from sqlalchemy import select as sa_select
 
         config = await self.get_config()
 
-        # 确定扫描路径
         if strm_root:
             scan_paths = [Path(strm_root)]
         else:
@@ -127,13 +121,13 @@ class P115StrmSyncService:
         if not scan_paths:
             return {"error": "未配置 STRM 路径"}
 
-        stats = {
-            "total": 0,
-            "valid": 0,
-            "invalid": 0,
-            "missing_nfo": 0,
-            "paths": [str(p) for p in scan_paths]
-        }
+        tm = None
+        if task_id:
+            from src.services.task_manager import get_task_manager
+            tm = get_task_manager()
+
+        stats = {"total": 0, "valid": 0, "invalid": 0, "missing_nfo": 0, "paths": [str(p) for p in scan_paths]}
+        db_written = 0
 
         for strm_path in scan_paths:
             if not strm_path.exists():
@@ -143,29 +137,46 @@ class P115StrmSyncService:
             for strm_file in strm_path.rglob("*.strm"):
                 stats["total"] += 1
 
-                # 检查 NFO 是否存在
                 nfo_file = strm_file.with_suffix(".nfo")
                 if not nfo_file.exists():
                     stats["missing_nfo"] += 1
 
-                # 读取 STRM 内容，检查是否有效
-                # 有效的STRM内容可以是：
-                # 1. URL形式：包含 http 或 pickcode=
-                # 2. 路径形式：以 / 开头的绝对路径
                 try:
                     content = strm_file.read_text(encoding="utf-8").strip()
-                    if content and (
-                        "pickcode=" in content or
-                        "http" in content or
-                        content.startswith("/")
-                    ):
+                    is_valid = content and (
+                        "pickcode=" in content or "http" in content or content.startswith("/")
+                    )
+                    if is_valid:
                         stats["valid"] += 1
                     else:
                         stats["invalid"] += 1
                 except Exception as e:
                     logger.warning("[STRM扫描] 读取失败 %s: %s", strm_file, e)
                     stats["invalid"] += 1
+                    content = ""
 
+                # 写入 StrmFile 表（upsert）
+                try:
+                    file_path_str = str(strm_file)
+                    async with get_async_session_local() as db:
+                        existing = (await db.execute(
+                            sa_select(StrmFile).where(StrmFile.strm_path == file_path_str)
+                        )).scalars().first()
+                        if existing:
+                            existing.strm_content = content
+                        else:
+                            db.add(StrmFile(strm_path=file_path_str, strm_content=content))
+                        await db.commit()
+                    db_written += 1
+                except Exception:
+                    pass
+
+                if tm and task_id and stats["total"] % 50 == 0:
+                    tm.update_progress(task_id, f"扫描中 {stats['total']} 个文件", {
+                        "created": stats["valid"], "skipped": stats["invalid"], "errors": 0,
+                    })
+
+        stats["db_written"] = db_written
         logger.info("[STRM扫描] 完成: %s", stats)
         return stats
 

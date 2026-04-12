@@ -108,8 +108,27 @@ async def trigger_inc_sync():
 
 @router.get("/sync/scan", dependencies=[Depends(verify_token)])
 async def scan_local_strm(strm_root: str = None):
-    """扫描本地 STRM 文件，统计数量和状态"""
-    return await _strm_sync_svc.scan_local_strm(strm_root)
+    """扫描本地 STRM 文件 — 后台任务，写入 StrmFile 表"""
+    import asyncio
+    from src.services.task_manager import get_task_manager
+
+    tm = get_task_manager()
+    task_id = await tm.create_task("STRM 扫描", task_category="p115_strm", task_type="manual")
+
+    async def _bg():
+        try:
+            result = await _strm_sync_svc.scan_local_strm(strm_root, task_id=task_id)
+            await tm.complete_task(task_id, {
+                "created": result.get("total", 0),
+                "skipped": result.get("invalid", 0),
+                "errors": 0,
+            })
+        except Exception as e:
+            await tm.complete_task(task_id, {"created": 0, "skipped": 0, "errors": 1}, str(e))
+
+    bg = asyncio.create_task(_bg())
+    tm.register_task(task_id, bg)
+    return {"task_id": task_id, "message": "STRM 扫描已启动"}
 
 
 class CleanStrmPayload(BaseModel):
@@ -119,17 +138,54 @@ class CleanStrmPayload(BaseModel):
 
 @router.post("/sync/clean", dependencies=[Depends(verify_token)])
 async def clean_invalid_strm(payload: CleanStrmPayload):
-    """清理无效的 STRM 文件及其关联的 NFO/图片"""
-    return await _strm_sync_svc.clean_invalid_strm(
-        strm_root=payload.strm_root,
-        dry_run=payload.dry_run
-    )
+    """清理无效 STRM — 后台任务"""
+    if payload.dry_run:
+        return await _strm_sync_svc.clean_invalid_strm(strm_root=payload.strm_root, dry_run=True)
+
+    import asyncio
+    from src.services.task_manager import get_task_manager
+
+    tm = get_task_manager()
+    task_id = await tm.create_task("STRM 清理", task_category="p115_strm", task_type="manual")
+
+    async def _bg():
+        try:
+            result = await _strm_sync_svc.clean_invalid_strm(strm_root=payload.strm_root, dry_run=False)
+            await tm.complete_task(task_id, {
+                "created": result.get("deleted_strm", 0),
+                "skipped": 0, "errors": 0,
+            })
+        except Exception as e:
+            await tm.complete_task(task_id, {"created": 0, "skipped": 0, "errors": 1}, str(e))
+
+    bg = asyncio.create_task(_bg())
+    tm.register_task(task_id, bg)
+    return {"task_id": task_id, "message": "STRM 清理已启动"}
 
 
 @router.post("/sync/rescrape", dependencies=[Depends(verify_token)])
 async def rescrape_missing_nfo(strm_root: str = None):
-    """补刮削：扫描缺失 NFO 的 STRM 文件并重新刮削"""
-    return await _strm_sync_svc.rescrape_missing_nfo(strm_root)
+    """补刮削 — 后台任务"""
+    import asyncio
+    from src.services.task_manager import get_task_manager
+
+    tm = get_task_manager()
+    task_id = await tm.create_task("补刮削 NFO", task_category="p115_strm", task_type="manual")
+
+    async def _bg():
+        try:
+            result = await _strm_sync_svc.rescrape_missing_nfo(strm_root)
+            await tm.complete_task(task_id, {
+                "created": result.get("scraped", 0),
+                "skipped": result.get("failed", 0),
+                "errors": 0,
+            })
+        except Exception as e:
+            await tm.complete_task(task_id, {"created": 0, "skipped": 0, "errors": 1}, str(e))
+
+    bg = asyncio.create_task(_bg())
+    tm.register_task(task_id, bg)
+    return {"task_id": task_id, "message": "补刮削已启动"}
 
 
 # ─────────────────────── 生活事件监控 ───────────────────────
