@@ -1,10 +1,9 @@
 # src/adapters/metadata/imdb.py
-# IMDB 元数据源适配器
+# IMDB 元数据源适配器（参照弹幕库 ImdbMetadataSource）
 #
-# IMDB 是全球最大的电影数据库，提供电影、电视节目等作品的元数据信息。
-# 支持两种数据源：
-#   - 第三方 API (api.imdbapi.dev)：速度快，推荐使用
-#   - 官方网站 HTML 解析：更稳定但速度较慢
+# 两种搜索模式:
+#   - 第三方 API (api.imdbapi.dev) — 可能被 Cloudflare 403
+#   - IMDB Suggestion API (v3.sg.media-imdb.com) — 更稳定
 
 import logging
 from typing import Any
@@ -15,7 +14,7 @@ from src.core.http_proxy import proxy_client
 logger = logging.getLogger(__name__)
 
 _API_URL = "https://api.imdbapi.dev"
-_IMDB_URL = "https://www.imdb.com"
+_SUGGEST_URL = "https://v3.sg.media-imdb.com/suggestion/titles/x"
 
 
 class ImdbProvider(MetadataProvider):
@@ -31,7 +30,7 @@ class ImdbProvider(MetadataProvider):
             label="数据源",
             type="text",
             placeholder="true",
-            hint="true=第三方API(推荐), false=官方网站HTML解析",
+            hint="true=第三方API, false=IMDB官方Suggestion接口(更稳定)",
             default="true",
         ),
         MetaFieldSpec(
@@ -39,7 +38,7 @@ class ImdbProvider(MetadataProvider):
             label="启用兜底",
             type="text",
             placeholder="true",
-            hint="true=主方式失败时自动尝试另一种方式, false=不尝试",
+            hint="true=主方式失败时自动尝试另一种方式",
             default="true",
         ),
     ]
@@ -50,36 +49,34 @@ class ImdbProvider(MetadataProvider):
 
     @property
     def available(self) -> bool:
-        return True  # IMDB 不需要 API Key
+        return True
 
     def _headers(self) -> dict:
         return {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "application/json",
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
         }
 
+    # ── 模式1: 第三方 API (api.imdbapi.dev) ────────────────────────
+
     async def _api_search(self, query: str, media_type: str) -> list[MetadataResult]:
-        """通过第三方 API 搜索"""
         try:
             url = f"{_API_URL}/search/titles"
             async with proxy_client(target_url=url, timeout=15) as client:
                 resp = await client.get(url, params={"query": query}, headers=self._headers())
                 if resp.status_code != 200:
-                    logger.warning("[IMDB] API 返回 %d", resp.status_code)
+                    logger.warning("[IMDB] API 返回 %d (可能 Cloudflare 拦截)", resp.status_code)
                     return []
                 data = resp.json()
-            items = data.get("titles", [])  # api.imdbapi.dev 返回 titles 字段
             results = []
-            for item in items[:20]:
-                # api.imdbapi.dev 字段: id, primaryTitle, originalTitle, startYear, plot, primaryImage, rating
+            for item in data.get("titles", [])[:20]:
                 img = item.get("primaryImage", {})
                 poster = img.get("url", "") if isinstance(img, dict) else ""
                 rating = item.get("rating", {})
                 score = rating.get("aggregateRating", 0) if isinstance(rating, dict) else 0
                 results.append(MetadataResult(
-                    provider="imdb",
-                    media_type=media_type,
+                    provider="imdb", media_type=media_type,
                     title=item.get("primaryTitle", "") or item.get("originalTitle", ""),
                     original_title=item.get("originalTitle", ""),
                     year=int(item.get("startYear", 0)) if item.get("startYear") else 0,
@@ -94,33 +91,76 @@ class ImdbProvider(MetadataProvider):
             logger.warning("[IMDB] API 搜索失败: %s", e)
             return []
 
+    # ── 模式2: IMDB Suggestion API (参照弹幕库) ───────────────────
+
+    async def _suggest_search(self, query: str, media_type: str) -> list[MetadataResult]:
+        """IMDB 官方 suggestion JSON — 更稳定，不被 Cloudflare 拦截"""
+        try:
+            keyword = query.strip().lower()
+            if not keyword:
+                return []
+            url = f"{_SUGGEST_URL}/{keyword}.json"
+            async with proxy_client(target_url=url, timeout=15) as client:
+                resp = await client.get(url, headers=self._headers())
+                if resp.status_code != 200:
+                    logger.warning("[IMDB] Suggestion API 返回 %d", resp.status_code)
+                    return []
+                data = resp.json()
+            results = []
+            for item in data.get("d", []):
+                # q 字段: feature/tvSeries/tvMovie/tvMiniSeries 等
+                q = item.get("q", "")
+                if q not in ("feature", "tvSeries", "tvMovie", "tvMiniSeries", "video", "tvSpecial"):
+                    continue
+                img = item.get("i", {})
+                poster = img.get("imageUrl", "") if isinstance(img, dict) else ""
+                results.append(MetadataResult(
+                    provider="imdb", media_type=media_type,
+                    title=item.get("l", ""),
+                    year=int(item.get("y", 0)) if item.get("y") else 0,
+                    poster_url=poster,
+                    imdb_id=item.get("id", ""),
+                    overview=item.get("s", ""),  # 演员列表
+                    extra={"imdb_id": item.get("id", "")},
+                ))
+            return results
+        except Exception as e:
+            logger.warning("[IMDB] Suggestion 搜索失败: %s", e)
+            return []
+
+    # ── 对外接口 ──────────────────────────────────────────────────
+
     async def search(self, query: str, media_type: str = "movie", year: int = 0) -> list[MetadataResult]:
-        if self._use_api:
-            results = await self._api_search(query, media_type)
-            if results or not self._enable_fallback:
-                return results
-            logger.info("[IMDB] API 无结果，尝试兜底")
-        return await self._api_search(query, media_type)
+        primary = self._api_search if self._use_api else self._suggest_search
+        fallback = self._suggest_search if self._use_api else self._api_search
+
+        results = await primary(query, media_type)
+        if results:
+            return results
+        if self._enable_fallback:
+            mode = "Suggestion" if self._use_api else "API"
+            logger.info("[IMDB] 主模式无结果/失败，切换到 %s", mode)
+            return await fallback(query, media_type)
+        return []
 
     async def get_detail(self, media_id: int | str, media_type: str = "movie") -> MetadataResult | None:
         try:
             url = f"{_API_URL}/titles/{media_id}"
             async with proxy_client(target_url=url, timeout=15) as client:
                 resp = await client.get(url, headers=self._headers())
-                resp.raise_for_status()
+                if resp.status_code != 200:
+                    return None
                 item = resp.json()
-            genres = item.get("genres", [])
             return MetadataResult(
-                provider="imdb",
-                media_type=media_type,
-                title=item.get("title", ""),
+                provider="imdb", media_type=media_type,
+                title=item.get("primaryTitle", "") or item.get("originalTitle", ""),
                 original_title=item.get("originalTitle", ""),
-                year=int(item.get("year", 0)) if item.get("year") else 0,
+                year=int(item.get("startYear", 0)) if item.get("startYear") else 0,
                 overview=item.get("plot", ""),
-                poster_url=item.get("poster", ""),
+                poster_url=(item.get("primaryImage", {}) or {}).get("url", ""),
                 imdb_id=str(media_id),
-                vote_average=float(item.get("rating", 0)),
-                genres=genres if isinstance(genres, list) else [],
+                vote_average=float((item.get("rating", {}) or {}).get("aggregateRating", 0)),
+                genres=item.get("genres", []),
                 extra={"imdb_id": str(media_id)},
             )
         except Exception as e:
@@ -128,7 +168,12 @@ class ImdbProvider(MetadataProvider):
             return None
 
     async def test_connection(self) -> bool:
+        """优先用 Suggestion API 测试（不会被 Cloudflare 拦截）"""
         try:
+            results = await self._suggest_search("test", "movie")
+            if results:
+                return True
+            # fallback 到第三方 API
             results = await self._api_search("test", "movie")
             return len(results) > 0
         except Exception:
