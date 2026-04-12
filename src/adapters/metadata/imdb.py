@@ -168,13 +168,11 @@ class ImdbProvider(MetadataProvider):
             return None
 
     async def test_connection(self) -> bool:
-        """优先用 Suggestion API 测试（不会被 Cloudflare 拦截）"""
+        """用 Suggestion API 测试（不需要 API Key，不被 Cloudflare 拦截）"""
         try:
-            results = await self._suggest_search("test", "movie")
-            if results:
-                return True
-            # fallback 到第三方 API
-            results = await self._api_search("test", "movie")
-            return len(results) > 0
+            url = f"{_SUGGEST_URL}/test.json"
+            async with proxy_client(target_url=url, timeout=10) as client:
+                resp = await client.get(url, headers=self._headers())
+                return resp.status_code == 200
         except Exception:
             return False
