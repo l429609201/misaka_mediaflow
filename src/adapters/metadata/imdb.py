@@ -55,7 +55,6 @@ class ImdbProvider(MetadataProvider):
         return {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "application/json",
-            "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
         }
 
     # ── 模式1: 第三方 API (api.imdbapi.dev) ────────────────────────
@@ -63,10 +62,12 @@ class ImdbProvider(MetadataProvider):
     async def _api_search(self, query: str, media_type: str) -> list[MetadataResult]:
         try:
             url = f"{_API_URL}/search/titles"
-            async with proxy_client(target_url=url, timeout=15) as client:
+            async with proxy_client(target_url=url, timeout=15, follow_redirects=True) as client:
                 resp = await client.get(url, params={"query": query}, headers=self._headers())
                 if resp.status_code != 200:
-                    logger.warning("[IMDB] API 返回 %d (可能 Cloudflare 拦截)", resp.status_code)
+                    ct = resp.headers.get("content-type", "")
+                    body = resp.text[:200] if resp.text else ""
+                    logger.warning("[IMDB] API 返回 %d, content-type=%s, body=%s", resp.status_code, ct, body)
                     return []
                 data = resp.json()
             results = []
@@ -100,7 +101,7 @@ class ImdbProvider(MetadataProvider):
             if not keyword:
                 return []
             url = f"{_SUGGEST_URL}/{keyword}.json"
-            async with proxy_client(target_url=url, timeout=15) as client:
+            async with proxy_client(target_url=url, timeout=15, follow_redirects=True) as client:
                 resp = await client.get(url, headers=self._headers())
                 if resp.status_code != 200:
                     logger.warning("[IMDB] Suggestion API 返回 %d", resp.status_code)
@@ -146,7 +147,7 @@ class ImdbProvider(MetadataProvider):
     async def get_detail(self, media_id: int | str, media_type: str = "movie") -> MetadataResult | None:
         try:
             url = f"{_API_URL}/titles/{media_id}"
-            async with proxy_client(target_url=url, timeout=15) as client:
+            async with proxy_client(target_url=url, timeout=15, follow_redirects=True) as client:
                 resp = await client.get(url, headers=self._headers())
                 if resp.status_code != 200:
                     return None
@@ -171,7 +172,7 @@ class ImdbProvider(MetadataProvider):
         """用 Suggestion API 测试（不需要 API Key，不被 Cloudflare 拦截）"""
         try:
             url = f"{_SUGGEST_URL}/test.json"
-            async with proxy_client(target_url=url, timeout=10) as client:
+            async with proxy_client(target_url=url, timeout=10, follow_redirects=True) as client:
                 resp = await client.get(url, headers=self._headers())
                 return resp.status_code == 200
         except Exception:
