@@ -61,25 +61,23 @@ class DoubanProvider(MetadataProvider):
             return resp.json()
 
     async def search(self, query: str, media_type: str = "movie", year: int = 0) -> list[MetadataResult]:
+        """参照弹幕库: movie.douban.com/j/search_subjects"""
         try:
-            params = {"q": query, "apikey": self._api_key, "count": 20}
             search_type = "movie" if media_type == "movie" else "tv"
-            data = await self._get(f"{_API_URL}/search/movie", params=params)
-            items = data.get("items", [])
+            url = f"{_BASE_URL}/j/search_subjects"
+            params = {"type": search_type, "tag": query, "page_limit": 20, "page_start": 0}
+            data = await self._get(url, params=params)
+            items = data.get("subjects", [])
             results = []
-            for entry in items:
-                item = entry.get("target", entry)
-                cover = item.get("cover_url") or item.get("pic", {}).get("large", "")
+            for item in items:
+                rate = item.get("rate", "0")
                 results.append(MetadataResult(
                     provider="douban",
                     media_type=media_type,
                     title=item.get("title", ""),
-                    original_title=item.get("original_title", ""),
-                    year=int(item.get("year", 0)) if item.get("year") else 0,
-                    overview=item.get("card_subtitle", ""),
-                    poster_url=cover,
-                    vote_average=float(item.get("rating", {}).get("value", 0)),
-                    extra={"douban_id": item.get("id"), "uri": item.get("uri", "")},
+                    poster_url=item.get("cover", ""),
+                    vote_average=float(rate) if rate else 0,
+                    extra={"douban_id": item.get("id", ""), "url": item.get("url", "")},
                 ))
             return results
         except Exception as e:
@@ -87,29 +85,49 @@ class DoubanProvider(MetadataProvider):
             return []
 
     async def get_detail(self, media_id: int | str, media_type: str = "movie") -> MetadataResult | None:
+        """参照弹幕库: HTML 解析 movie.douban.com/subject/{id}/"""
+        import re
         try:
-            params = {"apikey": self._api_key}
-            data = await self._get(f"{_API_URL}/movie/{media_id}", params=params)
-            genres = [g for g in data.get("genres", [])]
+            url = f"{_BASE_URL}/subject/{media_id}/"
+            async with proxy_client(target_url=url, timeout=15) as client:
+                resp = await client.get(url, headers=self._headers())
+                if resp.status_code != 200:
+                    return None
+                html = resp.text
+
+            title = ""
+            title_match = re.search(r'<span property="v:itemreviewed">(.*?)</span>', html)
+            if title_match:
+                title = title_match.group(1).strip()
+
+            year_val = 0
+            year_match = re.search(r'<span class="year">\((\d{4})\)</span>', html)
+            if year_match:
+                year_val = int(year_match.group(1))
+
+            imdb_id = ""
+            imdb_match = re.search(r'<a href="https://www.imdb.com/title/(tt\d+)"', html)
+            if imdb_match:
+                imdb_id = imdb_match.group(1)
+
             return MetadataResult(
                 provider="douban",
                 media_type=media_type,
-                title=data.get("title", ""),
-                original_title=data.get("original_title", ""),
-                year=int(data.get("year", 0)) if data.get("year") else 0,
-                overview=data.get("intro", ""),
-                poster_url=data.get("pic", {}).get("large", ""),
-                vote_average=float(data.get("rating", {}).get("value", 0)),
-                genres=genres,
-                extra={"douban_id": data.get("id")},
+                title=title,
+                year=year_val,
+                imdb_id=imdb_id,
+                extra={"douban_id": str(media_id)},
             )
         except Exception as e:
             logger.warning("[Douban] 获取详情失败: %s", e)
             return None
 
     async def test_connection(self) -> bool:
+        """测试豆瓣连接 — 直接访问 movie.douban.com"""
         try:
-            data = await self._get(f"{_API_URL}/search/movie", params={"q": "test", "apikey": self._api_key, "count": 1})
-            return "items" in data
+            url = f"{_BASE_URL}/j/search_subjects"
+            params = {"type": "movie", "tag": "test", "page_limit": 1, "page_start": 0}
+            data = await self._get(url, params=params)
+            return "subjects" in data
         except Exception:
             return False

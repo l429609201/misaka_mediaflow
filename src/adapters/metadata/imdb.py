@@ -14,7 +14,7 @@ from src.core.http_proxy import proxy_client
 
 logger = logging.getLogger(__name__)
 
-_API_URL = "https://api.imdbapi.dev/v1"
+_API_URL = "https://api.imdbapi.dev"
 _IMDB_URL = "https://www.imdb.com"
 
 
@@ -62,25 +62,32 @@ class ImdbProvider(MetadataProvider):
     async def _api_search(self, query: str, media_type: str) -> list[MetadataResult]:
         """通过第三方 API 搜索"""
         try:
-            url = f"{_API_URL}/search"
+            url = f"{_API_URL}/search/titles"
             async with proxy_client(target_url=url, timeout=15) as client:
                 resp = await client.get(url, params={"query": query}, headers=self._headers())
-                resp.raise_for_status()
+                if resp.status_code != 200:
+                    logger.warning("[IMDB] API 返回 %d", resp.status_code)
+                    return []
                 data = resp.json()
-            items = data.get("results", [])
+            items = data.get("titles", [])  # api.imdbapi.dev 返回 titles 字段
             results = []
             for item in items[:20]:
+                # api.imdbapi.dev 字段: id, primaryTitle, originalTitle, startYear, plot, primaryImage, rating
+                img = item.get("primaryImage", {})
+                poster = img.get("url", "") if isinstance(img, dict) else ""
+                rating = item.get("rating", {})
+                score = rating.get("aggregateRating", 0) if isinstance(rating, dict) else 0
                 results.append(MetadataResult(
                     provider="imdb",
                     media_type=media_type,
-                    title=item.get("title", ""),
-                    original_title=item.get("originalTitle", "") or item.get("title", ""),
-                    year=int(item.get("year", 0)) if item.get("year") else 0,
+                    title=item.get("primaryTitle", "") or item.get("originalTitle", ""),
+                    original_title=item.get("originalTitle", ""),
+                    year=int(item.get("startYear", 0)) if item.get("startYear") else 0,
                     overview=item.get("plot", ""),
-                    poster_url=item.get("poster", ""),
-                    imdb_id=item.get("imdbId", ""),
-                    vote_average=float(item.get("rating", 0)),
-                    extra={"imdb_id": item.get("imdbId", "")},
+                    poster_url=poster,
+                    imdb_id=item.get("id", ""),
+                    vote_average=float(score) if score else 0,
+                    extra={"imdb_id": item.get("id", "")},
                 ))
             return results
         except Exception as e:
@@ -97,7 +104,7 @@ class ImdbProvider(MetadataProvider):
 
     async def get_detail(self, media_id: int | str, media_type: str = "movie") -> MetadataResult | None:
         try:
-            url = f"{_API_URL}/title/{media_id}"
+            url = f"{_API_URL}/titles/{media_id}"
             async with proxy_client(target_url=url, timeout=15) as client:
                 resp = await client.get(url, headers=self._headers())
                 resp.raise_for_status()
